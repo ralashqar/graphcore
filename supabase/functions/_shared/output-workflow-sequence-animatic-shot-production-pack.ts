@@ -2731,10 +2731,68 @@ export async function sequenceAnimaticShotVideoArtifact(
   return result({ context, helpers, outputs, model: 'sequence-animatic-shot-video-artifact-v1' })
 }
 
+/**
+ * Director take write-back: when the run input names an existing project video asset
+ * (`externalShotVideo: { assetKey, takeId?, sessionId?, durationSeconds? }`), the shot video node binds it
+ * instead of generating. The outputs keep the generated-video shape so the artifact node registers it as the
+ * shot's video, emits `shot_video_ready`, and the animatic view model shows it like any other take.
+ */
+async function bindExternalShotVideo(
+  context: SequenceAnimaticNodeExecutionContext,
+  helpers: SequenceAnimaticWorkflowNodePackHelpers,
+): Promise<SequenceAnimaticNodeExecutionResult | null> {
+  const external = helpers.asRecord(helpers.asRecord(context.run.input).externalShotVideo ?? helpers.asRecord(context.run.input).external_shot_video)
+  const assetKey = helpers.readText(external.assetKey ?? external.asset_key)
+  if (!assetKey) return null
+  const config = helpers.asRecord(context.node.config)
+  // deno-lint-ignore no-explicit-any
+  const db = context.client as { from: (table: string) => any }
+  const asset = await db.from('project_assets').select('key,name,kind,mime_type,storage_path,metadata').eq('project_id', context.run.projectId).eq('key', assetKey).maybeSingle()
+  if (asset.error) throw new Error(asset.error.message)
+  if (!asset.data) throw new Error(`External shot video asset "${assetKey}" was not found in this project.`)
+  if (helpers.readText(asset.data.kind) !== 'video') throw new Error(`External shot video asset "${assetKey}" is not a video.`)
+  const storagePath = helpers.readText(asset.data.storage_path)
+  if (!storagePath) throw new Error(`External shot video asset "${assetKey}" has no storage path.`)
+  const assetMetadata = helpers.asRecord(asset.data.metadata)
+  const prompt = helpers.readFirstUpstreamText(context.upstream, ['prompt', 'text', 'providerPrompt']) || helpers.readText(assetMetadata.prompt)
+  const durationSeconds = Number(external.durationSeconds ?? assetMetadata.durationSeconds) || null
+  const video = {
+    assetKey,
+    storagePath,
+    mimeType: helpers.readText(asset.data.mime_type) || 'video/mp4',
+    prompt,
+    providerPrompt: prompt,
+    provider: 'director',
+    model: helpers.readText(assetMetadata.model) || 'director-take',
+    providerRequestId: helpers.readText(assetMetadata.providerRequestId) || null,
+    providerMode: 'director_take_binding',
+    durationSeconds,
+    requestedDurationSeconds: durationSeconds,
+    aspectRatio: helpers.readText(config.aspectRatio) || null,
+    resolution: helpers.readText(config.resolution) || null,
+    referencePolicy: 'director_take_binding',
+    role: helpers.readText(config.role) || helpers.readText(config.purpose) || 'video',
+    shotId: helpers.readText(config.shotId) || null,
+    storyboardBlockId: helpers.readText(config.storyboardBlockId) || null,
+    parentRequestId: helpers.readText(config.parentRequestId) || null,
+    masterRequestId: helpers.readText(config.masterRequestId) || null,
+    sequenceAnimaticRole: helpers.readText(config.sequenceAnimaticRole) || null,
+    source: 'director_take',
+    directorTakeId: helpers.readText(external.takeId ?? external.take_id) || helpers.readText(assetMetadata.takeId) || null,
+    directorSessionId: helpers.readText(external.sessionId ?? external.session_id) || null,
+    // The artifact node spreads this into the asset row it re-registers; keep the take's own metadata.
+    metadata: { ...assetMetadata, boundFromDirectorTake: true, storageBucket: 'project-assets', storagePath },
+  }
+  const outputs = { video, assetKey, storagePath, mimeType: video.mimeType, prompt, providerPrompt: prompt, durationSeconds, externalShotVideo: true }
+  return result({ context, helpers, outputs, provider: 'director', model: 'sequence-animatic-shot-video-director-binding-v1' })
+}
+
 export async function sequenceAnimaticShotVideo(
   context: SequenceAnimaticNodeExecutionContext,
   helpers: SequenceAnimaticWorkflowNodePackHelpers,
 ) {
+  const bound = await bindExternalShotVideo(context, helpers)
+  if (bound) return bound
   return helpers.executeVideoGeneration(context)
 }
 

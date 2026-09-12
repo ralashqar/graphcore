@@ -105,6 +105,58 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
       notice(`${found.shot.title}: ${references.length} ingredient reference${references.length === 1 ? '' : 's'} attached from the chapter animatic.`)
     }
   }
+  // Write-back: bind a kept take as the chapter shot's video through the shot production graph.
+  const shotBlock = useMemo(() => pickedShot && shotModel.model ? shotModel.model.blocks.find((block) => block.shots.some((entry) => entry.id === pickedShot.shot.id)) ?? null : null, [pickedShot, shotModel.model])
+  const boundShotAssetKey = useMemo(() => {
+    if (!pickedShot) return null
+    const artifact = [...snapshot.outputArtifacts].reverse().find((entry) => entry.kind === 'video' && text(record(entry.metadata).role) === 'sequence_animatic_shot_video' && text(record(entry.metadata).shotId) === pickedShot.shot.id)
+    return artifact?.assetKey ?? null
+  }, [snapshot.outputArtifacts, pickedShot])
+  const [bindingTakeId, setBindingTakeId] = useState<string | null>(null)
+  const useAsShotVideo = async (take: { id: string; asset_key: string | null; duration_seconds: number | null }) => {
+    const model = shotModel.model
+    if (!model || !pickedShot || !shotBlock || !source?.requestId || !take.asset_key || !props.canRun) return
+    setBindingTakeId(take.id)
+    try {
+      const { buildSequenceAnimaticShotVideoReferenceOverride } = await import('../world-builder/animatic/sequenceAnimaticShotWorkspace')
+      const { sequenceAnimaticShotVideoTargetNodeKeys } = await import('../../domain/sequenceAnimaticNodeKeys')
+      const ensured = await props.onEnsureSequenceAnimaticBlockWorkflows({ masterRequestId: model.request.id })
+      const blockRequestId = ensured.childRequests?.find((request) => {
+        const metadata = record(request.metadata)
+        return text(metadata.storyboardBlockId) === shotBlock.id && text(metadata.sequenceAnimaticRole) === 'storyboard_block' && metadata.sequenceAnimaticStale !== true
+      })?.id ?? shotBlock.childRequestId
+      if (!blockRequestId) throw new Error('The storyboard block workflow for this shot is not ready yet. Prepare it in the World animatic view first.')
+      const shotVideoReferenceOverride = buildSequenceAnimaticShotVideoReferenceOverride(model, shotBlock, pickedShot.shot) as unknown as Record<string, unknown>
+      const ensuredShot = await props.onEnsureSequenceAnimaticBlockWorkflows({
+        masterRequestId: model.request.id, sequenceAnimaticMode: 'shot_video', blockRequestId, storyboardBlockId: shotBlock.id, shotId: pickedShot.shot.id,
+        panelAssetKey: pickedShot.shot.panelAssetKey ?? undefined, shotVideoReferenceOverride,
+      })
+      const shotRequest = ensuredShot.childRequests?.find((request) => {
+        const metadata = record(request.metadata)
+        return text(metadata.sequenceAnimaticRole) === 'shot_video' && text(metadata.shotId) === pickedShot.shot.id
+      })
+      if (!shotRequest?.workflowId) throw new Error('The shot video workflow is not ready yet.')
+      await props.onStartOutputWorkflowRun({
+        workflowId: shotRequest.workflowId,
+        prompt: shotRequest.prompt || `Bind the director take as the shot video for ${pickedShot.shot.title}.`,
+        targetFormat: 'video',
+        selectedSequenceUnitKeys: model.request.selectedSequenceUnitKeys,
+        input: {
+          externalShotVideo: { assetKey: take.asset_key, takeId: take.id, sessionId: c.state.session?.id ?? null, durationSeconds: take.duration_seconds },
+          debugSkipVideoGeneration: false, cinematicVideoApproved: true, cinematicVideoApprovalScope: 'sequence_animatic_shot',
+        },
+        metadata: {
+          runIntent: 'generate_shot_video', runMode: 'sequence_animatic_shot_video_director_binding', runScope: 'upstream_to_node',
+          targetNodeKeys: [...sequenceAnimaticShotVideoTargetNodeKeys], forceNodeKeys: ['shot_video', 'shot_video_artifact'],
+          reuseExistingUpstreamOutputs: true, allowStaleUpstreamOutputs: true, cinematicVideoApproved: true,
+          parentRequestId: blockRequestId, masterRequestId: model.request.id, sequenceAnimaticRole: 'shot_video', storyboardBlockId: shotBlock.id, shotId: pickedShot.shot.id,
+          shotVideoReferenceOverride, sourceSurface: 'vibe_director', directorTakeId: take.id,
+        },
+      })
+      await props.onGetOutputRequestStatus(shotRequest.id)
+      notice(`Take bound as the shot video for ${pickedShot.shot.title}. The chapter animatic updates when the graph run finishes.`)
+    } catch (error) { fail(error) } finally { setBindingTakeId(null) }
+  }
   const refreshShotIngredients = async () => {
     if (!pickedShot || !source) return
     const references = shotIngredientReferences(shotIngredients)
@@ -112,30 +164,40 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
     notice(`${references.length} ingredient reference${references.length === 1 ? '' : 's'} attached to future takes.`)
   }
 
-  // Visual jobs started here are polled until terminal, then the snapshot refresh brings the new sheet/frame in.
-  const tracked = useRef(new Map<string, ReturnType<typeof setInterval>>())
-  useEffect(() => () => { for (const timer of tracked.current.values()) clearInterval(timer); tracked.current.clear() }, [])
+  // Visual jobs started here are followed through the realtime `visualGenerationJobs` prop (the App merges
+  // rows and applies terminal effects to the snapshot); a slow status poll only covers a missed notification.
+  const tracked = useRef(new Map<string, { onDone?: (job: Record<string, unknown> | null) => void | Promise<void>; startedAt: number }>())
+  const settleJob = useCallback(async (jobId: string, job: Record<string, unknown> | null) => {
+    const entry = tracked.current.get(jobId)
+    if (!entry) return
+    tracked.current.delete(jobId)
+    await entry.onDone?.(job)
+  }, [])
   const trackJob = useCallback((jobId: string, onDone?: (job: Record<string, unknown> | null) => void | Promise<void>) => {
     if (!jobId || tracked.current.has(jobId)) return
-    const started = Date.now()
+    tracked.current.set(jobId, { onDone, startedAt: Date.now() })
+  }, [])
+  useEffect(() => {
+    for (const job of jobs) {
+      if (tracked.current.has(job.id) && TERMINAL_JOB_STATUSES.has(job.status)) void settleJob(job.id, job as unknown as Record<string, unknown>)
+    }
+  }, [jobs, settleJob])
+  useEffect(() => {
     const timer = setInterval(async () => {
-      if (document.hidden) return
-      if (Date.now() - started > 12 * 60 * 1000) { clearInterval(timer); tracked.current.delete(jobId); return }
-      try {
-        const status = record(await props.onGetVisualGenerationStatus?.(jobId))
-        const job = record(status.job)
-        if (status.terminal === true || TERMINAL_JOB_STATUSES.has(text(job.status))) {
-          clearInterval(timer)
-          tracked.current.delete(jobId)
-          await props.onRefreshLiveSnapshot()
-          await onDone?.(Object.keys(job).length ? job : null)
+      if (document.hidden || !tracked.current.size) return
+      for (const [jobId, entry] of [...tracked.current.entries()]) {
+        if (Date.now() - entry.startedAt > 12 * 60 * 1000) { tracked.current.delete(jobId); continue }
+        try {
+          const status = record(await props.onGetVisualGenerationStatus?.(jobId))
+          const job = record(status.job)
+          if (status.terminal === true || TERMINAL_JOB_STATUSES.has(text(job.status))) await settleJob(jobId, Object.keys(job).length ? job : null)
+        } catch {
+          // Fallback poll; realtime is the primary signal.
         }
-      } catch {
-        // Transient status errors are retried on the next tick.
       }
-    }, 6000)
-    tracked.current.set(jobId, timer)
-  }, [props])
+    }, 30000)
+    return () => { clearInterval(timer); tracked.current.clear() }
+  }, [props, settleJob])
 
   const artStyle = useMemo(() => {
     const wiki = record(record(snapshot.draft.metadata).worldWiki)
@@ -309,16 +371,9 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
         await props.onStartOutputWorkflowRun({ workflowId: request.workflowId, prompt: request.prompt || 'Prepare a shot keyframe.', targetFormat: 'image', input: { debugSkipVideoGeneration: false, cinematicVideoApproved: false }, metadata: { runIntent: 'generate_keyframes', sourceSurface: 'vibe_director', masterRequestId: requestId, parentRequestId: requestId } })
         started += 1
       }
+      // Finished keyframes arrive through the animatic state signals (useDirectorShotModel), which merge the
+      // request/run/artifact/asset slices into the snapshot; no polling is needed here.
       notice(started ? `Started ${started} keyframe run${started === 1 ? '' : 's'}. Finished images appear under Frames → Keyframes.` : 'Keyframe dependencies are still preparing; try again shortly.')
-      // Keyframes arrive through output workflows; refresh the snapshot for a few minutes.
-      let polls = 0
-      const timer = setInterval(() => {
-        polls += 1
-        if (polls > 24 || document.hidden && polls % 3) return
-        void props.onRefreshLiveSnapshot()
-        if (polls > 24) clearInterval(timer)
-      }, 10000)
-      tracked.current.set(`keyframe:${requestId}:${Date.now()}`, timer)
     } catch (error) { fail(error) } finally { setPreparingKeyframe(false) }
   }
 
@@ -371,7 +426,7 @@ export function DirectorWorkspace(props: VibeDirectorPageProps) {
             {prep.run ? <DirectorPrepProgress run={prep.run} onDismiss={prep.dismiss} /> : null}
             <DirectorPlayer controller={c} />
             {import.meta.env.VITE_DIRECTOR_LIVE_BETA === 'true' ? <Suspense fallback={null}><DirectorLivePanel key={session.id} controller={c} /></Suspense> : null}
-            <DirectorTakeLibrary controller={c} />
+            <DirectorTakeLibrary controller={c} shotBinding={pickedShot && shotBlock ? { shotTitle: pickedShot.shot.title, boundAssetKey: boundShotAssetKey, bindingTakeId, onBind: (take) => void useAsShotVideo(take) } : undefined} />
             <DirectorTimeline controller={c} />
             <DirectorExports controller={c} onOpenOutputs={props.onOpenOutputs} />
           </main>

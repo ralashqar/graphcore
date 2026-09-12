@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react'
-import { ArrowClockwise, Check, GitBranch, LifebuoyIcon, X } from '@phosphor-icons/react'
+import { ArrowClockwise, Check, FilmSlate, GitBranch, LifebuoyIcon, X } from '@phosphor-icons/react'
 import type { DirectorController } from './useDirectorController'
 import { isActiveTakeStatus } from './useDirectorController'
 import { formatElapsed, formatSeconds, formatUsd, takeModelLabel, takeNumber, takeStatusLabel, takeTone } from './directorPresentation'
 
-export function DirectorTakeLibrary({ controller: c }: { controller: DirectorController }) {
+export type DirectorShotBinding = {
+  shotTitle: string
+  /** Asset currently registered as the chapter shot's video, if any. */
+  boundAssetKey: string | null
+  bindingTakeId: string | null
+  onBind: (take: { id: string; asset_key: string | null; duration_seconds: number | null }) => void
+}
+
+export function DirectorTakeLibrary({ controller: c, shotBinding }: { controller: DirectorController; shotBinding?: DirectorShotBinding }) {
   const [showRejected, setShowRejected] = useState(false)
   const anyActive = c.state.takes.some((t) => isActiveTakeStatus(t.status))
   const [now, setNow] = useState(() => Date.now())
@@ -45,6 +53,11 @@ export function DirectorTakeLibrary({ controller: c }: { controller: DirectorCon
               <div className="director-inline-actions">
                 {t.status === 'completed' ? (
                   <button type="button" className={t.review === 'kept' ? 'ghost-button compact is-active' : 'primary-button compact'} disabled={c.ui.busy || t.review === 'kept'} onClick={() => void c.execute({ action: 'review', takeId: t.id, review: 'kept' })}><Check size={14} /> {t.review === 'kept' ? 'Kept' : 'Keep'}</button>
+                ) : null}
+                {shotBinding && t.status === 'completed' && t.asset_key ? (
+                  shotBinding.boundAssetKey === t.asset_key
+                    ? <span className="director-pill is-kept" title={`This take is the shot video for ${shotBinding.shotTitle}`}><FilmSlate size={12} /> Shot video</span>
+                    : <button type="button" className="ghost-button compact" disabled={c.ui.busy || shotBinding.bindingTakeId !== null} title={`Register this take as the video for ${shotBinding.shotTitle} in the chapter animatic`} onClick={() => shotBinding.onBind(t)}><FilmSlate size={14} /> {shotBinding.bindingTakeId === t.id ? 'Binding…' : 'Use as shot video'}</button>
                 ) : null}
                 {t.status === 'failed' || t.status === 'cancelled' ? (
                   <button type="button" className="ghost-button compact" disabled={c.ui.busy || Boolean(active)} onClick={() => void c.generate()}><ArrowClockwise size={14} /> Retry</button>

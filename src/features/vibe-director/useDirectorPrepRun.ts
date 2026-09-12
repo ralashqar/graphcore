@@ -66,7 +66,8 @@ export function useDirectorPrepRun(input: {
     if (!run || run.summary?.terminal) return
     let disposed = false
     const tick = () => { if (!disposed && !document.hidden) void refresh() }
-    const timer = setInterval(tick, 4000)
+    // Graph realtime signals drive refreshes; the interval is only a fallback for a missed notification.
+    const timer = setInterval(tick, 15000)
     const channel = subscribeOutputWorkflowGraphSignals({ draftId: input.snapshot.draft.id, workflowId: run.workflowId, runId: run.runId, onSignal: tick })
     tick()
     return () => {
