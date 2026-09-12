@@ -1,3 +1,5 @@
+import { vaultGeometry } from './traversalComponents.ts'
+import { MOTION_SET_RUNTIME } from './motionProfile.ts'
 import { motionContractHash } from './performanceMotion.ts'
 import { somaMannequin } from './mannequin.ts'
 import { validateSequence } from './poseSequence.ts'
@@ -70,8 +72,9 @@ export function runtimeDesign(d: Design): LegacyDesign {
       (n) => n.id === instance.definition,
     )!
     if (!def) throw new Error(`Missing actor definition ${instance.definition}`)
+    const {motionProfile:_presentationProfile,...runtimeActor}=def
     return {
-      ...def,
+      ...runtimeActor,
       id: instance.id,
       label: instance.label,
       kind: 'actor' as const,
@@ -140,6 +143,11 @@ export function validate(input: unknown) {
   }
   for(const r of d.mechanics?.performance?.reactions??[])for(const id of r.actorDefinitions){
     if(!of(d,'actor_definition').some(a=>a.id===id&&a.height>=1.65&&a.height<=1.95))fail(r.id,'Reaction requires a supported humanoid actor')
+  }
+  for(const component of d.mechanics?.traversal??[]){
+    if(of(d,'actor_instance').find(a=>a.id===d.player)?.definition!==component.actorDefinition)fail(component.id,'Initial vault supports the player controller only')
+    if(!of(d,'actor_definition').some(a=>a.id===component.actorDefinition&&a.height>=1.65&&a.height<=1.95))fail(component.id,'Vault requires a supported humanoid actor')
+    try{vaultGeometry(of(d,'world')[0],component)}catch(e){fail(component.id,String(e))}
   }
   if (d.nodes.some((n) => n.id.startsWith('runtime.')))
     fail('design', 'Reserved runtime namespace')
@@ -275,7 +283,7 @@ export async function compile(
   return manifestSchema.parse({
     ...identity,
     schemaVersion: 3,
-    runtimeVersion: d.mechanics?.performance ? PERFORMANCE_RUNTIME : d.mechanics?.motionProfile ? MOTION_RUNTIME : d.mechanics?.actions?.length ? ACTION_RUNTIME : d.mechanics ? MECHANIC_RUNTIME : VERSION,
+    runtimeVersion: (of(d,'actor_definition').some(a=>a.motionProfile)||d.mechanics?.traversal?.length) ? MOTION_SET_RUNTIME : d.mechanics?.performance ? PERFORMANCE_RUNTIME : d.mechanics?.motionProfile ? MOTION_RUNTIME : d.mechanics?.actions?.length ? ACTION_RUNTIME : d.mechanics ? MECHANIC_RUNTIME : VERSION,
     catalogVersion: CATALOG,
     sourceHash: await hashGameValue({ d, VERSION, CATALOG }),
     nodeHashes,

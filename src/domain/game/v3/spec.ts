@@ -1,3 +1,5 @@
+import { studioBindingSchema, bindingProblems } from '../animation-studio/bindings.ts'
+import { motionProfileSchema, MOTION_SET_RUNTIME } from './motionProfile.ts'
 import { PERFORMANCE_RUNTIME } from './poseSequence.ts'
 import { MOTION_RUNTIME } from './motionPresentation.ts'
 import { ACTION_RUNTIME } from './actionMechanics.ts'
@@ -17,7 +19,7 @@ export const CATALOG = 'modules-3.0.0' as const
 const base = { id, label: z.string().min(1).max(500), version: z.literal(1) }
 export const actorDefinition = actorSchema
   .omit({ role: true, spawn: true })
-  .extend({ kind: z.literal('actor_definition') })
+  .extend({ kind: z.literal('actor_definition'), motionProfile: motionProfileSchema.optional() })
 export const actorInstance = z
   .object({
     ...base,
@@ -154,23 +156,26 @@ export const manifestSchema = z
     draftId: z.string().uuid(),
     sourceRevision: z.number().int().nonnegative(),
     sourceHash: z.string().length(64),
-    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION, MECHANIC_RUNTIME, ACTION_RUNTIME, MOTION_RUNTIME, PERFORMANCE_RUNTIME]),
+    runtimeVersion: z.enum([VERSION, ANIMATED_VERSION, MECHANIC_RUNTIME, ACTION_RUNTIME, MOTION_RUNTIME, PERFORMANCE_RUNTIME, MOTION_SET_RUNTIME]),
     catalogVersion: z.literal(CATALOG),
     design: designSchema,
     nodeHashes: z.record(z.string(), z.string()),
     assets: z.array(clipRevisionSchema.safeExtend({ recipeKey: z.string() })).max(100),
+    studioBindings: z.array(studioBindingSchema).max(40).optional(),
     animations: z.object({ version: z.literal(1), rigs: z.array(rigProfileSchema).max(10), graphs: z.array(animationGraphSchema).max(40) }).strict().optional(),
   })
   .strict()
   .superRefine((manifest, ctx) => {
     const issue = (message: string) => ctx.addIssue({ code: 'custom', message })
-    if(manifest.design.mechanics&&manifest.runtimeVersion!==MECHANIC_RUNTIME&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Mechanics require runtime gameplay-3.2.0 or newer')
-    if(manifest.design.mechanics?.actions?.length&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Action mechanics require runtime gameplay-3.3.0')
-    if(manifest.design.mechanics?.motionProfile && manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Motion profile requires runtime gameplay-3.4.0 or newer')
-    if(manifest.design.mechanics?.performance&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME)issue('Pose programs require runtime gameplay-3.5.0')
+    if(manifest.design.mechanics?.traversal?.length&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Traversal components require gameplay-3.6.0')
+    if(manifest.design.mechanics&&manifest.runtimeVersion!==MECHANIC_RUNTIME&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Mechanics require runtime gameplay-3.2.0 or newer')
+    if(manifest.design.mechanics?.actions?.length&&manifest.runtimeVersion!==ACTION_RUNTIME&&manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Action mechanics require runtime gameplay-3.3.0')
+    if(manifest.design.mechanics?.motionProfile && manifest.runtimeVersion!==MOTION_RUNTIME&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Motion profile requires runtime gameplay-3.4.0 or newer')
+    if(manifest.design.mechanics?.performance&&manifest.runtimeVersion!==PERFORMANCE_RUNTIME&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Pose programs require runtime gameplay-3.5.0')
     if (manifest.runtimeVersion === VERSION && (manifest.animations || manifest.assets.length)) issue('Animations require runtime gameplay-3.1.0')
+    for(const binding of manifest.studioBindings??[])for(const error of bindingProblems(binding,manifest.design))issue(error)
     if (!manifest.animations) {
-      if (manifest.assets.length) issue('Animation assets require graph metadata')
+      if (manifest.assets.length && !manifest.studioBindings?.length) issue('Animation assets require graph metadata')
       return
     }
     for(const graph of manifest.animations.graphs)for(const binding of graph.bindings){
@@ -185,6 +190,12 @@ export const manifestSchema = z
     if (new Set(manifest.assets.map(clip => clip.id)).size !== manifest.assets.length || new Set(manifest.assets.map(clip => clip.recipeKey)).size !== manifest.assets.length) issue('Duplicate animation asset')
     if (new Set(manifest.animations.graphs.map(graph => graph.actorDefinition)).size !== manifest.animations.graphs.length) issue('Duplicate actor animation graph')
     for (const graph of manifest.animations.graphs) {
+      for(const set of graph.motionSets??[]){
+        if(set.profile.rig!==manifest.animations.rigs.find(r=>r.revision===graph.rigRevision)?.id)issue('Motion set profile uses a different rig')
+        for(const state of set.requiredStates){const binding=graph.bindings.find(b=>b.state===state),clip=manifest.assets.find(c=>c.id===binding?.clipRevision);if(clip&&((clip.style??'neutral')!==set.profile.style||clip.motionContract))issue('Motion set contains incompatible style or constrained motion')}
+      }
+      if(graph.motionSets?.length&&manifest.runtimeVersion!==MOTION_SET_RUNTIME)issue('Motion sets require runtime gameplay-3.6.0')
+      if(graph.motionSets?.some(set=>set.requiredStates.some(state=>!graph.bindings.some(b=>b.state===state))))issue('Motion set is missing a required binding')
       if(manifest.design.mechanics?.performance&&!['humanoid.soma.v2','humanoid.fabric-ybot.v1'].includes(manifest.animations.rigs.find(r=>r.revision===graph.rigRevision)?.id??''))issue('Pose programs require the SOMA mannequin rig')
       if (!actors.has(graph.actorDefinition)) issue('Animation graph references a missing actor definition')
       if (!rigs.has(graph.rigRevision)) issue('Animation graph references a missing rig')

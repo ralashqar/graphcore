@@ -86,6 +86,7 @@ export function estimateSomaPose(rig:Rig,intent:PoseIntent):SkeletalPose {
    contactPose(rig,pose,[`${side}Arm`,`${side}ForeArm`,`${side}Hand`],{x:hand.x+(target.x-hand.x)*weight,y:hand.y+(target.y-hand.y)*weight,z:hand.z+(target.z-hand.z)*weight},{x:s,y:-.4,z:-.5},.15)
   }
  }
+ if(intent.mode==='vault'){root[1]-=.18;set('Spine2',.35);for(const side of ['Left','Right']){set(`${side}Leg`,-.65);set(`${side}Shin`,1.2)}}
  if(intent.mode==='air') {set('LeftLeg',-.35);set('RightLeg',.25);set('LeftShin',.65);set('RightShin',.4);set('LeftArm',0,-.15,-.95);set('RightArm',0,.15,.95)}
  if(intent.mode==='hang'||intent.mode==='climb')for(const side of ['Left','Right']){
   const sign=side==='Left'?1:-1

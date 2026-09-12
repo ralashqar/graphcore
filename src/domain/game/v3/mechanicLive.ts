@@ -1,3 +1,4 @@
+import { MOTION_SET_RUNTIME } from './motionProfile.ts'
 import { PERFORMANCE_RUNTIME } from './poseSequence.ts'
 import { MOTION_RUNTIME } from './motionPresentation.ts'
 import { ACTION_RUNTIME } from './actionMechanics.ts'
@@ -11,7 +12,7 @@ export async function assertMechanicReplacement(
 ) {
   const next = manifestSchema.parse(raw)
   if (
-    (next.design.mechanics && next.runtimeVersion !== MECHANIC_RUNTIME && next.runtimeVersion !== ACTION_RUNTIME && next.runtimeVersion !== MOTION_RUNTIME && next.runtimeVersion !== PERFORMANCE_RUNTIME) ||
+    (next.design.mechanics && next.runtimeVersion !== MECHANIC_RUNTIME && next.runtimeVersion !== ACTION_RUNTIME && next.runtimeVersion !== MOTION_RUNTIME && next.runtimeVersion !== PERFORMANCE_RUNTIME && next.runtimeVersion !== MOTION_SET_RUNTIME) ||
     (!next.design.mechanics && !current.design.mechanics) ||
     next.projectId !== current.projectId || next.draftId !== current.draftId ||
     next.id === current.id

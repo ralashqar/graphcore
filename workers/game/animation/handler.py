@@ -15,9 +15,9 @@ def validate_input(value):
     schema = json.loads(Path(__file__).with_name('request.schema.json').read_text())
     Draft202012Validator(schema).validate(value)
     recipe = value['recipe']
-    for section in ('path', 'poses'):
+    for section in ('path', 'poses', 'fullBody'):
         previous = -1
-        for point in recipe[section]:
+        for point in recipe.get(section, []):
             if not previous < point['time'] <= recipe['duration']:
                 raise ValueError('Constraint times must increase within the clip')
             previous = point['time']
@@ -36,8 +36,8 @@ def validate_input(value):
             for child in node: finite(child)
     finite(value)
     frame_count = round(recipe['duration'] * 30)
-    for section in ('path', 'poses'):
-        indices = [min(frame_count - 1, math.floor(p['time'] * 30 + .5)) for p in recipe[section]]
+    for section in ('path', 'poses', 'fullBody'):
+        indices = [min(frame_count - 1, math.floor(p['time'] * 30 + .5)) for p in recipe.get(section, [])]
         if len(indices) != len(set(indices)):
             raise ValueError('Constraint times collide at 30 fps')
     effectors = {'left_hand': 'LeftHand', 'right_hand': 'RightHand', 'left_foot': 'LeftFoot', 'right_foot': 'RightFoot'}
@@ -78,7 +78,7 @@ def load_model():
 
 def constraints(recipe, skeleton):
     import torch
-    from kimodo.constraints import Root2DConstraintSet, EndEffectorConstraintSet
+    from kimodo.constraints import Root2DConstraintSet, EndEffectorConstraintSet, FullBodyConstraintSet
     result = []
     frames = round(recipe['duration'] * 30)
     frame = lambda time: min(frames - 1, round(time * 30))
@@ -86,6 +86,12 @@ def constraints(recipe, skeleton):
         indices = [frame(p['time']) for p in recipe['path']]
         if len(indices) != len(set(indices)): raise ValueError('Path constraints collide at 30 fps')
         result.append(Root2DConstraintSet(skeleton, torch.tensor(indices), torch.tensor([[p['x'], p['z']] for p in recipe['path']], dtype=torch.float32)))
+    for pose in recipe.get('fullBody', []):
+        from scipy.spatial.transform import Rotation
+        positions = torch.tensor([pose['positions']], dtype=torch.float32)
+        rotations = torch.tensor(Rotation.from_quat(pose['rotations']).as_matrix()[None], dtype=torch.float32)
+        result.append(FullBodyConstraintSet(skeleton, torch.tensor([frame(pose['time'])]), positions, rotations))
+        result.append(EndEffectorConstraintSet(skeleton, torch.tensor([frame(pose['time'])]), positions, rotations, None, joint_names=['RightHand']))
     # Kimodo's effector API also fixes pelvis height and heading. Require explicit
     # milestone body positions rather than quietly constraining a standing root.
     names = {'left_hand': 'LeftHand', 'right_hand': 'RightHand', 'left_foot': 'LeftFoot', 'right_foot': 'RightFoot'}

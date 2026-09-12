@@ -3,6 +3,9 @@ import { KIMODO_MODEL, motionRecipeSchema, type MotionRecipe } from './animation
 /** Versioned experimental recipes. Availability never implies motion acceptance. */
 export function animationRecipeProfile(state: MotionRecipe['state'], rigRevision: string, seed = 42): MotionRecipe {
   const descriptions: Record<MotionRecipe['state'], string> = {
+    custom:'A humanoid performs the described motion.',
+    sword_strike:'A right-handed humanoid performs a one-handed sword strike and follows through.',
+    vault:'A humanoid vaults over a low straight obstacle and lands on the far side.',
     uppercut:'A humanoid winds up, strikes upward with the right fist, and recovers.',
     recoil:'A humanoid recoils from a hit to the upper body.',
     fall_back:'A humanoid loses balance and falls onto their back.',
@@ -54,5 +57,6 @@ export function animationRecipeProfile(state: MotionRecipe['state'], rigRevision
       if(state==='climb')recipe.poses.push(milestone(duration,0,2.7))
     }
   }
+  if(state==='custom')throw Error('Use the flexible studio compiler for custom motion')
   return motionRecipeSchema.parse(recipe)
 }

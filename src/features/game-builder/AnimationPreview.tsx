@@ -9,9 +9,10 @@ import { CreateLines } from '@babylonjs/core/Meshes/Builders/linesBuilder'
 import '@babylonjs/loaders/glTF'
 import type { ClipRevision } from '../../domain/game/v3/animation'
 import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup'
+import { createSwordVisual } from '../../game-runtime/swordVisual'
 
 export type AnimationPreviewClip = Pick<ClipRevision, 'id' | 'glbHash' | 'state' | 'duration' | 'naturalSpeed' | 'rootCurve' | 'contacts'>
-export function AnimationPreview({ url, clip, followRoot = false }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean }) {
+export function AnimationPreview({ url, clip, followRoot = false, equipment }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean; equipment?: 'one_handed_sword' }) {
   const canvas = useRef<HTMLCanvasElement>(null), [error, setError] = useState('')
   const groups = useRef<AnimationGroup[]>([])
   const cameraRef = useRef<ArcRotateCamera | null>(null)
@@ -32,6 +33,7 @@ export function AnimationPreview({ url, clip, followRoot = false }: { url: strin
     void LoadAssetContainerAsync(url, scene, { pluginExtension: '.glb' }).then(container => {
       if (disposed) { container.dispose(); return }
       container.addAllToScene()
+      if(equipment==='one_handed_sword')createSwordVisual(scene,new Map([...container.transformNodes,...container.meshes].map(n=>[n.name,n])))?.update(false)
       if (followRoot) {
         // Native trajectories can travel outside the mesh's bind-pose bounds.
         container.meshes.forEach(mesh => { mesh.alwaysSelectAsActiveMesh = true })
@@ -51,7 +53,7 @@ export function AnimationPreview({ url, clip, followRoot = false }: { url: strin
     engine.runRenderLoop(() => scene.render())
     const resize = new ResizeObserver(() => engine.resize()); resize.observe(canvas.current!)
     return () => { disposed = true; cameraRef.current=null;groups.current=[];overlayMeshes.current=[];resize.disconnect(); scene.dispose(); engine.dispose() }
-  }, [clip.id, clip.glbHash, retry, followRoot])
+  }, [clip.id, clip.glbHash, retry, followRoot, equipment])
   return <div><canvas ref={canvas} style={{ width: '100%', height: 300 }} aria-label={`Repeated ${clip.state} animation preview`} />
     <p>Drag to orbit · Scroll to zoom · {clip.duration.toFixed(2)}s · {clip.naturalSpeed.toFixed(2)} m/s</p>
     <button onClick={()=>{groups.current.forEach(g=>playing?g.pause():g.play(true));setPlaying(!playing)}}>{playing?'Pause':'Play'}</button>

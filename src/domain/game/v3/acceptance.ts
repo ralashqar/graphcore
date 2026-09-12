@@ -1,3 +1,4 @@
+import { acceptTraversalComponents } from './traversalAcceptance.ts'
 import { acceptPerformance } from './performanceAcceptance.ts'
 import { acceptActions } from './actionAcceptance.ts'
 import { UnifiedSimulation } from './simulation.ts'
@@ -185,5 +186,6 @@ export async function runAcceptance(design: Design, buildId: string) {
   if(design.mechanics)reports.push(...await acceptMechanics(design,buildId))
   reports.push(...await acceptActions(design,buildId))
   reports.push(...await acceptPerformance(design,buildId))
+  reports.push(...await acceptTraversalComponents(design,buildId))
   return reports
 }

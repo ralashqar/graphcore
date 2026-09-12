@@ -1,3 +1,4 @@
+import { studioGameVisuals } from './studioGameVisuals'
 import { createCombatPlayer } from './combatRenderer'
 import { UnifiedSimulation } from '../domain/game/v3/simulation'
 import { runtimeDesign } from '../domain/game/v3/compiler'
@@ -37,7 +38,10 @@ export async function createUnifiedPlayer(
         ;(sim as UnifiedSimulation).applyMechanics(next.design,next.id)
         manifest=next
       },
-      visuals: scene => animationVisuals(scene, manifest, assetUrls),
+      visuals: async scene => {
+        const legacy=await animationVisuals(scene,manifest,assetUrls), studio=await studioGameVisuals(scene,manifest,assetUrls)
+        return { metrics:()=>({...legacy.metrics(),...studio.metrics()}),update:(sim,frame)=>{const b=studio.update(sim,frame),a=legacy.update(sim,frame,b);return new Set([...a,...b])} }
+      },
       summary: (sim) => (sim as UnifiedSimulation).summary(),
       hint: (sim) => (sim as UnifiedSimulation).hint(),
       decorate: (scene, getSim) => {

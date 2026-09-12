@@ -114,7 +114,7 @@ import { SpecializedDefinitionWorkspace } from './features/content/SpecializedDe
 import type { OutputGraphOverlayIntent } from './features/outputs/OutputGraphOverlayHost'
 import type { OutputStudioReturnTarget } from './features/world-builder/wiki/outputLibraryPresentation'
 import { useEditorStore } from './state/editorStore'
-import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, VIBE_ROUTE_PATH, GAME_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
+import { APP_ROUTE_PATH, BILLING_ROUTE_PATH, VIBE_ROUTE_PATH, GAME_ROUTE_PATH, ANIMATION_ROUTE_PATH, navigateToPath, routeFromPathname, type AppRoute } from './shared/appRoutes'
 import type {
   AuthMode,
   GameSummary,
@@ -220,6 +220,7 @@ const GlobalWorkspace = lazy(() =>
 const LandingPage = lazy(() =>
   import('./features/landing/LandingPage').then((module) => ({ default: module.LandingPage })),
 )
+const AnimationStudio = lazy(() => import('./features/animation-studio/AnimationStudio').then(module => ({ default: module.AnimationStudio })))
 const GameWorkspace = lazy(() => import('./features/game-builder/GameWorkspaceRouter').then(module => ({ default: module.GameWorkspace })))
 const VibeDirectorPage = lazy(() =>
   import('./features/vibe-director/VibeDirectorPage').then((module) => ({ default: module.VibeDirectorPage })),
@@ -1909,7 +1910,7 @@ export default function App() {
   useEffect(() => {
     let active = true
     async function bootstrap() {
-      setLoading(appRoute === 'app' || appRoute === 'vibe' || appRoute === 'game' || appRoute === 'billing')
+      setLoading(appRoute === 'app' || appRoute === 'vibe' || appRoute === 'game' || appRoute === 'animations' || appRoute === 'billing')
       setBootStatus('Checking Supabase auth session...')
       try {
         const currentSession = await withAppTimeout(
@@ -1953,7 +1954,7 @@ export default function App() {
           return
         }
 
-        if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game') {
+        if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game' && appRoute !== 'animations') {
           setLoading(false)
           return
         }
@@ -1993,11 +1994,11 @@ export default function App() {
   }, [appRoute, setSelectedDefinitionKey, setSelectedGraphKey])
 
   useEffect(() => {
-    if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game') return
+    if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game' && appRoute !== 'animations') return
     if (loadedState?.source !== 'supabase' || !snapshot) return
     if (appRoute === 'app' && activeTab !== 'graph' && activeTab !== 'library' && activeTab !== 'global' && activeTab !== 'outputs') return
     const draftId = snapshot.draft.id
-    const targetProfile = appRoute === 'vibe' || appRoute === 'game' ? 'world' : activeTab === 'library' ? 'content' : 'world'
+    const targetProfile = appRoute === 'vibe' || appRoute === 'game' || appRoute === 'animations' ? 'world' : activeTab === 'library' ? 'content' : 'world'
     const surfaceKey = surfaceHydrationKey(snapshot.project.id, draftId, targetProfile)
     const currentProfile = loadedState.profile ?? null
     const targetAlreadyHydrated = targetProfile === 'content'
@@ -8852,7 +8853,7 @@ export default function App() {
     return promise
   }, [])
 
-  if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game') {
+  if (appRoute !== 'app' && appRoute !== 'vibe' && appRoute !== 'game' && appRoute !== 'animations') {
     if (appRoute === 'billing') {
       return (
         <Suspense fallback={<main className="app-shell loading-shell"><p>Preparing SynArc...</p></main>}>
@@ -8880,7 +8881,7 @@ export default function App() {
   }
 
   const activeHydrationProfile: WorkspaceSurfaceProfile =
-    appRoute === 'vibe' || appRoute === 'game'
+    appRoute === 'vibe' || appRoute === 'game' || appRoute === 'animations'
       ? 'world'
       : activeTab === 'library'
       ? 'content'
@@ -8908,7 +8909,7 @@ export default function App() {
 
   return (
     <main className="app-shell" data-hydration-status={activeHydrationStatus}>
-      <div className={appRoute !== 'game' && activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
+      <div className={appRoute !== 'game' && appRoute !== 'animations' && activeTab === 'library' ? 'workspace-frame is-library-workspace' : 'workspace-frame'}>
         <WorkspaceTopbar
           activeTab={activeTab}
           activeGameId={snapshot.project.id}
@@ -8926,15 +8927,17 @@ export default function App() {
           onOpenOutputsLibrary={openOutputsLibrary}
           onOpenVibeDirector={() => navigateToPath(VIBE_ROUTE_PATH)}
           onOpenGameBuilder={import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? () => navigateToPath(GAME_ROUTE_PATH) : undefined}
+          onOpenAnimations={() => navigateToPath(ANIMATION_ROUTE_PATH)}
+          animationsActive={appRoute === 'animations'}
           gameBuilderActive={appRoute === 'game'}
           onResetProjectWorld={handleRequestResetProjectWorld}
           onSelectGame={handleSelectGame}
           onSetActiveTab={(tab) => {
-            if (appRoute === 'vibe' || appRoute === 'game') navigateToPath(APP_ROUTE_PATH)
+            if (appRoute === 'vibe' || appRoute === 'game' || appRoute === 'animations') navigateToPath(APP_ROUTE_PATH)
             setActiveTab(tab)
           }}
           onSetWorldViewMode={(mode) => {
-            if (appRoute === 'vibe' || appRoute === 'game') navigateToPath(APP_ROUTE_PATH)
+            if (appRoute === 'vibe' || appRoute === 'game' || appRoute === 'animations') navigateToPath(APP_ROUTE_PATH)
             handleSetWorldViewMode(mode)
           }}
           onSignOut={handleSignOut}
@@ -8956,8 +8959,9 @@ export default function App() {
           />
         ) : null}
 
-        <section className={`workspace-stage${appRoute === 'game' ? ' is-game-workspace' : ''}`}>
+        <section className={`workspace-stage${(appRoute === 'game' || appRoute === 'animations') ? ' is-game-workspace' : ''}`}>
           <Suspense fallback={<div className="detail-stack compact"><span className="eyebrow">Loading</span><h3>Preparing workspace…</h3></div>}>
+            {appRoute === 'animations' ? <AnimationStudio key={snapshot.project.id} snapshot={snapshot} canRun={loadedState?.source === 'supabase'} onBack={() => navigateToPath(GAME_ROUTE_PATH)} /> : null}
             {appRoute === 'game' ? (import.meta.env.VITE_GAME_BUILDER_ENABLED === 'true' ? <GameWorkspace key={snapshot.draft.id} snapshot={snapshot} canRun={loadedState?.source === 'supabase'} onOpenWorld={() => { setWorldViewMode('wiki'); setActiveTab('graph'); navigateToPath(APP_ROUTE_PATH) }} /> : <div className="detail-stack"><h3>Game workspace is not enabled.</h3><button onClick={() => navigateToPath(APP_ROUTE_PATH)}>Back to world</button></div>) : null}
             {appRoute === 'vibe' ? (
               <VibeDirectorPage

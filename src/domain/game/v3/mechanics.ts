@@ -1,3 +1,4 @@
+import { traversalComponentSchema } from './traversalComponents.ts'
 import { performanceSchema } from './performance.ts'
 import { actionPackageSchema } from './actionMechanics.ts'
 import { MOTION_PROFILE } from './motionPresentation.ts'
@@ -83,6 +84,7 @@ export const surfaceProfileSchema = z.object({
     .max(3),
 }).strict()
 export const mechanicBundleSchema = z.object({
+  traversal:z.array(traversalComponentSchema).max(12).optional(),
   performance: performanceSchema.optional(),
   motionProfile: z.literal(MOTION_PROFILE).optional(),
   version: z.literal(1),
@@ -90,7 +92,7 @@ export const mechanicBundleSchema = z.object({
   actions: z.array(actionPackageSchema).max(2).optional(),
   surfaces: z.array(surfaceProfileSchema).max(80),
 }).strict().superRefine((b, c) => {
-  for (const values of [b.packages, b.surfaces]) {
+  for (const values of [b.packages, b.surfaces, b.traversal??[]]) {
     if (new Set(values.map((v) => v.id)).size !== values.length) {
       c.addIssue({
         code: 'custom',

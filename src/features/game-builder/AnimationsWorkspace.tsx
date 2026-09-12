@@ -1,3 +1,4 @@
+import { MotionSetsWorkspace, type MotionSetsData } from './MotionSetsWorkspace'
 import { motionbricksRecipe } from '../../domain/game/v3/animationProviders'
 import { replacementRecipe } from '../../domain/game/v3/performanceMotion'
 import { somaMannequin } from '../../domain/game/v3/mannequin'
@@ -11,7 +12,7 @@ import { AnimationPreview, type AnimationPreviewClip } from './AnimationPreview'
 import { AnimationGraphView } from './AnimationGraphView'
 import { actorAnimationRequirements, locomotionStates } from '../../domain/game/v3/animationRequirements'
 type Candidate = { id: string; job_id: string; clip: ClipRevision | null; diagnostics: { purpose?: 'clip'|'diagnostic'; preview?: AnimationPreviewClip; motionbricksArtifacts?:{native_export?:{preview?:AnimationPreviewClip}}; failures?: string[]; metrics?: Record<string, number> } }
-type Data = { motionbricks?: {enabled:boolean;reservationCents:number;rig:{revision:string};rigs?:Array<{id:string;revision:string}>}; artifactUrls?:Record<string,Record<string,string>>; rig: { revision: string }; enabled: boolean; performanceEnabled?:boolean; reservationCents: number; recipes: Array<{ job_id: string; recipe: MotionRecipe }>; candidates: Candidate[]; graphs: Array<{ actor_definition: string; graph: AnimationGraph }>; urls: Record<string, string>; reviews: Array<{candidate_id:string;decision:'accepted'|'rejected'}>; jobs:Array<{id:string;status:string;phase:string;error:string|null}> }
+type Data = { motionSets?:MotionSetsData; motionbricks?: {enabled:boolean;reservationCents:number;rig:{revision:string};rigs?:Array<{id:string;revision:string}>}; artifactUrls?:Record<string,Record<string,string>>; rig: { revision: string }; enabled: boolean; performanceEnabled?:boolean; reservationCents: number; recipes: Array<{ job_id: string; recipe: MotionRecipe }>; candidates: Candidate[]; graphs: Array<{ actor_definition: string; graph: AnimationGraph }>; urls: Record<string, string>; reviews: Array<{candidate_id:string;decision:'accepted'|'rejected'}>; jobs:Array<{id:string;status:string;phase:string;error:string|null}> }
 export function AnimationsWorkspace({ projectId, draftId, revision, design, onChanged }: { projectId: string; draftId: string; revision: number; design: Design; onChanged: () => Promise<void> }) {
   const [data, setData] = useState<Data | null>(null), [state, setState] = useState<MotionRecipe['state']>('idle'), [prompt, setPrompt] = useState('A humanoid stands in a relaxed idle pose.'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [selected, setSelected] = useState(''), [actor, setActor] = useState(of(design, 'actor_definition')[0]?.id ?? ''), [details, setDetails] = useState<unknown>(null), [pending, setPending] = useState<AnimationCommand | null>(null)
   const pendingKey = (userId: string) => `graphcore.animation.pending.${userId}.${projectId}.${draftId}`
@@ -60,7 +61,7 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
   const compare = data.candidates.find(c=>c.id===comparison)
   const review = data.reviews.find(r=>r.candidate_id===selected)?.decision
   const requirements = actorAnimationRequirements(design,actor)
-  const bindingGraph = (clip:ClipRevision):AnimationGraph => ({ version:1,id:`animation.${actor}`,actorDefinition:actor,rigRevision:clip.rigRevision,bindings:[...((graph?.rigRevision===clip.rigRevision?graph.bindings.filter(b=>b.state!==clip.state):[])),{state:clip.state,clipRevision:clip.id}],transitions:graph?.rigRevision===clip.rigRevision?graph.transitions:[] })
+  const bindingGraph = (clip:ClipRevision):AnimationGraph => {if(clip.state==='custom')throw Error('Custom studio clips require explicit game mapping');return ({ ...(graph?.rigRevision===clip.rigRevision&&graph.motionSets?{motionSets:graph.motionSets}:{}), version:1,id:`animation.${actor}`,actorDefinition:actor,rigRevision:clip.rigRevision,bindings:[...((graph?.rigRevision===clip.rigRevision?graph.bindings.filter(b=>b.state!==clip.state):[])),{state:clip.state,clipRevision:clip.id}],transitions:graph?.rigRevision===clip.rigRevision?graph.transitions:[] })}
   const common = () => ({projectId,draftId,expectedRevision:revision,idempotencyKey:crypto.randomUUID()})
   const jobAction=async(jobId:string,action:'cancel'|'retry')=>{setBusy(true);try{await invokeGame('game-command',{...common(),jobId,action,template:'unified.v1'});await refresh();await onChanged()}catch(e){setError(String(e))}finally{setBusy(false)}}
   const approximations=design.mechanics?.performance?.sequences.filter(s=>s.role!=='custom')??[]
@@ -69,8 +70,12 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
     <h2>Animations</h2>
     <p>Generate reusable motion for the articulated humanoid. Gameplay controls movement and collision; accepted clips supply the pose.</p>
     <label>Character archetype <select value={actor} onChange={e => setActor(e.target.value)}>{of(design, 'actor_definition').map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select></label>
+    {data.motionSets&&<MotionSetsWorkspace projectId={projectId} draftId={draftId} revision={revision} design={design} actor={actor} data={data.motionSets}
+      accepted={data.candidates.filter(c=>c.clip&&data.reviews.some(r=>r.candidate_id===c.id&&r.decision==='accepted')).map(c=>c.clip!)} graphs={data.graphs}
+      providers={{kimodo:{enabled:data.enabled,reservationCents:data.reservationCents},motionbricks:{enabled:data.motionbricks?.enabled??false,reservationCents:data.motionbricks?.reservationCents??100}}}
+      jobs={data.jobs} onChanged={async()=>{await refresh();await onChanged()}} onInspect={jobId=>{setInspectedJob(jobId);void invokeGame('get-game-workspace',{projectId,draftId,jobId}).then(setDetails).catch(e=>setError(String(e)))}}/>}
     <p>Required by this character: {requirements.join(', ')}</p>
-    <p>Missing bindings: {requirements.filter(s => !bindings.has(s)).join(', ') || 'None'}</p>
+    <p>Missing bindings: {requirements.filter(s => s!=='custom'&&!bindings.has(s)).join(', ') || 'None'}</p>
     {!data.enabled && <p>Hosted generation is disabled until deployment and motion acceptance pass.</p>}
     <label>Motion <select aria-label="Motion" value={state} onChange={e => {setState(e.target.value as MotionRecipe['state']);if(!['idle','walk'].includes(e.target.value))setProvider('kimodo')}}>{animationStates.map(s => <option key={s}>{s}</option>)}</select></label>
     <label>Motion provider <select value={provider} onChange={e=>setProvider(e.target.value as 'kimodo'|'motionbricks')}><option value="kimodo">Kimodo</option><option value="motionbricks" disabled={!motionbricksAvailable}>MotionBricks · experimental idle/walk</option></select></label>
@@ -114,7 +119,7 @@ export function AnimationsWorkspace({ projectId, draftId, revision, design, onCh
       {!review&&<button disabled={busy||!!pending} onClick={()=>void send({...common(),action:'reject_animation',candidateId:candidate.id,reason:''})}>Reject candidate</button>}
       {candidate.clip && review==='accepted' && <button disabled={busy || !!pending || !actor} onClick={() => {
         const clip = candidate.clip!
-        const next: AnimationGraph = { version: 1, id: `animation.${actor}`, actorDefinition: actor, rigRevision: clip.rigRevision, bindings: [...((graph?.rigRevision===clip.rigRevision?graph.bindings.filter(b => b.state !== clip.state):[])), { state: clip.state, clipRevision: clip.id }], transitions: graph?.rigRevision===clip.rigRevision?graph.transitions:[] }
+        const next=bindingGraph(clip)
         void send({ projectId, draftId, expectedRevision: revision, idempotencyKey: crypto.randomUUID(), action: 'bind_animation', graph: next })
       }}>Bind accepted clip</button>}
     </div>}

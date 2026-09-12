@@ -1,3 +1,4 @@
+import { motionSetBindingSchema } from './motionProfile.ts'
 import { z } from 'zod'
 import { MOTIONBRICKS_MODEL, motionbricksRelease } from './motionbricksRelease.ts'
 
@@ -8,8 +9,9 @@ const finite = z.number().finite()
 const vec = z.tuple([finite, finite, finite])
 const rotation = z.tuple([finite, finite, finite, finite]).refine(q => Math.abs(Math.hypot(...q) - 1) < 0.001, 'Quaternion must be normalized')
 const hash = z.string().regex(/^[a-f0-9]{64}$/)
-export const animationStates = ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right', 'takeoff', 'airborne', 'landing', 'roll', 'catch', 'hang', 'shimmy_left', 'shimmy_right', 'climb','uppercut','recoil','fall_back','prone','get_up'] as const
+export const animationStates = ['idle', 'walk', 'run', 'backward', 'strafe_left', 'strafe_right', 'takeoff', 'airborne', 'landing', 'roll', 'catch', 'hang', 'shimmy_left', 'shimmy_right', 'climb','vault','uppercut','recoil','fall_back','prone','get_up','sword_strike'] as const
 export const animationStateSchema = z.enum(animationStates)
+const motionStateSchema = z.union([animationStateSchema,z.literal('custom')])
 export const animationStages = ['constraints', 'inference', 'retarget', 'process', 'export', 'validate', 'register'] as const
 export const rigProfileSchema = z.object({
   version: z.literal(1), id, revision: hash, units: z.literal('meters'), up: z.literal('Y'), forward: z.literal('Z'),
@@ -29,8 +31,10 @@ export const rigProfileSchema = z.object({
 })
 const contactSchema = z.object({ effector: z.enum(['left_hand', 'right_hand', 'left_foot', 'right_foot']), start: finite.nonnegative(), end: finite.nonnegative(), position: vec, rotation: rotation.optional() }).strict()
 const recipeFields = {
-  id, state: animationStateSchema,
+  id, state: motionStateSchema,
   motionContract: hash.optional(),
+  fullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
+  targetFullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
   rigRevision: hash, prompt: z.string().min(10).max(1500),
   duration: finite.min(0.5).max(8), candidates: z.number().int().min(1).max(3), seed: z.number().int().min(0).max(2147483647),
   loop: z.boolean(), targetSpeed: finite.min(0).max(12),
@@ -46,22 +50,25 @@ export const motionbricksProvenanceSchema = z.object({
   adapter: z.literal(motionbricksRelease.adapter), validation: z.literal(ANIMATION_VERSION),
 }).strict()
 export const motionRecipeSchema = z.discriminatedUnion('version', [
-  z.object({ ...recipeFields, version: z.literal(1), model: z.literal(KIMODO_MODEL) }).strict(),
+  z.object({ ...recipeFields, version: z.literal(1), model: z.literal(KIMODO_MODEL), retargetRevision:z.enum(['soma-fabric-1.0.0','soma-fabric-studio-1.0.0','soma-fabric-flexible-1.0.0']).optional() }).strict(),
   z.object({ ...recipeFields, version: z.literal(2), model: z.literal(MOTIONBRICKS_MODEL),
     provider: z.literal('motionbricks'), purpose: z.enum(['clip', 'diagnostic']),
     retargetRevision: z.enum(['g1-soma-1.1.0','g1-humanoid-1.2.0']).optional(),
     provenance: motionbricksProvenanceSchema, primitive: z.enum(['idle', 'walk', 'idle_walk_turn_stop']),
   }).strict(),
 ]).superRefine((recipe, ctx) => {
+  if(recipe.state==='custom'&&(recipe.version!==1||!recipe.motionContract))ctx.addIssue({code:'custom',message:'Custom motion requires a frozen flexible studio recipe'})
+  if(recipe.version===1&&recipe.retargetRevision==='soma-fabric-studio-1.0.0'&&(!recipe.motionContract||!['idle','walk','run','backward','strafe_left','strafe_right','sword_strike'].includes(recipe.state)))ctx.addIssue({code:'custom',message:'Studio adapter requires a frozen supported motion contract'})
+  if(recipe.version===1&&recipe.retargetRevision==='soma-fabric-1.0.0'&&!['idle','walk','run','backward','strafe_left','strafe_right'].includes(recipe.state))ctx.addIssue({code:'custom',message:'Fabric Kimodo adapter supports locomotion only'})
   if (recipe.version === 2) {
     if (recipe.candidates !== 1) ctx.addIssue({ code: 'custom', message: 'MotionBricks admits one candidate per experiment' })
-    if (recipe.contacts.length || recipe.poses.length || recipe.path.length || recipe.motionContract) ctx.addIssue({ code: 'custom', message: 'G1 adapter does not yet support contact, pose, path or ability constraints; they cannot be silently omitted' })
+    if (recipe.fullBody?.length || recipe.contacts.length || recipe.poses.length || recipe.path.length || recipe.motionContract) ctx.addIssue({ code: 'custom', message: 'G1 adapter does not yet support contact, pose, path or ability constraints; they cannot be silently omitted' })
     if (recipe.rootMode !== 'in_place') ctx.addIssue({ code: 'custom', message: 'G1 clips require controller-owned movement' })
     if (recipe.purpose === 'clip' && (!['idle', 'walk'].includes(recipe.state) || recipe.primitive !== recipe.state || !recipe.loop)) ctx.addIssue({ code: 'custom', message: 'Only looping idle and forward walk are eligible for MotionBricks binding' })
     if (recipe.purpose === 'diagnostic' && (recipe.primitive !== 'idle_walk_turn_stop' || recipe.loop || recipe.state !== 'idle')) ctx.addIssue({ code: 'custom', message: 'Diagnostic sequences cannot represent a bindable animation state' })
   }
   for (const c of recipe.contacts) if (c.start > c.end || c.end > recipe.duration) ctx.addIssue({ code: 'custom', message: 'Contact lies outside motion duration' })
-  for (const p of [...recipe.poses, ...recipe.path]) if (p.time > recipe.duration) ctx.addIssue({ code: 'custom', message: 'Constraint lies outside motion duration' })
+  for (const p of [...recipe.poses, ...recipe.path, ...(recipe.fullBody??[])]) if (p.time > recipe.duration) ctx.addIssue({ code: 'custom', message: 'Constraint lies outside motion duration' })
   if (recipe.path.some((p, i) => i > 0 && p.time <= recipe.path[i - 1].time)) ctx.addIssue({ code: 'custom', message: 'Path times must strictly increase' })
   if (recipe.poses.some((p, i) => i > 0 && p.time <= recipe.poses[i - 1].time)) ctx.addIssue({ code: 'custom', message: 'Pose times must strictly increase' })
   for (let i = 0; i < recipe.contacts.length; i++) for (let j = i + 1; j < recipe.contacts.length; j++) {
@@ -73,27 +80,33 @@ export type MotionRecipe = z.infer<typeof motionRecipeSchema>
 export const clipRevisionSchema = z.object({
   version: z.literal(1), id: z.string().uuid(), recipeHash: hash, rigRevision: hash, sourceHash: hash, glbHash: hash,
   motionContract: hash.optional(),
+  fullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
+  targetFullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
+  style: z.enum(['neutral','zombie','injured','stealth']).optional(),
   provenance: motionbricksProvenanceSchema.optional(),
-  retargetRevision: z.enum(['g1-soma-1.1.0','g1-humanoid-1.2.0']).optional(),
+  retargetRevision: z.enum(['g1-soma-1.1.0','g1-humanoid-1.2.0','soma-fabric-1.0.0','soma-fabric-studio-1.0.0','soma-fabric-flexible-1.0.0']).optional(),
   storagePath: z.string().min(1).max(500).refine(p => !p.includes('..') && !p.includes('://') && !p.startsWith('/')),
-  state: animationStateSchema, duration: finite.positive().max(8), fps: z.literal(30), loop: z.boolean(), naturalSpeed: finite.nonnegative(),
+  state: motionStateSchema, duration: finite.positive().max(8), fps: z.literal(30), loop: z.boolean(), naturalSpeed: finite.nonnegative(),
   rootMode: z.enum(['in_place', 'controller_curve', 'anchor_relative']),
   rootCurve: z.array(z.object({ time: finite.nonnegative(), position: vec }).strict()).min(2).max(241),
   contacts: z.array(contactSchema).max(32),
   validation: z.object({ policy: z.enum(['animation-1.0.0', ANIMATION_VERSION]), accepted: z.literal(true), metrics: z.record(z.string(), finite.nonnegative()) }).strict(),
 }).strict().superRefine((clip, ctx) => {
-  if (clip.retargetRevision && !clip.provenance) ctx.addIssue({ code: 'custom', message: 'Retarget revision requires MotionBricks provenance' })
+  if (clip.retargetRevision && !['soma-fabric-1.0.0','soma-fabric-studio-1.0.0','soma-fabric-flexible-1.0.0'].includes(clip.retargetRevision) && !clip.provenance) ctx.addIssue({ code: 'custom', message: 'Retarget revision requires MotionBricks provenance' })
+  if(clip.retargetRevision?.startsWith('soma-fabric-')&&clip.provenance)ctx.addIssue({code:'custom',message:'Kimodo adapter cannot carry G1 provenance'})
   if (clip.provenance && (!['idle', 'walk'].includes(clip.state) || !clip.loop || clip.motionContract)) ctx.addIssue({ code: 'custom', message: 'Unsupported MotionBricks clip binding' })
   if (clip.rootCurve.some((p, i) => p.time > clip.duration || (i > 0 && p.time <= clip.rootCurve[i - 1].time))) ctx.addIssue({ code: 'custom', message: 'Invalid root curve times' })
   if (clip.contacts.some(c => c.start > c.end || c.end > clip.duration)) ctx.addIssue({ code: 'custom', message: 'Invalid clip contact times' })
 })
 export const animationGraphSchema = z.object({
   version: z.literal(1), id, actorDefinition: id, rigRevision: hash,
+  motionSets: z.array(motionSetBindingSchema).max(2).optional(),
   bindings: z.array(z.object({ state: animationStateSchema, clipRevision: z.string().uuid() }).strict()).max(animationStates.length),
   transitions: z.array(z.object({ from: animationStateSchema, to: animationStateSchema, blendSeconds: finite.min(0).max(0.3), event: z.enum(['movement', 'jump', 'airborne', 'grounded', 'roll', 'finished', 'ledge_caught', 'shimmy', 'climb', 'drop']) }).strict()).max(60),
 }).strict().superRefine((graph, ctx) => {
   const states = new Set(graph.bindings.map(b => b.state))
   if (states.size !== graph.bindings.length) ctx.addIssue({ code: 'custom', message: 'Duplicate animation state binding' })
+  if(graph.motionSets&&new Set(graph.motionSets.map(s=>s.setId)).size!==graph.motionSets.length)ctx.addIssue({code:'custom',message:'Duplicate motion set binding'})
   for (const t of graph.transitions) if (!states.has(t.from) || !states.has(t.to)) ctx.addIssue({ code: 'custom', message: 'Transition references an unbound state' })
 })
 export type AnimationGraph = z.infer<typeof animationGraphSchema>

@@ -109,6 +109,22 @@ def world_positions(frame, rig):
 
 def retarget(directory, recipe, rig):
     source = read(directory, 'source.json')
+    if recipe.get('retargetRevision') in ('soma-fabric-1.0.0', 'soma-fabric-studio-1.0.0', 'soma-fabric-flexible-1.0.0'):
+        if rig['id'] != 'humanoid.fabric-ybot.v1' or source['version'] != 1 or recipe['state'] not in ('idle', *LOCOMOTION, *(['custom'] if recipe.get('retargetRevision') == 'soma-fabric-flexible-1.0.0' else ['sword_strike'] if recipe.get('retargetRevision') == 'soma-fabric-studio-1.0.0' else [])):
+            raise ValueError('Fabric SOMA adapter supports canonical neutral locomotion only')
+        canonical = json.loads((Path(__file__).resolve().parent.parent/'rigs/fabric-ybot-v1/profile.json').read_text())
+        if {k:v for k,v in rig.items() if k != 'revision'} != canonical: raise ValueError('Fabric target differs from the pinned rig')
+        if any(abs(q) > 1e-7 for j in rig['joints'] for q in j['rotation'][:3]):
+            raise ValueError('Canonical target rest rotations must be identity')
+        # Both canonical rigs use the same parent hierarchy and Y-up local axes.
+        # Transfer world rotations; use the target's immutable bone lengths.
+        # Contact processing below validates/corrects the resulting stance.
+        names = [j['name'] for j in source['joints']]
+        for joint in rig['joints']:
+            i = names.index(joint['sourceJoint'])
+            parent = source['joints'][i]['parent']
+            if (names[parent] if parent >= 0 else None) != joint['parent']:
+                raise ValueError('SOMA source topology differs from the target mapping')
     lookup = {j['name']: i for i, j in enumerate(source['joints'])}
     for joint in rig['joints']:
         if joint['sourceJoint'] not in lookup: raise ValueError('Missing SOMA mapping')
@@ -142,7 +158,7 @@ def process_candidate(directory, recipe, rig, rank=0):
     motion = read(directory, 'retarget.json')
     frames = motion['frames']
     # Extract a repeated gait phase; never crop authored contact timing.
-    if recipe['loop'] and not recipe['contacts'] and recipe['state'] not in ('idle', 'hang'):
+    if recipe['loop'] and not recipe['contacts'] and recipe['state'] not in ('idle', 'hang', 'custom'):
         candidates = []
         positions = [world_positions(f, rig) for f in frames]
         for start in range(0, max(1, len(frames) - 15)):
@@ -360,7 +376,7 @@ def validate(directory, recipe, rig):
                 contact_error = max(contact_error, (position-Vector(contact['position'])).length)
     milestone_error = 0
     if recipe.get('motionContract'):
-        if abs(processed['duration']-recipe['duration']) > 1/30+.001:
+        if not (recipe['loop'] and recipe.get('retargetRevision') == 'soma-fabric-studio-1.0.0') and abs(processed['duration']-recipe['duration']) > 1/30+.001:
             failures.append('Replacement duration differs from gameplay contract')
         for milestone in recipe['poses']:
             frame = frames[min(len(frames)-1, round(milestone['time']*30))]
@@ -368,6 +384,17 @@ def validate(directory, recipe, rig):
             for joint, point in milestone['joints'].items():
                 milestone_error = max(milestone_error, (positions[joint]-Vector(point)).length)
         if milestone_error > .12: failures.append('Replacement misses approved milestone pose')
+    wrist_error = 0
+    for milestone in recipe.get('targetFullBody', []):
+        frame = frames[min(len(frames)-1, round(milestone['time']*30))]
+        positions = world_positions(frame, rig)
+        rotations = world_rotations(frame, rig)
+        for i, joint in enumerate(rig['joints']):
+            milestone_error = max(milestone_error, (positions[joint['id']]-Vector(milestone['positions'][i])).length)
+            if joint['id'] == 'RightHand':
+                wrist_error = max(wrist_error, rotations[joint['id']].rotation_difference(quat(milestone['rotations'][i])).angle)
+    if milestone_error > .12: failures.append('Studio milestone misses target rig pose')
+    if wrist_error > .5: failures.append('Studio sword grip orientation mismatch')
     thresholds = recipe['thresholds']
     root_speed = 0
     for a, b in zip(processed['rootCurve'], processed['rootCurve'][1:]):
@@ -431,7 +458,12 @@ def validate(directory, recipe, rig):
     if recipe.get('retargetRevision') == 'g1-humanoid-1.2.0':
         if knee_plane_error>.025: failures.append('Exported knee leaves the human bend plane')
         if crossed_feet>.005: failures.append('Exported locomotion crosses its feet')
-    save(directory, 'validate.json', {'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxMilestoneError': milestone_error, 'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot'], **({'maxKneePlaneError':knee_plane_error,'maxFootCrossing':crossed_feet} if recipe.get('retargetRevision')=='g1-humanoid-1.2.0' else {})}})
+    def boundary_points(frame):
+        points = world_positions(frame, rig)
+        return [list(points[j['id']] - Vector((frame['root'][0], 0, frame['root'][2]))) for j in rig['joints']]
+    first, second, prior, last = [boundary_points(frames[i]) for i in (0, 1, -2, -1)]
+    boundary = {'samples':[{'positions':boundary_points(f),'rotations':f['rotations']} for f in frames] if recipe['state'] in ('sword_strike', 'custom') else [], 'start':first,'end':last,'startVelocity':[[30*(b-a) for a,b in zip(x,y)] for x,y in zip(first,second)],'endVelocity':[[30*(b-a) for a,b in zip(x,y)] for x,y in zip(prior,last)],'startRotations':frames[0]['rotations'],'endRotations':frames[-1]['rotations']}
+    save(directory, 'validate.json', {'boundary':boundary, 'policy': PROCESSING_VERSION, 'accepted': not failures, 'failures': sorted(set(failures)), 'metrics': {'maxWristOrientationError': wrist_error, 'maxMilestoneError': milestone_error, 'maxCorrection': processed['maxCorrection'], 'maxContactError': contact_error, 'maxBoneLengthError': bone_error, 'maxSeamAngle': angle, 'maxSeamVelocity': velocity, 'maxExportError': export_error, 'maxRootSpeed': root_speed, 'leftStanceCoverage': coverage['left_foot'], 'rightStanceCoverage': coverage['right_foot'], **({'maxKneePlaneError':knee_plane_error,'maxFootCrossing':crossed_feet} if recipe.get('retargetRevision')=='g1-humanoid-1.2.0' else {})}})
 
 
 if __name__ == '__main__':

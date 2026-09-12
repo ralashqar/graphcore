@@ -5,8 +5,8 @@ import { spawnSync } from 'node:child_process'
 if (!process.env.npm_execpath) throw new Error('Run through npm run game:migrate')
 const animationJobs=process.argv.includes('--animation-jobs'), animationReview=process.argv.includes('--animation-review')
 const unified=process.argv.includes('--unified'), modules = process.argv.includes('--modules'), recovery = process.argv.includes('--recovery'), version = animationReview?'20260909070941':animationJobs?'20260909052407':unified?'20260908201203':modules ? '20260908174628' : recovery ? '20260908161608' : '20260908153328', name = animationReview?'game_animation_review_import':animationJobs?'game_animation_jobs':unified?'unified_gameplay':modules ? 'game_module_nodes' : recovery ? 'game_job_recovery' : 'game_workspace'
-const selectedVersion=process.argv.includes('--mechanics')?'20260909140823':process.argv.includes('--animation-permissions')?'20260909072525':version
-const selectedName=process.argv.includes('--mechanics')?'game_mechanic_composition':process.argv.includes('--animation-permissions')?'game_animation_service_permissions':name
+const selectedVersion=process.argv.includes('--animation-flexible')?'20260912132026':process.argv.includes('--animation-studio')?'20260912123937':process.argv.includes('--motion-sets')?'20260909214012':process.argv.includes('--mechanics')?'20260909140823':process.argv.includes('--animation-permissions')?'20260909072525':version
+const selectedName=process.argv.includes('--animation-flexible')?'animation_studio_flexible':process.argv.includes('--animation-studio')?'animation_studio':process.argv.includes('--motion-sets')?'game_motion_sets':process.argv.includes('--mechanics')?'game_mechanic_composition':process.argv.includes('--animation-permissions')?'game_animation_service_permissions':name
 const migration = readFileSync(`supabase/migrations/${selectedVersion}_${selectedName}.sql`, 'utf8')
 const directory = mkdtempSync(join(tmpdir(), 'graphcore-game-migrate-'))
 try {
