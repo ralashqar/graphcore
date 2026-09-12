@@ -1,3 +1,5 @@
+import { MOTION_SET_CATALOG } from '../../src/domain/game/v3/motionSets.ts'
+import { defaultMotionProfile, MOTION_SET_RUNTIME } from '../../src/domain/game/v3/motionProfile.ts'
 import { z } from 'zod'
 import { step, ask } from './modules.ts'
 import {
@@ -25,7 +27,7 @@ import { hashGameValue } from '../../src/domain/game/compiler.ts'
 import { runTool } from './io.ts'
 import type { JobContext } from './main.ts'
 import { proposeAnimations } from '../../src/domain/game/v3/animationRequirements.ts'
-import { humanoidMannequin, somaMannequin } from '../../src/domain/game/v3/mannequin.ts'
+import { humanoidMannequin, somaMannequin, fabricMannequin } from '../../src/domain/game/v3/mannequin.ts'
 import { clipRevisionSchema } from '../../src/domain/game/v3/animation.ts'
 import { planMechanic } from './mechanics.ts'
 
@@ -204,7 +206,7 @@ export async function generateUnified(ctx: JobContext) {
               current: relevant,
               catalog: baseline.nodes,
               instruction:
-                'Return only necessary changed or new nodes of your ownedKinds, preserving existing IDs. Empty edits are appropriate if defaults satisfy the prompt. For additions, use unique IDs. For new missions customize objective composition and layout to match the request; maintain a completable route.',
+                'For actor definitions, motionProfile selects the rig, gait style (neutral/zombie/injured/stealth) and equipment (none/one_handed_sword). Use Fabric for new humanoid archetypes; unsupported styles stay explicit gaps, never substitute neutral. Return only necessary changed or new nodes of your ownedKinds, preserving existing IDs. Empty edits are appropriate if defaults satisfy the prompt. For additions, use unique IDs. For new missions customize objective composition and layout to match the request; maintain a completable route.',
             },
             instructions,
           ),
@@ -231,6 +233,9 @@ export async function generateUnified(ctx: JobContext) {
       )
     materialize(plan, current)
   }
+  if(job.input.context?.motionSetCatalog===MOTION_SET_CATALOG&&plan.intent==='new_game')for(const node of materialize(plan,current).nodes)if(node.kind==='actor_definition'&&!node.motionProfile){
+    const updated={...node,motionProfile:{...defaultMotionProfile}};const index=plan.edits.findIndex(n=>n.id===node.id);if(index>=0)plan.edits[index]=updated;else plan.edits.push(updated)
+  }
   plan = planSchema.parse(plan)
   if (plan.intent !== 'explain') {
     const planned = materialize(plan,current), rig = await (planned.mechanics?.motionProfile?somaMannequin():humanoidMannequin())
@@ -239,7 +244,7 @@ export async function generateUnified(ctx: JobContext) {
     const ids=(reviewed.data??[]).map(r=>r.candidate_id)
     const clips=ids.length?await ctx.admin.from('game_animation_candidates').select('clip').eq('draft_id',job.draft_id).in('id',ids):{data:[],error:null}
     if(clips.error)throw clips.error
-    const proposals=proposeAnimations(planned,rig.revision,(clips.data??[]).map(c=>clipRevisionSchema.parse(c.clip)))
+    const proposals=proposeAnimations(planned,rig.revision,(clips.data??[]).map(c=>clipRevisionSchema.parse(c.clip)),await Promise.all([fabricMannequin(),somaMannequin(),humanoidMannequin()]))
     await step(ctx,'animation.requirements',{design:planned,rig:rig.revision,proposals},async()=>proposals)
     await ctx.checkpoint('animation.requirements',{...job.checkpoint,animationProposals:proposals})
   }
@@ -267,7 +272,7 @@ export async function buildUnified(ctx: JobContext) {
   const manifest = await step(
     ctx,
     'unified.compile',
-    { design, id: job.id, animations: job.input.animationSnapshot, clips: job.input.animationClips },
+    { design, id: job.id, animations: job.input.animationSnapshot, clips: job.input.animationClips, studio: job.input.studioBindings },
     async () => {
       const base = await compile(design, {
         id: job.id,
@@ -275,7 +280,8 @@ export async function buildUnified(ctx: JobContext) {
         draftId: job.draft_id,
         sourceRevision: job.input.sourceRevision,
       })
-        return job.input.animationSnapshot?.graphs?.length ? manifestSchema.parse({ ...base, sourceHash: await hashGameValue({ base: base.sourceHash, animations: job.input.animationSnapshot, clips: job.input.animationClips, runtimeVersion: design.mechanics?base.runtimeVersion:ANIMATED_VERSION }), runtimeVersion: design.mechanics?base.runtimeVersion:ANIMATED_VERSION, assets: job.input.animationClips, animations: job.input.animationSnapshot }) : base
+        if(job.input.studioBindings?.length) return manifestSchema.parse({...base,runtimeVersion:MOTION_SET_RUNTIME,studioBindings:job.input.studioBindings,assets:[...(job.input.animationClips??[]),...job.input.studioBindings.flatMap((b:any)=>b.clips.map((c:any)=>({...c,recipeKey:'animation.'+c.id})))].filter((c:any,i:number,a:any[])=>a.findIndex(x=>x.id===c.id)===i),...(job.input.animationSnapshot?.graphs?.length?{animations:job.input.animationSnapshot}:{}),sourceHash:await hashGameValue({base:base.sourceHash,studio:job.input.studioBindings,animations:job.input.animationSnapshot})})
+        return job.input.animationSnapshot?.graphs?.length ? manifestSchema.parse({ ...base, sourceHash: await hashGameValue({ base: base.sourceHash, animations: job.input.animationSnapshot, clips: job.input.animationClips, runtimeVersion: (design.nodes.some(n=>n.kind==='actor_definition'&&n.motionProfile)||job.input.animationSnapshot.graphs.some((g:any)=>g.motionSets?.length))?MOTION_SET_RUNTIME:design.mechanics?base.runtimeVersion:ANIMATED_VERSION }), runtimeVersion: (design.nodes.some(n=>n.kind==='actor_definition'&&n.motionProfile)||job.input.animationSnapshot.graphs.some((g:any)=>g.motionSets?.length))?MOTION_SET_RUNTIME:design.mechanics?base.runtimeVersion:ANIMATED_VERSION, assets: job.input.animationClips, animations: job.input.animationSnapshot }) : base
     },
   )
   const reports = await step(ctx, 'unified.simulation', { design }, () =>

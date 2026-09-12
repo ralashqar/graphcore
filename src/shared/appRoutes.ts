@@ -1,11 +1,13 @@
-export type AppRoute = 'landing' | 'app' | 'vibe' | 'game' | 'billing'
+export type AppRoute = 'landing' | 'app' | 'vibe' | 'game' | 'animations' | 'billing'
 
 export const APP_ROUTE_PATH = '/app'
 export const VIBE_ROUTE_PATH = '/app/vibe'
+export const ANIMATION_ROUTE_PATH = '/app/animations'
 export const GAME_ROUTE_PATH = '/app/game'
 export const BILLING_ROUTE_PATH = '/billing'
 
 export function routeFromPathname(pathname: string): AppRoute {
+  if (pathname === ANIMATION_ROUTE_PATH || pathname.startsWith(`${ANIMATION_ROUTE_PATH}/`)) return 'animations'
   if (pathname === GAME_ROUTE_PATH || pathname.startsWith(`${GAME_ROUTE_PATH}/`)) return 'game'
   if (pathname === VIBE_ROUTE_PATH || pathname.startsWith(`${VIBE_ROUTE_PATH}/`)) {
     return 'vibe'

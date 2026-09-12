@@ -1,7 +1,12 @@
+import { gaitPhaseOffset } from '../domain/game/v3/motionSets'
+import fabricRigUrl from '../../workers/game/rigs/fabric-ybot-v1/mannequin.glb?url'
+import { advanceEquipment, applySwordStance, type EquipmentState } from '../domain/game/v3/equipmentPose'
+import { MOTION_SET_RUNTIME, type MotionProfile } from '../domain/game/v3/motionProfile'
+import { createSwordVisual } from './swordVisual'
 import { presentPose } from './presentation'
 import { compatibleReplacement } from '../domain/game/v3/performanceMotion'
 import { evaluateSequence } from '../domain/game/v3/poseSequence'
-import { somaMannequin, isCanonicalHumanoid } from '../domain/game/v3/mannequin'
+import { somaMannequin, fabricMannequin, isCanonicalHumanoid } from '../domain/game/v3/mannequin'
 import { estimateSomaPose, contactPose, type Rig, type SkeletalPose } from '../domain/game/v3/somaPose'
 import { createSomaVisual } from './somaVisual'
 import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader'
@@ -18,9 +23,9 @@ import type { Animation } from '@babylonjs/core/Animations/animation'
 
 export type PresentationFrame={alpha:number;previous:Map<string,{position:ActorState['position'];yaw:number}>;dt:number}
 type Track = { target: TransformNode; property: 'position' | 'rotationQuaternion' | 'scaling'; animation: Animation }
-type Clip = { contract?:string; duration: number; loop: boolean; speed: number; tracks: Track[] }
+type Clip = {phaseOffset:number; contract?:string; duration: number; loop: boolean; speed: number; tracks: Track[] }
 export async function animationVisuals(scene: Scene, manifest: Manifest, urls: Record<string, string>) {
-  const actors = new Map<string, { root: TransformNode; targets: Map<string,TransformNode>; rig:Rig|undefined; samples:Map<TransformNode,{rotation:Quaternion;position:Vector3}>; clips: Map<AnimationState, Clip>; transitions: AnimationGraph['transitions']; blend: AnimationBlend; clock:ActionClipClock; previous: ActorState['position']; velocity: { x: number; z: number }; tick: number; mode: string; enteredFrom: string; elapsed: number; gait: number }>()
+  const actors = new Map<string, { profile?:MotionProfile; equipment:EquipmentState; sword?:ReturnType<typeof createSwordVisual>; root: TransformNode; targets: Map<string,TransformNode>; rig:Rig|undefined; samples:Map<TransformNode,{rotation:Quaternion;position:Vector3}>; clips: Map<AnimationState, Clip>; transitions: AnimationGraph['transitions']; blend: AnimationBlend; clock:ActionClipClock; previous: ActorState['position']; velocity: { x: number; z: number }; tick: number; mode: string; enteredFrom: string; elapsed: number; gait: number }>()
   const containers: AssetContainer[] = []
   const played = new Set<string>()
   const loops: Record<string, number> = {}
@@ -29,7 +34,10 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
   try {
     for (const instance of of(manifest.design, 'actor_instance')) {
       const graph = manifest.animations?.graphs.find(g => g.actorDefinition === instance.definition)
-      const rig=manifest.animations?.rigs.find(r=>r.revision===graph?.rigRevision) ?? (manifest.design.mechanics?.motionProfile?await somaMannequin():undefined)
+      const definition=of(manifest.design,'actor_definition').find(a=>a.id===instance.definition)
+      const profile=manifest.runtimeVersion===MOTION_SET_RUNTIME?(graph?.motionSets?.[0]?.profile??definition?.motionProfile):undefined
+      const fallback=profile?.rig==='humanoid.fabric-ybot.v1'?await fabricMannequin():profile?.rig==='humanoid.soma.v2'?await somaMannequin():manifest.runtimeVersion===MOTION_SET_RUNTIME&&manifest.design.mechanics?.traversal?.some(t=>t.actorDefinition===instance.definition)?await fabricMannequin():undefined
+      const rig=manifest.animations?.rigs.find(r=>r.revision===graph?.rigRevision) ?? fallback ?? (manifest.design.mechanics?.motionProfile?await somaMannequin():undefined)
       if (!graph?.bindings.length && !isCanonicalHumanoid(rig?.id)) continue
       expected += graph?.bindings.length??0
       const root = new TransformNode(`animated.${instance.id}`, scene), clips = new Map<AnimationState, Clip>()
@@ -51,19 +59,26 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
           const target = targets.get(track.target.name), property = track.animation.targetProperty
           if (target && ['position', 'rotationQuaternion', 'scaling'].includes(property)) tracks.push({ target, property: property as Track['property'], animation: track.animation })
         }
-        if (tracks.length) { clips.set(binding.state, { contract:asset.motionContract&&compatibleReplacement(asset,asset.motionContract,manifest.design.mechanics?.performance?.sequences.find(s=>s.role===asset.state)?.duration??-1)?asset.motionContract:undefined,duration: asset.duration, loop: asset.loop, speed: asset.naturalSpeed, tracks }); loaded++ }
+        if (tracks.length) { clips.set(binding.state, {phaseOffset:manifest.runtimeVersion===MOTION_SET_RUNTIME?gaitPhaseOffset(asset):0, contract:asset.motionContract&&compatibleReplacement(asset,asset.motionContract,manifest.design.mechanics?.performance?.sequences.find(s=>s.role===asset.state)?.duration??-1)?asset.motionContract:undefined,duration: asset.duration, loop: asset.loop, speed: asset.naturalSpeed, tracks }); loaded++ }
+      }
+      if(!targets && rig?.id==='humanoid.fabric-ybot.v1' && manifest.runtimeVersion===MOTION_SET_RUNTIME){
+        const container=await LoadAssetContainerAsync(fabricRigUrl,scene,{pluginExtension:'.glb'})
+        containers.push(container);container.animationGroups.forEach(g=>g.stop());container.addAllToScene()
+        const nodes=[...container.transformNodes,...container.meshes]
+        targets=new Map(nodes.map(n=>[n.name,n]));for(const node of nodes)if(!node.parent)node.parent=root
       }
       if(!targets && isCanonicalHumanoid(rig?.id))targets=createSomaVisual(scene,root,rig)
       root.setEnabled(false)
-      actors.set(instance.id, { root, targets:targets??new Map(),rig,samples:new Map(), clips, transitions: graph?.transitions??[], blend: emptyAnimationBlend(), clock:{active:null,times:{}}, previous: { ...instance.position }, velocity: { x: 0, z: 0 }, tick: 0, mode: '', enteredFrom: '', elapsed: 0, gait: 0 })
+      actors.set(instance.id, { profile, equipment:{weight:0,stowed:false}, sword:profile?.equipment==='one_handed_sword'?createSwordVisual(scene,targets??new Map()):undefined, root, targets:targets??new Map(),rig,samples:new Map(), clips, transitions: graph?.transitions??[], blend: emptyAnimationBlend(), clock:{active:null,times:{}}, previous: { ...instance.position }, velocity: { x: 0, z: 0 }, tick: 0, mode: '', enteredFrom: '', elapsed: 0, gait: 0 })
     }
   } catch { containers.forEach(c => c.dispose()); actors.forEach(a => a.root.dispose()); return { update: () => new Set<string>(), metrics: () => ({ animationLoadFailed: true, animationBindings: 0, expectedAnimationBindings: expected, playedAnimations: [] as string[] }) } }
   scene.onDisposeObservable.add(() => containers.forEach(c => c.dispose()))
-  return { metrics: () => ({ presentationPositions: Object.fromEntries([...actors].map(([id,a])=>[id,a.root.position.asArray()])), somaActors:[...actors].filter(([,a])=>isCanonicalHumanoid(a.rig?.id)).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame) {
+  return { metrics: () => ({ equipmentStowed:Object.fromEntries([...actors].map(([id,a])=>[id,a.equipment.stowed])), presentationPositions: Object.fromEntries([...actors].map(([id,a])=>[id,a.root.position.asArray()])), somaActors:[...actors].filter(([,a])=>isCanonicalHumanoid(a.rig?.id)).map(([id])=>id),proceduralFrames,contactRejections,animationLoadFailed: loaded !== expected, animationBindings: loaded, expectedAnimationBindings: expected, playedAnimations: [...played], animationLoops: { ...loops } }), update(sim: Simulation,frame?:PresentationFrame,excluded?:Set<string>) {
     const rendered = new Set<string>()
     for (const actor of sim.state.actors) {
       const visual = actors.get(actor.id)
       if (!visual) continue
+      if(excluded?.has(actor.id)){visual.root.setEnabled(false);continue}
       const tickDelta = sim.state.tick-visual.tick
       if (tickDelta < 0 || tickDelta > 6) { visual.previous = { ...actor.position }; visual.velocity = { x: 0, z: 0 }; visual.elapsed = 0; visual.gait = 0; visual.mode = ''; visual.enteredFrom = ''; visual.blend = emptyAnimationBlend();visual.samples.clear() }
       const simulationDt = Math.max(0, Math.min(.1, tickDelta/60))
@@ -73,6 +88,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
       visual.previous = { ...actor.position }; visual.tick = sim.state.tick
       visual.elapsed += dt
       if (visual.mode !== actor.mode) { visual.enteredFrom = visual.mode; visual.elapsed = 0; visual.mode = actor.mode }
+      const vault='vaultController' in sim?!!(sim as import('../domain/game/v3/simulation').UnifiedSimulation).vaultController.active(actor.id):false
       const performance='performanceMotion' in sim?(sim as import('../domain/game/v3/simulation').UnifiedSimulation).performanceMotion(actor):undefined
       const presentationOffset = frame ? (frame.alpha-1)/60 : 0
       const performanceSeconds = performance ? Math.max(0,performance.seconds+presentationOffset) : 0
@@ -110,7 +126,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
       visual.gait = nextGait % 1
       const values = new Map<TransformNode, Map<string, { value: Vector3 | Quaternion; weight: number }>>()
       for (const [name, weight] of supported) {
-        const clip = visual.clips.get(name)!, time = performance&&replacement&&name===state?Math.min(performanceSeconds,clip.duration):clip.loop ? visual.gait*clip.duration : Math.min(visual.clock.times[name]??0, clip.duration)
+        const clip = visual.clips.get(name)!, time = performance&&replacement&&name===state?Math.min(performanceSeconds,clip.duration):clip.loop ? ((visual.gait+clip.phaseOffset)%1)*clip.duration : Math.min(visual.clock.times[name]??0, clip.duration)
         played.add(`${actor.id}:${name}`)
         for (const track of clip.tracks) {
           const value = track.animation.evaluate(time*track.animation.framePerSecond)
@@ -132,7 +148,7 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
         if(procedural){
           proceduralFrames++
           const id=actor.action?.ability??'',kind=id.includes('dash')?'dash':ability?.kind==='ability'?ability.op:'idle'
-          const pose=performance?evaluateSequence(rig,performance.sequence,performanceSeconds):estimateSomaPose(rig,{time:sim.state.tick/60+presentationOffset,speed:Math.hypot(velocity.x,velocity.z),mode:actor.mode,action:actor.action&&ability?.kind==='ability'?{kind,index:Number(id.split('.').at(-1))||0,seconds:Math.max(0,actor.action.tick/60+presentationOffset),windup:ability.windup,active:ability.active,recovery:ability.recovery}:undefined})
+          const pose=performance?evaluateSequence(rig,performance.sequence,performanceSeconds):estimateSomaPose(rig,{time:sim.state.tick/60+presentationOffset,speed:Math.hypot(velocity.x,velocity.z),mode:vault?'vault':actor.mode,action:actor.action&&ability?.kind==='ability'?{kind,index:Number(id.split('.').at(-1))||0,seconds:Math.max(0,actor.action.tick/60+presentationOffset),windup:ability.windup,active:ability.active,recovery:ability.recovery}:undefined})
           for(const j of rig.joints){const target=visual.targets.get(j.id);if(target){target.rotationQuaternion=Quaternion.FromArray(pose.rotations[j.id]);target.position.copyFromFloats(...(j.parent?j.translation:pose.root))}}
         }
         // Blend the previous displayed pose, including interrupted action time.
@@ -143,6 +159,9 @@ export async function animationVisuals(scene: Scene, manifest: Manifest, urls: R
         }
         const posed:SkeletalPose={root:[...rig.joints[0].translation],rotations:{}}
         for(const j of rig.joints){const t=visual.targets.get(j.id);posed.rotations[j.id]=t?.rotationQuaternion?.asArray() as SkeletalPose['rotations'][string]??j.rotation;if(!j.parent&&t)posed.root=t.position.asArray() as [number,number,number]}
+        visual.equipment=advanceEquipment(visual.equipment,visual.profile,{mode:actor.mode,fullBody:!!actor.action||!!performance||actor.mode==='air',attached:vault||mechanic?.phase==='attached'||sim.interactions.poses.has(actor.id)},dt)
+        applySwordStance(rig,posed,visual.equipment.weight)
+        visual.sword?.update(visual.equipment.stowed)
         const contacts=(sim as Simulation & {mechanicPoses?:Record<string,Record<string,{x:number;y:number;z:number}>>}).mechanicPoses?.[actor.id]
         const interaction=sim.interactions.poses.get(actor.id)
         const worldContacts=mechanic?.phase==='attached'?contacts:interaction

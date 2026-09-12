@@ -1,3 +1,4 @@
+import { type TraversalComponent } from './traversalComponents.ts'
 import { MOTION_PROFILE } from './motionPresentation.ts'
 import { type ActionPackage, actionRecipe } from './actionMechanics.ts'
 import { z } from 'zod'
@@ -46,7 +47,9 @@ export function mergeScopedMechanics(
   surfaces: SurfaceProfile[],
   actions: ActionPackage[] = [],
   performance?: Performance,
+  traversal:TraversalComponent[]=[],
 ) {
+  if(traversal.some(t=>t.actorDefinition!==actor||current?.traversal?.some(old=>old.id===t.id&&old.actorDefinition!==actor)))throw new Error('Planner changed traversal ownership')
   if(performance?.abilities.some(a=>a.actorDefinition!==actor))throw new Error('Planner changed performance actor scope')
   const old=current?.performance
   const mergedPerformance=performance?performanceSchema.parse({version:1,
@@ -83,6 +86,7 @@ export function mergeScopedMechanics(
     }
   })
   return mechanicBundleSchema.parse({
+    ...((traversal.length||current?.traversal)?{traversal:[...(current?.traversal??[]).filter(t=>!traversal.some(n=>n.id===t.id)),...traversal]}:{}),
     version: 1,
     ...(mergedPerformance?{performance:mergedPerformance}:{}),
     motionProfile:current?.motionProfile??MOTION_PROFILE,

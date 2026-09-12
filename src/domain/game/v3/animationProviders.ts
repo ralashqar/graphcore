@@ -29,7 +29,8 @@ export function providerRequest(recipe: MotionRecipe) {
     const { retargetRevision: _cpuRevision, ...nativeRecipe } = recipe
     return { version: 2 as const, recipe: nativeRecipe, modelRevision: motionbricksRelease.model }
   }
-  return { version: 1 as const, recipe, modelRevision: kimodoRelease.model }
+  const {retargetRevision:_cpuRevision,targetFullBody:_targetPoses,...nativeRecipe}=recipe
+  return { version: 1 as const, recipe:nativeRecipe, modelRevision: kimodoRelease.model }
 }
 export function motionbricksRecipe(recipe: MotionRecipe): MotionRecipe {
   if (!['idle', 'walk'].includes(recipe.state)) throw new Error('MotionBricks has no accepted capability for this state')

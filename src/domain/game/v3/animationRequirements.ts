@@ -1,25 +1,18 @@
 import type { Design } from './spec.ts'
-import type { MotionRecipe, ClipRevision } from './animation.ts'
-export const ANIMATION_CATALOG = 'humanoid-motion-1.1.0'
-export const locomotionStates = ['idle','walk','run','backward','strafe_left','strafe_right'] as const
-export function actorAnimationRequirements(design: Design, actorId: string): MotionRecipe['state'][] {
-  const actor = design.nodes.find(n=>n.kind==='actor_definition'&&n.id===actorId)
-  if (!actor || actor.kind!=='actor_definition') return []
-  const movement = design.nodes.find(n=>n.kind==='movement'&&n.id===actor.movement)
-  const states: MotionRecipe['state'][] = [...locomotionStates]
-  if(movement?.kind==='movement'&&movement.jump>0) states.push('takeoff','airborne','landing')
-  if(design.nodes.some(n=>n.kind==='ability'&&n.op==='roll'&&actor.abilities.includes(n.id)))states.push('roll')
-  if(actor.canClimb)states.push('catch','hang','shimmy_left','shimmy_right','climb')
-  const performance=design.mechanics?.performance
-  for(const a of performance?.abilities??[])if(a.actorDefinition===actorId)states.push(a.kind)
-  for(const r of performance?.reactions??[])if(r.actorDefinitions.includes(actorId))states.push('recoil','fall_back','prone','get_up')
-  return [...new Set(states)]
-}
-export function proposeAnimations(design: Design, rigRevision: string, accepted: ClipRevision[]) {
-  return design.nodes.filter(n=>n.kind==='actor_definition').map(actor=>({ actorDefinition: actor.id, catalogVersion: ANIMATION_CATALOG,
-    requirements: actorAnimationRequirements(design,actor.id).map(state=>({ state, recipeProfile:`humanoid.${state}.v1`,
-      providerOptions: [{ provider:'kimodo', recipeVersion:1 }, ...(['idle','walk'].includes(state)?[{provider:'motionbricks',recipeVersion:2,gate:'awaiting_g1_soma_acceptance'}]:[])],
-      clipRevision: accepted.find(c=>!c.motionContract&&c.state===state&&c.rigRevision===rigRevision)?.id??null,
-      support: (locomotionStates as readonly string[]).includes(state)?'validated_locomotion':'awaiting_motion_acceptance',
-    })) }))
+import type { ClipRevision } from './animation.ts'
+import { defaultMotionProfile, type MotionProfile } from './motionProfile.ts'
+import { makeMotionSet, motionSetRequirements, requiredMotionStates, locomotionRoles, MOTION_SET_CATALOG } from './motionSets.ts'
+export const ANIMATION_CATALOG=MOTION_SET_CATALOG
+export const locomotionStates=locomotionRoles
+export const actorAnimationRequirements=requiredMotionStates
+export function proposeAnimations(design:Design,rigRevision:string,accepted:ClipRevision[],rigs:Array<{id:string;revision:string}>=[]){
+ return design.nodes.filter(n=>n.kind==='actor_definition').map(actor=>{
+  const profile:MotionProfile=actor.motionProfile??{...defaultMotionProfile,rig:(rigs.find(r=>r.revision===rigRevision)?.id??'humanoid.soma.v2') as MotionProfile['rig']}
+  const revision=rigs.find(r=>r.id===profile.rig)?.revision??rigRevision
+  const sets=(['locomotion','traversal'] as const).flatMap(group=>{
+   const states=requiredMotionStates(design,actor.id).filter(s=>(locomotionRoles as readonly string[]).includes(s)===(group==='locomotion'))
+   return states.length?[makeMotionSet(design,actor.id,revision,profile,group)]:[]
+  })
+  return {actorDefinition:actor.id,catalogVersion:ANIMATION_CATALOG,sets,requirements:sets.flatMap(set=>motionSetRequirements(set,accepted).map(r=>({...r,recipeProfile:`humanoid.${r.state}.v1`,providerOptions:r.providers,support:r.providers.some(p=>p.status==='technically_validated')?'technically_validated':'awaiting_motion_acceptance'})))}
+ })
 }

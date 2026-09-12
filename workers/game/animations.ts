@@ -49,6 +49,16 @@ export async function produceAnimation(ctx: JobContext) {
       if (!saved.every((path, index) => path === `${base}/source-${index}.json`)) throw new Error('Invalid stored animation source checkpoint')
       return saved
     }
+    if (input.import?.sourcePath) {
+      const imported = await admin.storage.from('project-assets').download(input.import.sourcePath)
+      if (imported.error) throw new Error('Owned source motion could not be read')
+      const bytes = new Uint8Array(await imported.data.arrayBuffer())
+      if (await bytesHash(bytes) !== input.import.sourceHash) throw new Error('Owned source hash changed')
+      sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
+      const path = await upload(`${base}/source-0.json`, bytes, 'application/json')
+      await ctx.checkpoint('animation.import', { ...job.checkpoint, animationSources: [path] })
+      return [path]
+    }
     if (input.import) throw new Error('Imported source checkpoint is missing; inference is prohibited')
     const transport = new RunpodTransport(Deno.env.get('RUNPOD_GRAPHCORE') ?? '')
     if (!job.checkpoint.animationRequestId) {
@@ -144,7 +154,8 @@ export async function produceAnimation(ctx: JobContext) {
         version: 1, id, recipeHash: await hashGameValue(recipe), rigRevision: rig.revision,
         sourceHash: await bytesHash(sourceBytes), glbHash: await bytesHash(await Deno.readFile(`${directory}/output.glb`)), storagePath: `${base}/${index}/output.glb`,
         ...(recipe.motionContract?{motionContract:recipe.motionContract}:{}),
-        ...(recipe.version === 2 ? { provenance: recipe.provenance, ...(recipe.retargetRevision ? {retargetRevision:recipe.retargetRevision} : {}) } : {}),
+        ...(recipe.version === 2 ? { provenance: recipe.provenance } : {}),
+        ...(recipe.retargetRevision ? {retargetRevision:recipe.retargetRevision} : {}),
         state: recipe.state, duration: processed.duration, fps: 30, loop: recipe.loop, naturalSpeed: processed.naturalSpeed,
         rootMode: recipe.rootMode, rootCurve: processed.rootCurve, contacts: processed.contacts, validation: { policy: ANIMATION_VERSION, accepted: true, metrics: validation.metrics },
       }) : null

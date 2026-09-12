@@ -1,3 +1,4 @@
+import { MOTION_SET_CATALOG } from '../../../src/domain/game/v3/motionSets.ts'
 import { PERFORMANCE_CATALOG } from '../../../src/domain/game/v3/poseSequence.ts'
 import { ACTION_CATALOG } from '../../../src/domain/game/v3/actionMechanics.ts'
 import {
@@ -80,7 +81,7 @@ export async function mechanicCommand(
   const result = await admin.rpc('game_mechanic_command', {
     p_actor: actor,
     p_command: command,
-    p_context: { mechanicCatalog: MECHANIC_CATALOG, actionCatalog: ACTION_CATALOG, performanceCatalog: PERFORMANCE_CATALOG, mechanicModel: Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1' },
+    p_context: { motionSetCatalog:MOTION_SET_CATALOG, mechanicCatalog: MECHANIC_CATALOG, actionCatalog: ACTION_CATALOG, performanceCatalog: PERFORMANCE_CATALOG, mechanicModel: Deno.env.get('GAME_PLANNER_MODEL') ?? 'gpt-4.1' },
     p_reserve: reserve,
   })
   if (result.error) {

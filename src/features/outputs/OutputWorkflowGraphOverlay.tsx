@@ -1,12 +1,11 @@
+import { WorkflowNodeFrame } from '../graph/WorkflowNodeFrame'
 import {
   applyNodeChanges,
   Background,
   BaseEdge,
   Controls,
   getBezierPath,
-  Handle,
   MiniMap,
-  Position,
   ReactFlow,
   type Edge,
   type EdgeProps,
@@ -547,29 +546,9 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
   const bodyText = outputPreview || (step?.errorMessage ? step.errorMessage : hasOutput ? '' : 'No output yet.')
 
   return (
-    <div
+    <WorkflowNodeFrame
       className={`outputs-graph-node is-${node.nodeType} is-${statusKey} ${selected ? 'is-selected' : ''} ${hasImagePreview ? 'has-image-output' : ''} ${hasReferenceStack ? 'has-reference-stack' : ''} ${hasContextTags ? 'has-context-tags' : ''}`}
-      onClick={() => onSelect(node.key)}
-      onDoubleClick={() => onSelect(node.key)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onSelect(node.key)
-        }
-      }}
-      role="button"
-      tabIndex={0}
-    >
-      {inputPorts.map((port, index) => (
-        <Handle
-          className={`outputs-graph-handle is-${port.valueType}`}
-          id={port.id}
-          key={port.id}
-          position={Position.Left}
-          style={{ top: 38 + index * 22 }}
-          type="target"
-        />
-      ))}
+      onSelect={() => onSelect(node.key)} inputs={inputPorts} outputs={outputPorts}>
       {hasImagePreview ? (
         <>
           <div className="outputs-graph-node-header">
@@ -639,17 +618,7 @@ function OutputWorkflowNodeCard({ data }: NodeProps<GraphNode>) {
       >
         <span aria-hidden="true" className={running ? 'outputs-graph-mini-spinner' : 'outputs-graph-play-icon'} />
       </button>
-      {outputPorts.map((port, index) => (
-        <Handle
-          className={`outputs-graph-handle is-${port.valueType}`}
-          id={port.id}
-          key={port.id}
-          position={Position.Right}
-          style={{ top: 38 + index * 22 }}
-          type="source"
-        />
-      ))}
-    </div>
+    </WorkflowNodeFrame>
   )
 }
 

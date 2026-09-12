@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY src ./src
+COPY workers/game/rigs/fabric-ybot-v1/mannequin.glb ./workers/game/rigs/fabric-ybot-v1/mannequin.glb
 COPY game-runtime ./game-runtime
 COPY vite.game.config.ts ./
 ARG VITE_GAME_RELEASE_URL

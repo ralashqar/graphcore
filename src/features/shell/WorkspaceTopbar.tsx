@@ -30,6 +30,8 @@ type WorkspaceTopbarProps = {
   onOpenNewGame: () => void
   onOpenOutputsLibrary?: () => void
   onOpenVibeDirector?: () => void
+  onOpenAnimations?: () => void
+  animationsActive?: boolean
   onOpenGameBuilder?: () => void
   gameBuilderActive?: boolean
   onResetProjectWorld?: () => void
@@ -65,6 +67,8 @@ export function WorkspaceTopbar({
   onOpenNewGame,
   onOpenOutputsLibrary,
   onOpenVibeDirector,
+  onOpenAnimations,
+  animationsActive = false,
   onOpenGameBuilder,
   gameBuilderActive = false,
   onResetProjectWorld,
@@ -109,6 +113,7 @@ export function WorkspaceTopbar({
       {hideNavigation ? <div className="topbar-center" aria-hidden="true" /> : (
         <div className="topbar-center">
           <nav className="tabbar" aria-label="Workspace tabs">
+            {onOpenAnimations ? <button className={animationsActive ? 'tab-button is-active' : 'tab-button'} onClick={onOpenAnimations} type="button">Animations</button> : null}
             {onOpenGameBuilder && (projectType === 'game' || gameBuilderActive) ? <button className={gameBuilderActive ? 'tab-button is-active' : 'tab-button'} onClick={onOpenGameBuilder} type="button">Game</button> : null}
             {onOpenVibeDirector ? (
               <button
@@ -120,7 +125,7 @@ export function WorkspaceTopbar({
               </button>
             ) : null}
             {navItems.map((item) => {
-              const active = !gameBuilderActive && (item.kind === 'world'
+              const active = !animationsActive && !gameBuilderActive && (item.kind === 'world'
                 ? activeTab === 'graph' && worldViewMode === item.mode
                 : item.tab === 'outputs'
                   ? (activeTab === 'outputs' || (activeTab === 'graph' && worldViewMode === 'wiki' && worldWikiSubView === 'outputs'))

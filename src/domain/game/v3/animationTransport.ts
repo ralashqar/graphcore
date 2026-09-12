@@ -45,9 +45,10 @@ export type SourceMotion = z.infer<typeof sourceMotionSchema>
 
 export function validateKimodoConstraints(recipe: z.infer<typeof motionRecipeSchema>) {
   const frames = Math.round(recipe.duration * 30)
-  for (const points of [recipe.path, recipe.poses]) {
+  for (const points of [recipe.path, recipe.poses, recipe.fullBody??[]]) {
     const indices = points.map(p => Math.min(frames - 1, Math.round(p.time * 30)))
     if (new Set(indices).size !== indices.length) throw new Error('Constraint times collide at 30 fps')
+    if (indices.some((n,i)=>i>0&&n<=indices[i-1])) throw new Error('Constraint frames must increase')
   }
   const effectors = { left_hand: 'LeftHand', right_hand: 'RightHand', left_foot: 'LeftFoot', right_foot: 'RightFoot' }
   const allowed = new Set(['Hips', 'LeftLeg', 'RightLeg', ...Object.values(effectors)])

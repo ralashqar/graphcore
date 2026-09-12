@@ -618,6 +618,9 @@ verify_jwt = false
 [functions.game-command]
 verify_jwt = false
 
+[functions.animation-studio]
+verify_jwt = false
+
 [functions.get-game-workspace]
 verify_jwt = false
 

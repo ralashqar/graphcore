@@ -1,3 +1,5 @@
+import { MOTION_SET_CATALOG } from '../../../src/domain/game/v3/motionSets.ts'
+import { motionSetCommand } from '../_shared/game-motion-set-command.ts'
 import { anyCommandSchema } from '../../../src/domain/game/v2/protocol.ts'
 import { validateDesign } from '../../../src/domain/game/v2/compiler.ts'
 import { designSchema } from '../../../src/domain/game/v2/spec.ts'
@@ -20,6 +22,7 @@ Deno.serve(async request => {
       if(draft.error||!draft.data)throw new HttpError(404,'Project draft not found')
       return json(await mechanicCommand(admin, user.id, raw))
     }
+    if (['save_traversal_component','save_motion_set','generate_animation_set','bind_animation_set','cancel_animation_set'].includes(raw?.action)) return json(await motionSetCommand(admin,user.id,raw))
     if (['generate_animation', 'bind_animation', 'accept_animation', 'reject_animation'].includes(raw?.action)) return json(await animationCommand(admin, user.id, raw))
     const command = anyCommandSchema.parse(raw)
     const unified = 'template' in command && command.template === 'unified.v1'
@@ -79,7 +82,7 @@ Deno.serve(async request => {
     }
     const entities = ['generate','plan'].includes(command.action) ? await client.from('world_entities').select('key,name,node_type,summary,metadata').eq('draft_id', command.draftId).neq('status', 'archived').limit(100) : null
     if (entities?.error) throw new HttpError(400, entities.error.message)
-    const context = { entities: (entities?.data ?? []).map(e => ({ key: e.key, name: e.name, type: e.node_type, summary: String(e.summary ?? '').slice(0, 1000), visual: e.metadata?.visual ?? null })), wiki: draft.data.metadata?.worldWiki ?? null }
+    const context = { ...('template' in command&&command.template==='unified.v1'?{motionSetCatalog:MOTION_SET_CATALOG}:{}), entities: (entities?.data ?? []).map(e => ({ key: e.key, name: e.name, type: e.node_type, summary: String(e.summary ?? '').slice(0, 1000), visual: e.metadata?.visual ?? null })), wiki: draft.data.metadata?.worldWiki ?? null }
     const result = await admin.rpc('game_commit_command', { p_actor: user.id, p_command: command, p_context: context, p_reserve: reserve })
     if (result.error) throw new HttpError(result.error.code === '40001' ? 409 : result.error.code === '42501' ? 403 : 400, result.error.message)
     return json(result.data)

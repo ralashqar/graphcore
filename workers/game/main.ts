@@ -1,3 +1,4 @@
+import { planAnimationStudio } from './studio.ts'
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { planGame } from './planner.ts'
 import { buildGame } from './build.ts'
@@ -6,7 +7,7 @@ import { gameWorkflowStages } from '../../src/domain/game/workflows.ts'
 import { planModules, buildModules } from './modules.ts'
 import { generateUnified, buildUnified } from './unified.ts'
 import { produceAnimation, cancelAnimationJobs } from './animations.ts'
-const WORKER_VERSION = 'game-humanoid-retarget-3.5.5'
+const WORKER_VERSION = 'game-animation-studio-2.0.0'
 
 type Job = { id: string; draft_id: string; requested_by: string; lease_owner: string; kind: 'generate' | 'build' | 'asset'; fence: number; phase: string; checkpoint: Record<string, any>; input: Record<string, any>; provider_started: boolean }
 export type JobContext = { job: Job; admin: SupabaseClient; checkpoint: (phase: string, data: Record<string, unknown>) => Promise<void> }
@@ -32,6 +33,7 @@ export async function processGameJob(admin: SupabaseClient, worker: string, job:
   try {
     if (job.checkpoint.pendingProvider) throw new Error('Uncertain provider submission requires reconciliation')
     const ctx = { job, admin, checkpoint }
+    if (job.input.studioPlan) { await planAnimationStudio(ctx); return }
     if (job.input.animation) { await produceAnimation(ctx); return }
     const modules = job.input.design?.schemaVersion === 2 || job.input.template === 'combat_traversal.v1'
     const unified = job.input.design?.schemaVersion === 3 || job.input.template === 'unified.v1'
@@ -53,6 +55,9 @@ if (import.meta.main) {
   if (!['generate', 'build', 'asset'].includes(kind)) throw new Error('Invalid game worker kind')
   let lastPoll = Date.now(), stopped = false
   let lastAnimationMaintenance = 0
+  const concurrency = kind === 'asset' ? Number(Deno.env.get('GAME_ASSET_CONCURRENCY') ?? '2') : 1
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 2) throw new Error('Asset concurrency must be one or two')
+  const active = new Set<Promise<void>>()
   Deno.serve({ port: Number(Deno.env.get('PORT') ?? 8080) }, () => Response.json({ version: WORKER_VERSION, kind, healthy: Date.now() - lastPoll < 240000 }, { status: Date.now() - lastPoll < 240000 ? 200 : 503 }))
   Deno.addSignalListener('SIGTERM', () => { stopped = true })
   while (!stopped) {
@@ -60,12 +65,19 @@ if (import.meta.main) {
       if (kind === 'asset' && Deno.env.get('GAME_ANIMATION_WORKER_ENABLED') === 'true' && Date.now() - lastAnimationMaintenance > 30000) {
         await cancelAnimationJobs(admin); lastAnimationMaintenance = Date.now()
       }
-      const claim = await admin.rpc('game_claim_job', { p_worker: worker, p_kind: kind })
-      if (claim.error) throw claim.error
-      lastPoll = Date.now()
-      if (claim.data) { await processGameJob(admin, worker, claim.data, () => { lastPoll = Date.now() }); lastPoll = Date.now() }
+      if (active.size < concurrency) {
+        const claim = await admin.rpc('game_claim_job', { p_worker: worker, p_kind: kind })
+        if (claim.error) throw claim.error
+        lastPoll = Date.now()
+        if (claim.data) {
+          const task = processGameJob(admin, worker, claim.data, () => { lastPoll = Date.now() }).finally(() => active.delete(task))
+          active.add(task)
+          continue
+        }
+      }
     } catch (error) { console.error(JSON.stringify({ event: 'game_poll_failed', message: String(error) })) }
     if (!stopped) await new Promise(resolve => setTimeout(resolve, 3000))
   }
+  await Promise.all(active)
   Deno.exit(0)
 }

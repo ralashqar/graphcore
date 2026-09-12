@@ -1,8 +1,10 @@
+import { acceptTraversalComponents } from './game-traversal-browser-acceptance.mjs'
 import { acceptPerformanceGame } from './game-performance-browser-acceptance.mjs'
 import { acceptActionGame } from './game-action-browser-acceptance.mjs'
 export async function acceptMechanicGame(page,reports,design){
  await acceptActionGame(page,reports,design)
  await acceptPerformanceGame(page,reports,design)
+ await acceptTraversalComponents(page,reports,design)
  const bundle=design.mechanics
  if(!bundle?.packages.length)return
  const state=()=>page.evaluate(()=>window.__gameAcceptance.state())

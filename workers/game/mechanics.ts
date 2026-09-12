@@ -1,3 +1,5 @@
+import { traversalComponentSchema, vaultGeometry } from '../../src/domain/game/v3/traversalComponents.ts'
+import { MOTION_SET_CATALOG } from '../../src/domain/game/v3/motionSets.ts'
 import { somaSkeleton } from '../../src/domain/game/v3/somaSkeleton.ts'
 import { performanceSchema, performanceRecipe } from '../../src/domain/game/v3/performance.ts'
 import { PERFORMANCE_CATALOG, validateSequence } from '../../src/domain/game/v3/poseSequence.ts'
@@ -30,6 +32,7 @@ export async function planMechanic(ctx: JobContext) {
     throw new Error('Invalid planning request')
   }
   const design = designSchema.parse(ctx.job.input.design)
+  if(ctx.job.input.context?.motionSetCatalog&&ctx.job.input.context.motionSetCatalog!==MOTION_SET_CATALOG)throw Error('Frozen motion-set catalog is unavailable')
   if (
     ctx.job.input.context?.mechanicCatalog &&
     ctx.job.input.context.mechanicCatalog !== MECHANIC_CATALOG
@@ -59,8 +62,13 @@ export async function planMechanic(ctx: JobContext) {
           packages: z.array(mechanicPackageSchema).max(3),
           actions: z.array(actionPackageSchema).max(2),
           performance: performanceSchema.nullable(),
+          traversal:z.array(traversalComponentSchema).max(12).default([]),
         }).strict(),
         {
+          lowVaultRecipes:ctx.job.input.context?.motionSetCatalog===MOTION_SET_CATALOG?design.nodes.filter(n=>n.kind==='world').flatMap(w=>w.boxes.flatMap((box,index)=>{
+            const component={version:1 as const,id:`traversal.vault.${index}`,actorDefinition:request.actorDefinition,kind:'low_vault' as const,collider:box.id,profile:'vault-0.8x0.5-v1' as const}
+            try{vaultGeometry(w,component);return [component]}catch{return []}
+          })):[],
           prompt: request.prompt,
           actor: request.actorDefinition,
           surfaces: request.surfaces,
@@ -83,13 +91,14 @@ export async function planMechanic(ctx: JobContext) {
             )
           ),
         },
-        'Compose only supplied bounded primitives for wall running, sliding, jumping, three-hit tap combos and forward dashes. Return actions for combo/dash and packages for wall traversal. Action recipes do not require wall surfaces. Dash has no invulnerability or steering. Combo taps buffer only one next strike, each strike has a stamina cost, and cancels are allowed in the recovery window. Adjust bounded parameters to the prompt. Preserve actorDefinition and package IDs. Unsupported requests such as moving walls, curves, corner transfers, new code or arbitrary rigs must be explicit unsupported gaps. Do not substitute a different mechanic. Return no packages if the request has no supported capability. For forward roll or uppercut with knockdown/get-up, return performance using supplied recipes. For animation-only requests return performance with custom sequences and empty abilities/reactions; do not invent gameplay. You may author bounded SOMA joint rotations and effector milestones, but never executable curves/code. Preserve existing IDs when refining, return only changed records, and synchronize motion duration and active markers with gameplay timing. Return performance=null when unnecessary. Contacts are rig-local meters; root offsets are visual only. Existing sibling content is merged and preserved. These are key-pose approximations requiring creator review; do not promise Kimodo animation or submit GPU work.',
+        'For low vault, return traversal records selected exactly from lowVaultRecipes; if none are supplied report the missing authored obstacle. Initial low vault is a procedural approximation over a 0.8m high, 0.5m deep box, approached along +Z; generated vault clips are unavailable. Return traversal=[] otherwise. Compose only supplied bounded primitives for wall running, sliding, jumping, three-hit tap combos and forward dashes. Return actions for combo/dash and packages for wall traversal. Action recipes do not require wall surfaces. Dash has no invulnerability or steering. Combo taps buffer only one next strike, each strike has a stamina cost, and cancels are allowed in the recovery window. Adjust bounded parameters to the prompt. Preserve actorDefinition and package IDs. Unsupported requests such as moving walls, curves, corner transfers, new code or arbitrary rigs must be explicit unsupported gaps. Do not substitute a different mechanic. Return no packages if the request has no supported capability. For forward roll or uppercut with knockdown/get-up, return performance using supplied recipes. For animation-only requests return performance with custom sequences and empty abilities/reactions; do not invent gameplay. You may author bounded SOMA joint rotations and effector milestones, but never executable curves/code. Preserve existing IDs when refining, return only changed records, and synchronize motion duration and active markers with gameplay timing. Return performance=null when unnecessary. Contacts are rig-local meters; root offsets are visual only. Existing sibling content is merged and preserved. These are key-pose approximations requiring creator review; do not promise Kimodo animation or submit GPU work.',
       ),
     ['mechanic.intent'],
   )
   if (
     answer.packages.some((p) => p.actorDefinition !== request.actorDefinition)
   ) throw new Error('Planner changed mechanic ownership')
+  if(answer.traversal?.length&&ctx.job.input.context?.motionSetCatalog!==MOTION_SET_CATALOG)throw Error('Traversal catalog was not frozen at admission')
   const bundle = mergeScopedMechanics(
     design.mechanics,
     request.actorDefinition,
@@ -97,6 +106,7 @@ export async function planMechanic(ctx: JobContext) {
     request.surfaces,
     answer.actions ?? [],
     answer.performance??undefined,
+    answer.traversal??[],
   )
   const plan = mechanicProposalSchema.parse({
     version: 1,
@@ -108,6 +118,7 @@ export async function planMechanic(ctx: JobContext) {
   await step(ctx, 'mechanic.composition', { plan }, async () => plan, [
     'mechanic.capabilities',
   ])
+  for(const component of plan.bundle.traversal??[])await step(ctx,`mechanic.traversal.${component.id}`,{component},async()=>({component,controller:'vault-0.8x0.5-v1',stages:['approach','clearance','lift','cross','land'],generation:'procedural',paidGeneration:false}),['mechanic.composition'])
   const poseSteps:string[]=[]
   for(const sequence of plan.bundle.performance?.sequences??[]){
     const id=`mechanic.pose.${sequence.id}`;poseSteps.push(id)
@@ -130,7 +141,7 @@ export async function planMechanic(ctx: JobContext) {
     return { valid: true }
   }, ['mechanic.pose_validation'])
   if (
-    !answer.packages.length && !(answer.actions?.length) && !answer.performance?.sequences.length &&
+    !answer.packages.length && !(answer.actions?.length) && !answer.performance?.sequences.length && !answer.traversal?.length &&
     !plan.unsupported.length
   ) {
     plan.unsupported.push('No supported mechanic was proposed')

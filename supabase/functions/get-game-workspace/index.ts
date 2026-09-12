@@ -11,14 +11,17 @@ Deno.serve(async request => {
     const draft = await client.from('project_drafts').select('id').eq('id', input.draftId).eq('project_id', input.projectId).single()
     if (!draft.data || draft.error) throw new HttpError(404, 'Draft not found')
     if (input.animations) {
-      const [recipes, candidates, graphs, reviews, jobs] = await Promise.all([
+      const [recipes, candidates, graphs, reviews, jobs, sets, runs, children] = await Promise.all([
         client.from('game_animation_recipes').select('*').eq('draft_id', input.draftId).limit(100),
         client.from('game_animation_candidates').select('*').eq('draft_id', input.draftId).order('created_at', { ascending: false }).limit(100),
         client.from('game_animation_graphs').select('*').eq('draft_id', input.draftId).order('revision', { ascending: false }).limit(100),
         client.from('game_animation_reviews').select('*').eq('draft_id', input.draftId).limit(100),
         client.from('game_jobs').select('id,status,phase,error,progress').eq('draft_id', input.draftId).not('input->animation','is',null).order('created_at',{ascending:false}).limit(100),
+        client.from('game_motion_sets').select('definition,revision').eq('draft_id',input.draftId).order('created_at',{ascending:false}).limit(100),
+        client.from('game_motion_set_runs').select('*').eq('draft_id',input.draftId).order('created_at',{ascending:false}).limit(30),
+        client.from('game_motion_set_jobs').select('*').eq('draft_id',input.draftId).limit(180),
       ])
-      for (const result of [recipes, candidates, graphs, reviews, jobs]) if (result.error) throw result.error
+      for (const result of [recipes, candidates, graphs, reviews, jobs, sets, runs, children]) if (result.error) throw result.error
       const admin = createAdminClient('get-game-workspace'), urls: Record<string, string> = {}
       for (const candidate of candidates.data ?? []) if (candidate.clip) {
         const signed = await admin.storage.from('project-assets').createSignedUrl(candidate.clip.storagePath, 3600)
@@ -38,7 +41,7 @@ Deno.serve(async request => {
       }
       const workspace=await client.from('game_workspaces').select('design').eq('draft_id',input.draftId).single()
       if(workspace.error)throw workspace.error
-      return json({ rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), motionbricks: { enabled: Deno.env.get('GAME_MOTIONBRICKS_ENABLED')==='true' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED')==='true', reservationCents: Number(Deno.env.get('GAME_MOTIONBRICKS_RESERVATION_CENTS')??'100'), rig: await somaMannequin(), rigs: [await somaMannequin(), await fabricMannequin()] }, artifactUrls, recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, performanceEnabled:Deno.env.get('GAME_PERFORMANCE_ANIMATION_ENABLED')==='true', enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
+      return json({ motionSets:{rigs:await Promise.all([fabricMannequin(),somaMannequin(),humanoidMannequin()]),sets:sets.data,runs:runs.data,children:children.data}, rig: await (workspace.data.design?.mechanics?.motionProfile?somaMannequin():humanoidMannequin()), motionbricks: { enabled: Deno.env.get('GAME_MOTIONBRICKS_ENABLED')==='true' && Deno.env.get('GAME_MOTIONBRICKS_CLIPS_ENABLED')==='true', reservationCents: Number(Deno.env.get('GAME_MOTIONBRICKS_RESERVATION_CENTS')??'100'), rig: await somaMannequin(), rigs: [await somaMannequin(), await fabricMannequin()] }, artifactUrls, recipes: recipes.data, candidates: candidates.data, graphs: graphs.data, reviews: reviews.data, jobs: jobs.data, urls, urlsExpireAt: Date.now()+3500000, performanceEnabled:Deno.env.get('GAME_PERFORMANCE_ANIMATION_ENABLED')==='true', enabled: Deno.env.get('GAME_ANIMATION_ENABLED') === 'true', reservationCents: Number(Deno.env.get('GAME_ANIMATION_RESERVATION_CENTS') ?? '100') })
     }
     if (input.jobId) {
       let query = client.from('game_job_steps').select('node_id,input_hash,status,attempt,output,diagnostic,dependencies,updated_at').eq('draft_id', input.draftId).eq('job_id', input.jobId)
