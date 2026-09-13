@@ -12,11 +12,11 @@ import { gaitPhaseOffset } from '../domain/game/v3/motionSets'
 import { studioPose, blendPose } from '../domain/game/animation-studio/poses'
 import { studioWeights, type StudioState } from '../domain/game/animation-studio/runtime'
 import type { StudioGraph } from '../domain/game/animation-studio/graph'
-import type { SkeletalPose } from '../domain/game/v3/somaPose'
+import type { SkeletalPose, Rig } from '../domain/game/v3/somaPose'
 import { createSwordVisual } from './swordVisual'
 
 /** Shared renderer: samples clips on the same Fabric rig as the procedural preview. */
-export async function createStudioVisual(scene: Scene, graph: StudioGraph, clips: Array<{clip:ClipRevision;url:string}>, options: {placeholder?:boolean;inPlace?:()=>boolean}={}) {
+export async function createStudioVisual(scene: Scene, graph: StudioGraph, clips: Array<{clip:ClipRevision;url:string}>, options: {placeholder?:boolean;inPlace?:()=>boolean;samplePhase?:(id:string)=>number|undefined;postPose?:(pose:SkeletalPose,rig:Rig)=>void}={}) {
   const containers:AssetContainer[]=[]
   const rig=await fabricMannequin(),root=new TransformNode('studio-actor',scene)
   try {
@@ -40,7 +40,7 @@ export async function createStudioVisual(scene: Scene, graph: StudioGraph, clips
         const stance=currentGraph.stances.find(s=>s.id===node.group)!,seconds=node.loop?state.gait:Math.min(state.elapsed,node.duration)
         const pose=studioPose(rig,node,stance,options.placeholder?0:seconds),source=node.clipId?tracks.get(node.clipId):undefined
         if(source){
-          const phase=node.loop?(seconds/source.clip.duration+gaitPhaseOffset(source.clip))%1:Math.min(1,seconds/source.clip.duration)
+          const phase=options.samplePhase?.(node.id)??(node.loop?(seconds/source.clip.duration+gaitPhaseOffset(source.clip))%1:Math.min(1,seconds/source.clip.duration))
           if(options.inPlace&&!options.inPlace()){const curve=source.clip.rootCurve,at=phase*source.clip.duration,index=curve.findIndex(p=>p.time>=at),b=curve[index<0?curve.length-1:index],a=curve[Math.max(0,(index<0?curve.length-1:index)-1)],t=b.time===a.time?0:(at-a.time)/(b.time-a.time);for(const axis of [0,2])pose.root[axis]=a.position[axis]+(b.position[axis]-a.position[axis])*t+(node.loop?Math.floor(seconds/source.clip.duration)*curve[curve.length-1].position[axis]:0)}
           for(const track of source.tracks){
             const keys=track.animation.getKeys();if(!keys.length)continue
@@ -53,6 +53,7 @@ export async function createStudioVisual(scene: Scene, graph: StudioGraph, clips
         result=result?blendPose(result,pose,weight/(total+weight)):pose;total+=weight
       }
       if(result&&options.inPlace?.()){result.root[0]=0;result.root[2]=0}
+      if(result)options.postPose?.(result,rig)
       if(result)for(const joint of rig.joints){const target=targets.get(joint.id);if(target){target.rotationQuaternion=Quaternion.FromArray(result.rotations[joint.id]);if(!joint.parent)target.position=Vector3.FromArray(result.root)}}
       const active=currentGraph.nodes.find(n=>n.id===state.node),stance=currentGraph.stances.find(s=>s.id===active?.group)
       sword?.update(stance?.equipment!=='one_handed_sword')

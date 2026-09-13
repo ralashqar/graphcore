@@ -4,6 +4,63 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### Studio request accounting without a cumulative setup cap (September 2026)
+
+At the user's explicit request, new animation studio generations use the service-only `animation-studio-live` ledger with `enforce_setup_cap=false`. The old experimental budget and historical holds remain intact for legacy jobs and other game/provider experiments. Studio requests retain their per-command maximum, provider checks, ownership, idempotency and uncertain-submission reconciliation. Real Runpod billing is unchanged. The additive migration changes studio command routing only; no Edge/Fly/native image changes or new inference are needed. See [docs/55-studio-request-accounting.md](docs/55-studio-request-accounting.md).
+
+
+### Isolated animation action prompting (September 2026)
+
+`animation-action-prompt-1.1.0` removes neighboring action descriptions from flexible Kimodo prompts. Requests include only the selected action, shared style and labelled own entry/exit postures; existing explicit predecessor final-pose constraints and loop guidance remain. The planner authors physical boundaries and the semantic critic inspects compiled prompts for ambiguity and incompatible postures. Policy fingerprints require renewed readiness review for future inference while preserving accepted assets and frozen jobs. Worker version is `game-animation-studio-2.2.3`. animation-studio and the isolated game worker are deployed; a live compiler probe confirmed the isolated bow prompt. No migration, native image change or new GPU generation was required. This does not add post-generation visual semantic validation. See [docs/54-animation-action-isolation.md](docs/54-animation-action-isolation.md).
+
+
+### Motion review selection (September 2026)
+
+The flexible studio review drawer includes a motion selector independent of graph navigation, per-result preview links, named candidate takes and explicit failed-validation empty states. Counts distinguish processed motions from previewable results. Candidate acceptance still targets its original node and no inference is triggered by switching previews.
+
+### Animation submission visibility (September 2026)
+
+The flexible studio labels per-motion reservations as budget holds, not price estimates. Submission has an inline busy indicator and acknowledgement; motion rows expose phases and candidate navigation. Selected in-flight motions cannot be submitted again from the UI. Periodic reads recover status after transient refresh failures, and generation errors appear inside the drawer. Provider reservations and backend admission are unchanged. Live idle, wave and bow requests were verified completed September 13. Wave and bow passed technical validation; idle failed the correction threshold. No extra inference was submitted for UI checks.
+
+
+### Kimodo studio activation and additional allowance (September 2026)
+
+The user approved up to $10 additional Runpod spending on September 13. An additive `studio_additional_cents` allowance extends integration and total admission by that amount while preserving the original budget and every existing reservation. The migration passed a rollback test for the exact cap, overflow rejection and service-only permissions, and is deployed. Native Kimodo image commit `3dc49ca` adds the previously implemented custom-clip schema and full-body/right-hand constraints to the endpoint build. A real LLM readiness review passed for the bounded idle fixture. Image `3dc49ca3e` is deployed; fresh idle inference, CPU validation and hash-checked GLB download passed. The missing Fly Runpod credential is configured, both studio generation flags are enabled, and the endpoint permits one on-demand worker with zero minimum. The test retains a $2 reservation, leaving $8 of the additional allowance. Creator visual acceptance remains separate. Evidence is tracked in [docs/53-kimodo-studio-activation.md](docs/53-kimodo-studio-activation.md).
+
+### Game planner tuple schema compatibility (September 2026)
+
+Game planner structured output now converts homogeneous Zod tuples into fixed-length arrays with `items`, avoiding provider rejection of JSON Schema `prefixItems` for locomotion directions and other coordinates. Original Zod parsing still enforces tuple lengths and semantic refinements. Unsupported heterogeneous/variadic tuples fail locally. Worker version `game-animation-studio-2.2.2`; this changes only Fly game planner execution, not Edge admission, credits or GPU inference. See [docs/52-game-planner-schema-compatibility.md](docs/52-game-planner-schema-compatibility.md).
+
+### Development game credit bypass (September 2026)
+
+Server flag `GAME_DEV_CREDIT_BYPASS_ENABLED=true` waives app-credit reservations for exact account IDs in `GAME_GENERATION_USERS`. Wildcards do not grant free usage. Animation graph planning/readiness, game planning/generation/assets and mechanic planning use the same effective-credit helper as their pricing reads. Invalid pricing remains invalid, and ownership, feature gates, GPU setup reservations and provider billing are unchanged. The default is disabled; no browser flag or user metadata grants bypass. Existing jobs keep their frozen reservations. Only animation-studio, game-command and get-game-workspace execute the policy; no Fly worker or migration change is required. See [docs/51-game-development-credits.md](docs/51-game-development-credits.md).
+
+### Loop-aware Kimodo prompting (September 2026)
+
+Flexible clip `loop` flags now add deterministic cyclic prompt guidance under `animation-loop-prompt-1.0.0`, independently of optional locomotion processing. In-place, traveling and anchored clips receive appropriate root guidance; neighboring transitions remain context rather than actions inside the cycle. The planner explicitly selects sustained looping motions versus one-shot actions while respecting user intent. Prompt-length validation includes the added guidance. Readiness fingerprints include the prompt policy, requiring a new review for older reports without invalidating accepted assets. Worker version is `game-animation-studio-2.2.1`. No migration, native provider setting, GPU admission or budget change is introduced. See [docs/50-animation-loop-prompts.md](docs/50-animation-loop-prompts.md) for verification and rollout status.
+
+### Animation generation preflight (September 2026)
+
+Flexible graph planning now includes a separate typed semantic critic under `animation-preflight-1.0.0`. Exact graph evidence, controlled capability declarations and contradiction/ambiguity/continuity findings combine with deterministic graph/contact/prompt-length checks into ready, needs-clarification or unsupported status. Reports are versioned, graph-fingerprinted, service-owned planner checkpoints. Existing `plan` supports optional `reviewOnly` to assess an unchanged graph. The studio exposes findings and scoped prompt suggestions; new inference requires a matching passing report for every selected clip, plus a worker-checked exact-recipe receipt. Saved-source CPU processing and already-submitted request reconciliation remain available.
+
+The existing model gateway, fenced jobs and design-credit reservation are reused; planning adds one critic call with at most one repair. No migration, provider-gate change or GPU-budget increase is introduced. Worker version is `game-animation-studio-2.2.0`; deploy the four game/studio Edge entries and isolated Fly game/preview apps together. The four Edge entries and both Fly apps are deployed. Builds, TypeScript/Deno, 31 focused tests and browser checks passed. A hosted CPU-only source import without a preflight receipt passed validation and hash-checked download with zero inference reservations; live critic quality and authenticated prompt acceptance remain unverified. Details and acceptance limits: [docs/49-animation-generation-preflight.md](docs/49-animation-generation-preflight.md).
+
+### Flexible locomotion processing (September 2026)
+
+Optional `locomotion-post-1.0.0` profiles extend flexible animation nodes with explicit gait/direction processing and runtime synchronization/rate/foot-lock settings. The strict planner schema uses explicit nullable profiles while stored legacy nodes remain readable without them. CPU processing reuses bounded gait-cycle extraction, bilateral contact inference, smoothing and exported-pose validation. Standalone playback shares touchdown phase within compatible rate bounds and uses bounded rotational foot locks with visible diagnostics and contact markers; incompatible cycle ranges fall back to independent playback.
+
+The existing `import_source` command accepts saved Kimodo motion from the same workspace/node after verifying its immutable source graph and unchanged motion intent. Processing creates a new review candidate without inference or setup reservations. Existing graphs, gameplay contracts, provider gates and budgets remain unchanged; no migration is required. Deploy the affected game Edge entries and isolated Fly game/preview apps together; the world worker is unaffected. Worker version is `game-animation-studio-2.1.0`; the four affected Edge entries and isolated Fly apps are deployed. Saved walk/run local bakes and repeated GLB transition playback passed. A hosted saved-source CPU job produced a hash-checked validated candidate with zero new inference reservations; authenticated source-command and creator acceptance remain separate. Verification and rollout details: [docs/48-animation-locomotion-processing.md](docs/48-animation-locomotion-processing.md).
+
+### Animation studio conversation (September 2026)
+
+The animation studio and prompt-to-world transcript share message and choice-card primitives. A persistent conversation rail renders saved planner jobs, scoped choice replies, changed-state links and motion progress. Optional graph-derived questions identify unreachable states, missing entries, unmarked endings, declared capability gaps and missing motion; replies use the existing revision-fenced planner and design credits. Intentional `terminal` and `standalone` tags suppress structural suggestions without changing runtime behavior. Missing-motion choices only open review, never submit inference. The last opened graph, unsent drafts and per-revision dismissals are remembered on the current device; saved turns remain server-owned. No backend contract, worker, database or provider gate changes are introduced. Details: [docs/47-animation-studio-conversation.md](docs/47-animation-studio-conversation.md).
+
+### Animation studio authoring experience (September 2026)
+
+The flexible studio uses a persistent graph/preview split, scoped prompt composer and separate history, review and optional integration drawers. Existing workflow-node chrome now has ELK layout, browser-local positions, machine collapse and transition editing. Preview exposes transition diagnostics and isolated repeat tests without changing runtime contracts. Candidate entry/exit comparisons and a disposable saved-motion playground reuse existing GLB playback; no motion is generated by these tools.
+
+The `animation-studio` read response adds advisory account/planning availability and per-clip reservation estimates, plus short-lived signed previews for at most twelve RLS-readable draft sources. Command admission, setup funds and inference gates remain unchanged. Only this Edge entry changes; no Fly execution module or database schema changes. Verification and remaining live-provider acceptance: [docs/46-animation-studio-authoring-experience.md](docs/46-animation-studio-authoring-experience.md).
+
 ### Flexible animation graphs (September 2026)
 
 The animation studio now defaults to version-3 `animation-studio-2.0.0` graphs: arbitrary humanoid clips, nested machines, explicit blends, custom events/parameters, shared styles and static props/anchors. Prompt follow-ups return typed graph edits; the fenced worker applies valid edits automatically, retains stale results without overwriting newer revisions, and defers scope expansion for review. Existing RLS revision history supports undo/redo and restoration. Version-2 graphs and game bindings remain readable.
@@ -16,6 +73,14 @@ The generic `custom` motion recipe is separate from the gameplay state catalog a
 
 The pinned Kimodo adapter now compiles sparse full-body/right-hand constraints, with CPU target-rig milestones and boundary diagnostics under `soma-fabric-studio-1.0.0`. Saved neutral sources can be re-baked without inference. New studio inference is default-off behind `GAME_ANIMATION_STUDIO_GENERATION_ENABLED`; the existing exhausted setup admission ledger is unchanged. Saved idle/walk and synthetic sword fixtures passed local bake checks. The additive migration, four affected Edge functions and isolated Fly game/preview apps are deployed; the world worker is unaffected. Hosted saved-source baking and hash-checked download passed with zero new inference reservations, while creator acceptance/binding remains separate. The updated native Kimodo image, real generated sword quality, hosted prompt and publication acceptance remain pending. Main frontend verification is local. See [docs/44-animation-studio.md](docs/44-animation-studio.md).
 
+
+### MotionBricks sword combat sweep (September 2026)
+
+A fixed, hash-addressed experimental batch compiles eight explicit sword-motion prompts into bounded MotionBricks reference modes, direction/facing vectors, speeds, durations and seeds. One Runpod request produces combat idle/walk/run, left/right strafes, crouch idle/walk and a boxing-reference three-beat combo; jump remains an explicit procedural key-pose fallback because the pinned G1 release has no vertical control contract. Each source is independently retargeted to the Fabric mannequin, baked to GLB, validated and represented in an inspectable review graph. Four clips passed generic technical validation and four remain rejected; none are accepted project bindings. The endpoint is restored to its production image and zero workers. Total setup holds reached the $25 admission ceiling pending delayed billing reconciliation. Details and exact limitations: [docs/43-motionbricks-combat-sweep.md](docs/43-motionbricks-combat-sweep.md).
+
+### Experimental MotionBricks sword conditioning (September 2026)
+
+The separate fixed-profile MotionBricks diagnostic handler supplies hashed, joint-limit-checked sword-carry references before inference and restores model buffers afterward. Its experiment runner reserves setup funds, records uncertain submissions and provider IDs, disables workers after execution, and archives immutable source/GLB diagnostics privately. One generated Fabric walk passed loop/contact/retarget validation, but visual sword-carry quality remains insufficient; it is not an accepted gameplay binding. The local comparison offers this candidate and saved MotionBricks clips with the procedural grip layer. Setup holds are $24.50 pending billing reconciliation; no further experiment was admitted. The endpoint is restored and scaled to zero. See [docs/42-motionbricks-sword-experiment.md](docs/42-motionbricks-sword-experiment.md).
 
 ### Human leg retargeting and Fabric mannequin (September 2026)
 

@@ -1,3 +1,4 @@
+import { gamePlannerJsonSchema } from '../../src/domain/game/plannerSchema.ts'
 import { z } from 'zod'
 import {
   designSchema,
@@ -133,7 +134,7 @@ export async function ask<T>(
           type: 'json_schema',
           name: 'game_module',
           strict: true,
-          schema: z.toJSONSchema(schema),
+          schema: gamePlannerJsonSchema(schema),
         },
       },
     },

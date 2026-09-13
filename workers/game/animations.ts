@@ -1,3 +1,4 @@
+import { requireInferencePreflight } from '../../src/domain/game/animation-studio/preflight.ts'
 import { motionRecipeSchema, rigProfileSchema, clipRevisionSchema, ANIMATION_VERSION } from '../../src/domain/game/v3/animation.ts'
 import { sourceMotionSchema, RunpodTransport } from '../../src/domain/game/v3/animationTransport.ts'
 import { animationProvider, validateProviderRecipe, providerRequest, decodeProviderMotion } from '../../src/domain/game/v3/animationProviders.ts'
@@ -60,6 +61,7 @@ export async function produceAnimation(ctx: JobContext) {
       return [path]
     }
     if (input.import) throw new Error('Imported source checkpoint is missing; inference is prohibited')
+    if(!job.checkpoint.animationRequestId)await requireInferencePreflight(recipe,input.preflight)
     const transport = new RunpodTransport(Deno.env.get('RUNPOD_GRAPHCORE') ?? '')
     if (!job.checkpoint.animationRequestId) {
       if (job.checkpoint.pendingProvider) throw new Error('Uncertain animation submission requires reconciliation')
@@ -156,6 +158,7 @@ export async function produceAnimation(ctx: JobContext) {
         ...(recipe.motionContract?{motionContract:recipe.motionContract}:{}),
         ...(recipe.version === 2 ? { provenance: recipe.provenance } : {}),
         ...(recipe.retargetRevision ? {retargetRevision:recipe.retargetRevision} : {}),
+        ...(recipe.locomotion?{locomotion:recipe.locomotion}:{}),
         state: recipe.state, duration: processed.duration, fps: 30, loop: recipe.loop, naturalSpeed: processed.naturalSpeed,
         rootMode: recipe.rootMode, rootCurve: processed.rootCurve, contacts: processed.contacts, validation: { policy: ANIMATION_VERSION, accepted: true, metrics: validation.metrics },
       }) : null

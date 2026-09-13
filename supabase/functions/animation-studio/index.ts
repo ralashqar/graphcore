@@ -1,3 +1,8 @@
+import { gameCredits } from '../_shared/game-credit-policy.ts'
+import { currentPreflight,requireReady,PREFLIGHT_VERSION } from '../../../src/domain/game/animation-studio/preflight.ts'
+import { hashGameValue } from '../../../src/domain/game/compiler.ts'
+import { reusableLocomotionSource } from '../../../src/domain/game/animation-studio/sourceReuse.ts'
+import { studioAvailability } from './availability.ts'
 import { mapFlexibleLocomotion } from '../../../src/domain/game/animation-studio/gameMapping.ts'
 import { parseFlexible, freezeFlexible, generationReadiness } from '../../../src/domain/game/animation-studio/flexible.ts'
 import { flexibleRecipe } from '../../../src/domain/game/animation-studio/flexibleRecipes.ts'
@@ -27,6 +32,9 @@ Deno.serve(async request=>{
    const jobs=workspace?await admin.from('game_jobs').select('id,status,phase,error,checkpoint,input,created_at').eq('animation_workspace_id',workspace.id).order('created_at',{ascending:false}).limit(100):{data:[],error:null}
    if(jobs.error)throw jobs.error
    const ids=(jobs.data??[]).map(j=>j.id)
+   const assessmentJobs=workspace?.graph.version===3?await admin.from('game_jobs').select('checkpoint').eq('animation_workspace_id',workspace.id).eq('status','completed').not('checkpoint->studioEdit->preflight','is',null).order('created_at',{ascending:false}).limit(20):{data:[],error:null}
+   if(assessmentJobs.error)throw assessmentJobs.error
+   const preflight=workspace?.graph.version===3?await currentPreflight(parseFlexible(workspace.graph),(assessmentJobs.data??[]).map(j=>j.checkpoint.studioEdit.preflight)):null
    const pinnedIds=(workspace?.graph.nodes??[]).flatMap((n:any)=>n.clipId?[n.clipId]:[])
    const recent=ids.length?await client.from('game_animation_candidates').select('*').in('job_id',ids):{data:[],error:null}
    const pinned=pinnedIds.length?await client.from('game_animation_candidates').select('*').in('id',pinnedIds):{data:[],error:null}
@@ -41,8 +49,10 @@ Deno.serve(async request=>{
    const reviews=workspace?await client.from('animation_studio_reviews').select('revision,evidence').eq('workspace_id',workspace.id):{data:[]}
    const game=await client.from('game_workspaces').select('revision,design').eq('draft_id',raw.draftId).maybeSingle()
    const sources=await client.from('game_animation_candidates').select('id,clip').eq('draft_id',raw.draftId).not('clip','is',null).limit(100)
+   if(sources.error)throw sources.error
+   const previewSources=await Promise.all((sources.data??[]).map(async(c,index)=>{const path=c.clip?.storagePath;if(index>=12||!path)return {...c,url:null};const signed=await admin.storage.from('project-assets').createSignedUrl(path,1800);return {...c,url:signed.data?.signedUrl??null}}))
    const revisions=workspace?await client.from('animation_studio_revisions').select('revision,created_at').eq('workspace_id',workspace.id).order('revision',{ascending:false}).limit(100):{data:[]}
-   return json({revisions:revisions.data??[],library:library.data,workspace,candidates:signed,reviews:reviews.data??[],sources:sources.data??[],game:game.data?{revision:game.data.revision,actors:game.data.design?.nodes?.filter((n:any)=>n.kind==='actor_definition').map((n:any)=>({id:n.id,label:n.label??n.id}))??[]}:null,jobs:(jobs.data??[]).map(j=>({id:j.id,status:j.status,phase:j.phase,error:j.error,nodeId:j.input.studioNode??null,graph:j.checkpoint.studioGraph??null,sourceRevision:j.input.sourceRevision,prompt:j.input.studioPlan?.prompt??null,edit:j.checkpoint.studioEdit??null,appliedRevision:j.checkpoint.appliedRevision??null}))})
+   return json({preflight,availability:studioAvailability(name=>Deno.env.get(name),user.id),revisions:revisions.data??[],library:library.data,workspace,candidates:signed,reviews:reviews.data??[],sources:previewSources,game:game.data?{revision:game.data.revision,actors:game.data.design?.nodes?.filter((n:any)=>n.kind==='actor_definition').map((n:any)=>({id:n.id,label:n.label??n.id}))??[]}:null,jobs:(jobs.data??[]).map(j=>({id:j.id,status:j.status,phase:j.phase,error:j.error,nodeId:j.input.studioNode??null,graph:j.checkpoint.studioGraph??null,sourceRevision:j.input.sourceRevision,prompt:j.input.studioPlan?.prompt??null,edit:j.checkpoint.studioEdit??null,appliedRevision:j.checkpoint.appliedRevision??null}))})
   }
   const command=studioCommandSchema.parse(raw)
   const old=await admin.from('animation_studio_commands').select('actor,command').eq('workspace_id',command.workspaceId).eq('idempotency_key',command.idempotencyKey).maybeSingle()
@@ -69,20 +79,35 @@ Deno.serve(async request=>{
     if(!graph)throw new HttpError(400,'Save a graph first')
    }
    if(command.action==='plan'){
-    const credits=Number(Deno.env.get('GAME_PLAN_CREDITS')??25)
+    if(command.reviewOnly&&graph?.version!==3)throw new HttpError(400,'Readiness review requires a flexible graph')
+    const credits=gameCredits(key => Deno.env.get(key), user.id, Number(Deno.env.get('GAME_PLAN_CREDITS')??25))
     if(!Number.isInteger(credits)||credits<0||credits>10000)throw new HttpError(503,'Invalid planning price')
     prepared.credits=credits
    }
    if(command.action==='import_source'){
     if(!graph)throw new HttpError(400,'Save the graph first')
-    const candidate=await client.from('game_animation_candidates').select('clip,source_path').eq('id',command.candidateId).single()
-    if(graph.version===3)throw new HttpError(400,'Saved neutral source reuse is available in the legacy graph; flexible clips use their own motion contract')
-    const node=graph.nodes.find(n=>n.id===command.nodeId)
-    if(!node||candidate.error||!candidate.data.clip||candidate.data.clip.provenance||candidate.data.clip.state!==node?.role||!node.loop||node.group!=='upright')throw new HttpError(400,'Source reuse requires compatible neutral Kimodo locomotion')
-    const recipe=await studioRecipe(graph,command.nodeId)
+    const candidate=await client.from('game_animation_candidates').select('clip,source_path,job_id').eq('id',command.candidateId).single()
+    if(candidate.error||!candidate.data.clip||!candidate.data.source_path||candidate.data.clip.provenance)throw new HttpError(400,'A saved Kimodo source is required')
+    let recipe
+    if(graph.version===3){
+     const origin=await admin.from('game_jobs').select('input').eq('id',candidate.data.job_id).eq('animation_workspace_id',command.workspaceId).single()
+     if(origin.error||origin.data.input.studioNode!==command.nodeId)throw new HttpError(400,'Source must belong to this workspace and node')
+     const prior=await client.from('animation_studio_revisions').select('graph').eq('workspace_id',command.workspaceId).eq('revision',origin.data.input.sourceRevision).single()
+     if(prior.error||prior.data.graph.version!==3||!await reusableLocomotionSource(parseFlexible(prior.data.graph),graph,command.nodeId))throw new HttpError(400,'Source motion intent changed. Restore its description, style and motion context before reprocessing')
+     recipe=await flexibleRecipe(graph,command.nodeId)
+    }else{
+     const node=graph.nodes.find(n=>n.id===command.nodeId)
+     if(!node||candidate.data.clip.state!==node.role||!node.loop||node.group!=='upright')throw new HttpError(400,'Source reuse requires compatible neutral Kimodo locomotion')
+     recipe=await studioRecipe(graph,command.nodeId)
+    }
     prepared.requests=[{...recipe,import:{sourcePath:candidate.data.source_path,sourceHash:candidate.data.clip.sourceHash},provider:{reservationCents:0,modelRevision:kimodoRelease.model,sourceRevision:kimodoRelease.source,processingVersion:ANIMATION_VERSION}}]
    }
    if(command.action==='generate'){
+    if(graph?.version===3){
+     const reports=await admin.from('game_jobs').select('checkpoint').eq('animation_workspace_id',command.workspaceId).eq('status','completed').not('checkpoint->studioEdit->preflight','is',null).order('created_at',{ascending:false}).limit(20)
+     if(reports.error)throw reports.error
+     try{requireReady(await currentPreflight(graph,reports.data.map(j=>j.checkpoint.studioEdit.preflight)),command.nodeIds.filter(id=>!graph.nodes.find(n=>n.id===id)?.clipId))}catch(error){throw new HttpError(409,String(error))}
+    }
     if(Deno.env.get('GAME_ANIMATION_STUDIO_GENERATION_ENABLED')!=='true'||Deno.env.get('GAME_ANIMATION_ENABLED')!=='true')throw new HttpError(403,'Studio inference awaits provider image and generated-motion acceptance; saved motion and graph editing remain available')
     const run=Deno.env.get('GAME_ANIMATION_RUN_URL')??'',status=Deno.env.get('GAME_ANIMATION_STATUS_URL')??'',cancel=Deno.env.get('GAME_ANIMATION_CANCEL_URL')??''
     for(const u of [run,status,cancel])runpodUrl(u)
@@ -106,7 +131,8 @@ Deno.serve(async request=>{
       predecessor=sourceMotionSchema.parse(JSON.parse(new TextDecoder().decode(bytes)))
      }
      if(graph!.nodes.find(n=>n.id===nodeId)?.clipId)continue
-     requests.push({...await (graph!.version===3?flexibleRecipe(graph!,nodeId,42,predecessor):studioRecipe(graph!,nodeId,42,predecessor)),provider:{run,status,cancel,reservationCents,pricingEvidence,modelRevision:kimodoRelease.model,sourceRevision:kimodoRelease.source,processingVersion:ANIMATION_VERSION}})
+     const compiled=await (graph!.version===3?flexibleRecipe(graph!,nodeId,42,predecessor):studioRecipe(graph!,nodeId,42,predecessor))
+     requests.push({...compiled,...(graph!.version===3?{preflight:{version:PREFLIGHT_VERSION,recipeHash:await hashGameValue(compiled.recipe)}}:{}),provider:{run,status,cancel,reservationCents,pricingEvidence,modelRevision:kimodoRelease.model,sourceRevision:kimodoRelease.source,processingVersion:ANIMATION_VERSION}})
     }
     prepared.requests=requests
    }

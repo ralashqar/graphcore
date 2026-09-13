@@ -6,7 +6,7 @@ export const studioCommandSchema = z.discriminatedUnion('action',[
   z.object({...base,action:z.literal('save'),graph:z.union([graphSchema,flexibleGraphSchema])}).strict(),
   z.object({...base,action:z.literal('restore'),revision:z.number().int().positive()}).strict(),
   z.object({...base,action:z.literal('apply_edit'),jobId:z.string().uuid()}).strict(),
-  z.object({...base,action:z.literal('plan'),prompt:z.string().min(10).max(4000),nodeIds:z.array(z.string()).max(80)}).strict(),
+  z.object({...base,action:z.literal('plan'),reviewOnly:z.boolean().optional(),prompt:z.string().min(10).max(4000),nodeIds:z.array(z.string()).max(80)}).strict(),
   z.object({...base,action:z.literal('generate'),nodeIds:z.array(z.string()).min(1).max(80),maxReservationCents:z.number().int().min(0).max(2500)}).strict(),
   z.object({...base,action:z.literal('import_source'),nodeId:z.string(),candidateId:z.string().uuid()}).strict(),
   z.object({...base,action:z.literal('cancel'),jobId:z.string().uuid()}).strict(),

@@ -1,3 +1,4 @@
+import { PromptMessage, PromptChoice } from '../../../shared/PromptConversation'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 
 import type { ProjectContext } from '../../../domain/projectContext'
@@ -334,17 +335,7 @@ function LegacyWorldPromptChatPanel({
                   </span>
                   <div className="world-prompt-inline-choices">
                     {entry.suggestions.map((suggestion) => (
-                      <button
-                        key={suggestion.id}
-                        className={`world-prompt-suggestion-card${suggestion.style === 'primary' ? ' is-primary' : ''}`}
-                        disabled={busy}
-                        onClick={() => void onRunSuggestion(suggestion)}
-                        type="button"
-                      >
-                        <strong>{suggestion.label}</strong>
-                        {suggestion.summary ? <span>{suggestion.summary}</span> : null}
-                        {promptSuggestionImpactLabel(suggestion) ? <small>{promptSuggestionImpactLabel(suggestion)}</small> : null}
-                      </button>
+                      <PromptChoice key={suggestion.id} label={suggestion.label} summary={suggestion.summary} meta={promptSuggestionImpactLabel(suggestion)} primary={suggestion.style === 'primary'} disabled={busy} onChoose={() => void onRunSuggestion(suggestion)} />
                     ))}
                   </div>
                 </div>
@@ -353,12 +344,7 @@ function LegacyWorldPromptChatPanel({
 
             if (entry.kind === 'user_message' || entry.kind === 'assistant_message') {
               return (
-                <div key={entry.id} className={`world-prompt-row ${entry.kind === 'user_message' ? 'world-prompt-row-user' : 'world-prompt-row-assistant'}`}>
-                  <span className="world-prompt-row-label">{entry.kind === 'user_message' ? 'You' : 'GraphCore'}</span>
-                  <div className={`world-prompt-bubble${entry.pending ? ' is-pending' : ''}`}>
-                    {entry.content}
-                  </div>
-                </div>
+                <PromptMessage key={entry.id} role={entry.kind === 'user_message' ? 'user' : 'assistant'} label={entry.kind === 'user_message' ? 'You' : 'GraphCore'} pending={entry.pending}>{entry.content}</PromptMessage>
               )
             }
 

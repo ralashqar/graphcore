@@ -1,0 +1,20 @@
+import type { FlexibleGraph } from '../../domain/game/animation-studio/flexible.ts'
+
+export type StudioSuggestion={id:string;question:string;nodeIds:string[];choices:Array<{label:string;prompt:string}>;kind:'gap'|'idea'|'motions'}
+/** Graph evidence only: suggestions never submit work or impose a gameplay template. */
+export function studioSuggestions(graph:FlexibleGraph):StudioSuggestion[] {
+  if(!graph.nodes.length)return []
+  const result:StudioSuggestion[]=[]
+  const reachable=new Set<string>();const visit=(id:string)=>{if(reachable.has(id))return;reachable.add(id);const n=graph.nodes.find(n=>n.id===id);if(n?.entry)visit(n.entry);for(const s of n?.samples??[])visit(s.node);for(const t of graph.transitions.filter(t=>t.from===id))visit(t.to);if(n?.parent)visit(n.parent)}
+  if(graph.entry)visit(graph.entry)
+  if(!graph.entry)result.push({id:'entry',kind:'gap',question:'Which state should this graph start in?',nodeIds:[],choices:graph.nodes.filter(n=>!n.parent).slice(0,3).map(n=>({label:n.label,prompt:`Set the graph entry to state ${n.id} (${n.label}). Preserve all existing motions.`}))})
+  const unreachable=graph.nodes.filter(n=>!reachable.has(n.id)&&!n.tags.includes('standalone'))
+  if(graph.entry&&unreachable.length){const n=unreachable[0];result.push({id:`unreachable.${n.id}`,kind:'gap',question:`${n.label} cannot be reached from the graph entry. How should it fit?`,nodeIds:[n.id],choices:[{label:'Add an event to enter it',prompt:`Connect the existing state ${n.id} to the reachable graph with a named event. Choose a sensible source and preserve existing motion clips.`},{label:'Keep it standalone',prompt:`Keep ${n.id} independently previewable. Add the tag standalone to this state to record that its disconnected status is intentional. Do not change its motion.`}]})}
+  const terminal=graph.nodes.find(n=>n.kind==='clip'&&!n.loop&&reachable.has(n.id)&&!n.tags.includes('terminal')&&!graph.transitions.some(t=>t.from===n.id)&&!graph.transitions.some(t=>t.from===n.parent))
+  if(terminal)result.push({id:`ending.${terminal.id}`,kind:'gap',question:`What should happen after ${terminal.label}?`,nodeIds:[terminal.id],choices:[...(graph.entry&&graph.entry!==terminal.id?[{label:'Return to the entry state',prompt:`Add a completion transition from ${terminal.id} to the graph entry ${graph.entry}. Preserve the existing motion.`}]:[]),{label:'Hold the final pose',prompt:`Mark ${terminal.id} as an intentional terminal state using the tag terminal. Preserve its motion and leave it holding its final pose.`},{label:'Continue the sequence',prompt:`Extend the sequence after ${terminal.id} with one contextually appropriate follow-up motion and a completion transition. Preserve the existing motions.`}]})
+  graph.gaps.slice(0,2).forEach((gap,i)=>result.push({id:`declared.${i}.${gap}`,kind:'gap',question:gap,nodeIds:[],choices:[{label:'Propose a supported solution',prompt:`Address this reported graph gap with supported animation graph edits: ${gap}. Preserve unaffected clips. Remove the gap only if resolved.`},{label:'Keep the scope smaller',prompt:`Simplify the graph to avoid this unsupported requirement: ${gap}. Preserve unaffected clips and explain the change.`}]}))
+  const missing=graph.nodes.filter(n=>n.kind==='clip'&&!n.clipId)
+  if(missing.length)result.push({id:'missing-motion',kind:'motions',question:`${missing.length} ${missing.length===1?'state needs':'states need'} motion. The graph can still be tested with static poses.`,nodeIds:missing.map(n=>n.id),choices:[]})
+  if(!result.some(s=>s.kind==='gap'))result.push({id:'variation',kind:'idea',question:'Where would you like to take this graph next?',nodeIds:[],choices:[{label:'Add a mood variation',prompt:'Add one expressive mood variation that fits this graph, with an event to enter it and a sensible return. Preserve existing clips.'},{label:'Refine the shared style',prompt:'Refine the shared stance and motion style for consistency with the current graph. Preserve unrelated states and explain which clips need regeneration.'}]})
+  return result.slice(0,5)
+}

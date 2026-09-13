@@ -1,3 +1,4 @@
+import { locomotionProcessingSchema } from '../animation-studio/locomotionProfile.ts'
 import { motionSetBindingSchema } from './motionProfile.ts'
 import { z } from 'zod'
 import { MOTIONBRICKS_MODEL, motionbricksRelease } from './motionbricksRelease.ts'
@@ -31,7 +32,7 @@ export const rigProfileSchema = z.object({
 })
 const contactSchema = z.object({ effector: z.enum(['left_hand', 'right_hand', 'left_foot', 'right_foot']), start: finite.nonnegative(), end: finite.nonnegative(), position: vec, rotation: rotation.optional() }).strict()
 const recipeFields = {
-  id, state: motionStateSchema,
+  id, state: motionStateSchema, locomotion:locomotionProcessingSchema.optional(),
   motionContract: hash.optional(),
   fullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
   targetFullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),
@@ -57,6 +58,7 @@ export const motionRecipeSchema = z.discriminatedUnion('version', [
     provenance: motionbricksProvenanceSchema, primitive: z.enum(['idle', 'walk', 'idle_walk_turn_stop']),
   }).strict(),
 ]).superRefine((recipe, ctx) => {
+  if(recipe.locomotion&&(recipe.version!==1||recipe.state!=='custom'||recipe.retargetRevision!=='soma-fabric-flexible-1.0.0'||!recipe.loop||recipe.contacts.length||recipe.poses.length||recipe.fullBody?.length||recipe.targetFullBody?.length||recipe.rootMode==='anchor_relative'))ctx.addIssue({code:'custom',message:'Locomotion processing requires an unconstrained looping flexible Kimodo recipe'})
   if(recipe.state==='custom'&&(recipe.version!==1||!recipe.motionContract))ctx.addIssue({code:'custom',message:'Custom motion requires a frozen flexible studio recipe'})
   if(recipe.version===1&&recipe.retargetRevision==='soma-fabric-studio-1.0.0'&&(!recipe.motionContract||!['idle','walk','run','backward','strafe_left','strafe_right','sword_strike'].includes(recipe.state)))ctx.addIssue({code:'custom',message:'Studio adapter requires a frozen supported motion contract'})
   if(recipe.version===1&&recipe.retargetRevision==='soma-fabric-1.0.0'&&!['idle','walk','run','backward','strafe_left','strafe_right'].includes(recipe.state))ctx.addIssue({code:'custom',message:'Fabric Kimodo adapter supports locomotion only'})
@@ -78,6 +80,7 @@ export const motionRecipeSchema = z.discriminatedUnion('version', [
 })
 export type MotionRecipe = z.infer<typeof motionRecipeSchema>
 export const clipRevisionSchema = z.object({
+  locomotion:locomotionProcessingSchema.optional(),
   version: z.literal(1), id: z.string().uuid(), recipeHash: hash, rigRevision: hash, sourceHash: hash, glbHash: hash,
   motionContract: hash.optional(),
   fullBody: z.array(z.object({ time: finite.nonnegative(), positions: z.array(vec).length(77), rotations: z.array(rotation).length(77) }).strict()).max(16).optional(),

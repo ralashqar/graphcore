@@ -1,3 +1,4 @@
+import { gameCredits } from '../_shared/game-credit-policy.ts'
 import { MOTION_SET_CATALOG } from '../../../src/domain/game/v3/motionSets.ts'
 import { motionSetCommand } from '../_shared/game-motion-set-command.ts'
 import { anyCommandSchema } from '../../../src/domain/game/v2/protocol.ts'
@@ -65,7 +66,7 @@ Deno.serve(async request => {
       if(current.data?.design?.mechanics&&Deno.env.get('GAME_MECHANICS_ENABLED')!=='true')throw new HttpError(503,'Mechanic builds are awaiting traversal acceptance.')
       if((unified||current.data?.design?.schemaVersion===3)&&Deno.env.get('GAME_UNIFIED_ENABLED')!=='true')throw new HttpError(503,'Unified gameplay is awaiting runtime acceptance.')
       if ((moduleCommand || current.data?.design?.schemaVersion === 2) && Deno.env.get('GAME_MODULES_ENABLED') !== 'true') throw new HttpError(503, 'Combat and traversal is awaiting runtime acceptance.')
-      reserve = ['generate','plan'].includes(command.action) ? Number(Deno.env.get('GAME_PLAN_CREDITS') ?? '25') : command.action === 'asset' ? Number(Deno.env.get('GAME_ASSET_CREDITS') ?? '150') : 0
+      reserve = ['generate','plan'].includes(command.action) ? gameCredits(key => Deno.env.get(key), user.id, Number(Deno.env.get('GAME_PLAN_CREDITS') ?? '25')) : command.action === 'asset' ? gameCredits(key => Deno.env.get(key), user.id, Number(Deno.env.get('GAME_ASSET_CREDITS') ?? '150')) : 0
       if (command.action === 'asset') {
         const workspace = await admin.from('game_workspaces').select('design').eq('draft_id', command.draftId).single()
         if (workspace.error) throw new HttpError(400, workspace.error.message)

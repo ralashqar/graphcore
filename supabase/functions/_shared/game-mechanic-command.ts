@@ -1,3 +1,4 @@
+import { gameCredits } from './game-credit-policy.ts'
 import { MOTION_SET_CATALOG } from '../../../src/domain/game/v3/motionSets.ts'
 import { PERFORMANCE_CATALOG } from '../../../src/domain/game/v3/poseSequence.ts'
 import { ACTION_CATALOG } from '../../../src/domain/game/v3/actionMechanics.ts'
@@ -73,7 +74,7 @@ export async function mechanicCommand(
     }
   }
   const reserve = command.action === 'plan_mechanic'
-    ? Number(Deno.env.get('GAME_PLAN_CREDITS') ?? 25)
+    ? gameCredits(key => Deno.env.get(key), actor, Number(Deno.env.get('GAME_PLAN_CREDITS') ?? 25))
     : 0
   if (!Number.isInteger(reserve) || reserve < 0 || reserve > 10000) {
     throw new HttpError(503, 'Invalid mechanic planning price')

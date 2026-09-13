@@ -1,0 +1,9 @@
+# Studio request accounting without the experimental setup cap
+
+The user explicitly requested removal of the cumulative virtual budget on September 13, 2026. New studio requests now record reservations under `animation-studio-live`, a service-owned accounting ledger with `enforce_setup_cap=false`. The existing per-command maximum, provider price validation, owner/feature gates, idempotency, uncertainty reconciliation and request lifecycle records remain enforced. The ledger is restricted to integration reservations with the exact studio job purpose. Its legacy fixed-value columns are retained for compatibility but do not enforce a cumulative cap.
+
+The original `kimodo-initial-2026-09` ledger, budget limits and reservations are unchanged. Existing jobs reconcile against their original reservation IDs. Game and experimental provider admissions retain their existing setup caps. No Runpod balance or real provider billing is waived. Removing this virtual cap does not authorize autonomous unbounded generation; the agent submitted no inference for this change.
+
+Migration: `20260913003652_animation_studio_remove_setup_cap.sql`. The migration adds the enforcement flag, creates the separate accounting ledger and replaces only the studio command's ledger ID. No Edge/Fly/native image deployment is required. The UI calls this a request allowance rather than a cumulative setup hold.
+
+Rollback-only database tests passed: a reservation above the old cumulative cap succeeds on the studio ledger, exact retries are idempotent, changed reservations and unrelated purposes fail, authenticated callers cannot execute the service command, and its per-request maximum remains present. Migration applied successfully. Live function inspection confirmed studio routing to the uncapped ledger and preservation of the per-request maximum. TypeScript, production build, dev startup and browser console checks passed. No inference was submitted.

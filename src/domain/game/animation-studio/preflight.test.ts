@@ -1,0 +1,29 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { blankGraph,clipNode,freezeFlexible } from './flexible.ts'
+import { assemblePreflight,currentPreflight,deterministicPreflight,preflightFingerprint,requireReady,semanticReviewSchema } from './preflight.ts'
+import { flexibleRecipe } from './flexibleRecipes.ts'
+import { studioCommandSchema } from './protocol.ts'
+import { z } from 'zod'
+const graph=()=>{const g=blankGraph();g.nodes=[clipNode('wave')];g.entry='wave';return g}
+const review=()=>({nodes:[{nodeId:'wave',requirements:[{capability:'humanoid_motion',evidence:'A humanoid performs wave'}],issues:[]}]})
+test('coherent arbitrary motion maps to a ready controlled clip',async()=>{const g=graph(),report=await assemblePreflight(g,review());assert.equal(report.nodes[0].status,'ready');requireReady(report,['wave']);assert.equal((await currentPreflight(g,[report]))?.fingerprint,report.fingerprint)})
+test('missing, forged version, stale and incomplete reviews fail closed',async()=>{const g=graph(),report=await assemblePreflight(g,review());assert.throws(()=>requireReady(null,['wave']));assert.throws(()=>requireReady(report,['unknown']));assert.equal(await currentPreflight(g,[{...report,version:'other'}]),null);g.nodes[0].description='A new bow';assert.equal(await currentPreflight(g,[report]),null);await assert.rejects(assemblePreflight(graph(),{nodes:[]}));await assert.rejects(assemblePreflight(graph(),{nodes:[...review().nodes,...review().nodes]}))})
+test('reviews survive candidate acceptance but expire on motion/context changes',async()=>{const g=graph(),hash=await preflightFingerprint(g);g.nodes[0].clipId=crypto.randomUUID();g.nodes[0].contractHash='a'.repeat(64);assert.equal(await preflightFingerprint(g),hash);g.styles.push({id:'mood',label:'Mood',description:'Tense posture'});assert.notEqual(await preflightFingerprint(g),hash)})
+test('known conflicting contact constraints cannot be approved by the critic',async()=>{const g=graph();g.anchors=[{id:'a',prop:null,position:[0,0,0]},{id:'b',prop:null,position:[1,0,0]}];const contact={effector:'left_foot' as const,start:0,end:1,hips:[0,1,0] as [number,number,number],leftHip:[0,1,0] as [number,number,number],rightHip:[0,1,0] as [number,number,number]};g.nodes[0].contacts=[{...contact,anchor:'a'},{...contact,anchor:'b'}];const report=await assemblePreflight(g,review());assert.equal(report.nodes[0].status,'unsupported');assert.throws(()=>requireReady(report,['wave']));g.nodes[0].contacts[1].start=1.1;assert.equal(deterministicPreflight(g)[0].findings.some(f=>f.code==='conflicting_contacts'),false)})
+test('semantic contradiction blocks inference and carries actionable choices',async()=>{const g=graph();g.nodes[0].description='Both feet remain planted throughout a backflip';const report=await assemblePreflight(g,{nodes:[{nodeId:'wave',requirements:[{capability:'humanoid_motion',evidence:'backflip'}],issues:[{code:'contradictory_motion',evidence:'Both feet remain planted throughout a backflip',message:'Continuous foot plants conflict with an airborne flip.',question:'Should the feet release for the flip?',suggestions:['Release both feet during the airborne portion.']}]}]});assert.equal(report.nodes[0].status,'needs_clarification');assert.throws(()=>requireReady(report,['wave']))})
+test('unsupported capability blocks only selected affected clips',async()=>{const g=graph();g.nodes.push({...clipNode('partner'),description:'Two animated partners lift each other'});const value={nodes:[...review().nodes,{nodeId:'partner',requirements:[{capability:'animated_partner',evidence:'Two animated partners'}],issues:[]}]};const report=await assemblePreflight(g,value);requireReady(report,['wave']);assert.throws(()=>requireReady(report,['wave','partner']))})
+test('invented evidence and unknown capabilities are rejected',async()=>{const bad=review();bad.nodes[0].requirements[0].evidence='A flying dragon';await assert.rejects(assemblePreflight(graph(),bad));assert.equal(semanticReviewSchema.safeParse({nodes:[{nodeId:'wave',requirements:[{capability:'execute_code',evidence:'wave'}],issues:[]}]}).success,false)})
+test('oversized compiled descriptions cannot silently lose constraints',async()=>{const g=graph();g.nodes[0].description='x'.repeat(1490);g.nodes[0].entryDescription='A long additional entry description';assert.equal(deterministicPreflight(g)[0].status,'needs_clarification');await assert.rejects(flexibleRecipe(await freezeFlexible(g),'wave'),/provider limit/)})
+test('strict critic schema uses required fields and command cannot carry its own approval',()=>{const schema=z.toJSONSchema(semanticReviewSchema) as any;assert.ok(schema.properties.nodes.items.required.includes('issues'));const base={projectId:crypto.randomUUID(),draftId:crypto.randomUUID(),workspaceId:crypto.randomUUID(),expectedRevision:0,idempotencyKey:crypto.randomUUID()};assert.equal(studioCommandSchema.safeParse({...base,action:'plan',reviewOnly:true,prompt:'Check readiness',nodeIds:[]}).success,true);assert.equal(studioCommandSchema.safeParse({...base,action:'generate',nodeIds:['wave'],maxReservationCents:100,preflight:{status:'ready'}}).success,false)})
+
+import { requireInferencePreflight,PREFLIGHT_VERSION } from './preflight.ts'
+import { hashGameValue } from '../compiler.ts'
+test('worker requires a matching receipt before fresh custom inference',async()=>{
+ const {recipe}=await flexibleRecipe(await freezeFlexible(graph()),'wave')
+ await assert.rejects(requireInferencePreflight(recipe,null))
+ const receipt={version:PREFLIGHT_VERSION,recipeHash:await hashGameValue(recipe)}
+ await requireInferencePreflight(recipe,receipt)
+ await assert.rejects(requireInferencePreflight({...recipe,prompt:'A completely different motion'},receipt))
+ await assert.rejects(requireInferencePreflight(recipe,{...receipt,version:'old'}))
+})

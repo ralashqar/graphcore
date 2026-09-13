@@ -154,11 +154,18 @@ def seam(frames, rig):
     return angle, velocity
 
 
+def is_locomotion(recipe):
+    return recipe['state'] in LOCOMOTION or recipe.get('locomotion', {}).get('version') == 'locomotion-post-1.0.0'
+
+def is_running(recipe):
+    return recipe['state'] == 'run' or recipe.get('locomotion', {}).get('gait') == 'run'
+
+
 def process_candidate(directory, recipe, rig, rank=0):
     motion = read(directory, 'retarget.json')
     frames = motion['frames']
     # Extract a repeated gait phase; never crop authored contact timing.
-    if recipe['loop'] and not recipe['contacts'] and recipe['state'] not in ('idle', 'hang', 'custom'):
+    if recipe['loop'] and not recipe['contacts'] and (recipe['state'] not in ('idle', 'hang', 'custom') or is_locomotion(recipe)):
         candidates = []
         positions = [world_positions(f, rig) for f in frames]
         for start in range(0, max(1, len(frames) - 15)):
@@ -210,8 +217,8 @@ def process_candidate(directory, recipe, rig, rank=0):
         frames[-2]['root'][1] = frames[0]['root'][1]-delta_y
     seam_correction = max((world_positions(f, rig)[j['id']] - before[i][j['id']]).length for i, f in enumerate(frames) for j in rig['joints'])
     contacts = [dict(c, end=min(c['end'], duration)) for c in recipe['contacts'] if c['start'] <= duration]
-    inferred = not contacts and recipe['state'] in LOCOMOTION
-    if inferred: contacts = stance_contacts(frames, rig, root_curve, recipe['state'] == 'run')
+    inferred = not contacts and is_locomotion(recipe)
+    if inferred: contacts = stance_contacts(frames, rig, root_curve, is_running(recipe))
     for contact in contacts:
         for index, frame in enumerate(frames):
             if contact['start'] <= index/30 <= contact['end']:
@@ -253,7 +260,7 @@ def contact_error(processed, recipe, rig):
 
 def process(directory, recipe, rig):
     best, best_score = None, math.inf
-    attempts = 8 if recipe['loop'] and not recipe['contacts'] and recipe['state'] in LOCOMOTION else 1
+    attempts = 8 if recipe['loop'] and not recipe['contacts'] and is_locomotion(recipe) else 1
     for rank in range(attempts):
         result = process_candidate(directory, recipe, rig, rank)
         angle, velocity = seam(result['frames'], rig)
@@ -261,8 +268,8 @@ def process(directory, recipe, rig):
         checks = [(result['maxCorrection'], t['maxCorrection']), (contact_error(result, recipe, rig), t['maxContactError'])]
         if recipe['loop']: checks += [(angle, t['maxSeamAngle']), (velocity, t['maxSeamVelocity'])]
         score = sum(max(0, value/maximum-1)**2 for value, maximum in checks)
-        if recipe['state'] in LOCOMOTION:
-            minimum = .05 if recipe['state'] == 'run' else .12
+        if is_locomotion(recipe):
+            minimum = .05 if is_running(recipe) else .12
             for side in ('left_foot', 'right_foot'):
                 coverage = sum(max(0, c['end']-c['start']) for c in result['contacts'] if c['effector'] == side)/result['duration']
                 score += max(0, (minimum-coverage)/minimum)**2
@@ -376,7 +383,7 @@ def validate(directory, recipe, rig):
                 contact_error = max(contact_error, (position-Vector(contact['position'])).length)
     milestone_error = 0
     if recipe.get('motionContract'):
-        if not (recipe['loop'] and recipe.get('retargetRevision') == 'soma-fabric-studio-1.0.0') and abs(processed['duration']-recipe['duration']) > 1/30+.001:
+        if not (recipe['loop'] and (recipe.get('retargetRevision') == 'soma-fabric-studio-1.0.0' or recipe.get('locomotion'))) and abs(processed['duration']-recipe['duration']) > 1/30+.001:
             failures.append('Replacement duration differs from gameplay contract')
         for milestone in recipe['poses']:
             frame = frames[min(len(frames)-1, round(milestone['time']*30))]
@@ -401,10 +408,10 @@ def validate(directory, recipe, rig):
         root_speed = max(root_speed, (Vector(b['position'])-Vector(a['position'])).length*30)
     if root_speed > 12: failures.append('Root velocity exceeds supported controller limit')
     coverage = {side: sum(max(0, c['end']-c['start']) for c in contacts if c['effector'] == side)/processed['duration'] for side in ('left_foot', 'right_foot')}
-    if recipe['state'] in LOCOMOTION:
-        if min(coverage.values()) < (.05 if recipe['state'] == 'run' else .12): failures.append('Insufficient foot stance evidence')
+    if is_locomotion(recipe):
+        if min(coverage.values()) < (.05 if is_running(recipe) else .12): failures.append('Insufficient foot stance evidence')
         if processed['naturalSpeed'] < .15: failures.append('Locomotion has no usable root displacement')
-        expected = {'walk': Vector((0, 0, 1)), 'run': Vector((0, 0, 1)), 'backward': Vector((0, 0, -1)), 'strafe_left': Vector((1, 0, 0)), 'strafe_right': Vector((-1, 0, 0))}[recipe['state']]
+        expected = Vector((recipe['locomotion']['direction'][0], 0, recipe['locomotion']['direction'][1])) if recipe.get('locomotion') else {'walk': Vector((0, 0, 1)), 'run': Vector((0, 0, 1)), 'backward': Vector((0, 0, -1)), 'strafe_left': Vector((1, 0, 0)), 'strafe_right': Vector((-1, 0, 0))}[recipe['state']]
         direction = Vector(processed['rootCurve'][-1]['position']); direction.y = 0
         if direction.length < .001 or direction.normalized().dot(expected) < .7: failures.append('Root displacement does not match requested direction')
     for name, value, maximum in [('correction', processed['maxCorrection'], thresholds['maxCorrection']), ('contact', contact_error, thresholds['maxContactError'])]:

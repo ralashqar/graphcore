@@ -7,7 +7,7 @@ import { gameWorkflowStages } from '../../src/domain/game/workflows.ts'
 import { planModules, buildModules } from './modules.ts'
 import { generateUnified, buildUnified } from './unified.ts'
 import { produceAnimation, cancelAnimationJobs } from './animations.ts'
-const WORKER_VERSION = 'game-animation-studio-2.0.0'
+const WORKER_VERSION = 'game-animation-studio-2.2.3'
 
 type Job = { id: string; draft_id: string; requested_by: string; lease_owner: string; kind: 'generate' | 'build' | 'asset'; fence: number; phase: string; checkpoint: Record<string, any>; input: Record<string, any>; provider_started: boolean }
 export type JobContext = { job: Job; admin: SupabaseClient; checkpoint: (phase: string, data: Record<string, unknown>) => Promise<void> }

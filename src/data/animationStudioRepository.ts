@@ -1,3 +1,4 @@
+import type { Preflight } from '../domain/game/animation-studio/preflight'
 import { invokeGame } from './gameRepository'
 import { getCurrentSession } from './auth'
 import { studioCommandSchema, type StudioCommand } from '../domain/game/animation-studio/protocol'
@@ -5,10 +6,12 @@ import type { StudioGraph } from '../domain/game/animation-studio/graph'
 import type { ClipRevision } from '../domain/game/v3/animation'
 export type StudioWorkspace = { id:string; draft_id:string; revision:number; graph:StudioGraph }
 export type StudioData = {
-  sources:Array<{id:string;clip:ClipRevision}>;game:{revision:number;actors:Array<{id:string;label:string}>}|null;
+  preflight?:Preflight|null;
+  availability?:{planningEnabled:boolean;planCredits:number|null;generation:{enabled:boolean;reason:string|null;reservationPerClipCents:number|null}};
+  sources:Array<{id:string;clip:ClipRevision;url?:string|null}>;game:{revision:number;actors:Array<{id:string;label:string}>}|null;
   library:StudioWorkspace[];workspace:StudioWorkspace|null;
   jobs:Array<{id:string;status:string;phase:string;error:string|null;nodeId:string|null;graph:StudioGraph|null;sourceRevision:number}>;
-  candidates:Array<{id:string;nodeId:string;clip:ClipRevision|null;url:string|null;diagnostics:{accepted:boolean;failures?:string[];boundary?:unknown}}>;
+  candidates:Array<{id:string;nodeId:string;clip:ClipRevision|null;url:string|null;diagnostics:{accepted:boolean;metrics?:Record<string,number>;failures?:string[];boundary?:unknown}}>;
   reviews:Array<{revision:number;evidence:unknown}>;
 }
 export async function readStudio(projectId:string,draftId:string,workspaceId?:string):Promise<StudioData>{

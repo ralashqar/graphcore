@@ -1,3 +1,4 @@
+import { locomotionProfileSchema, processingProfile } from './locomotionProfile.ts'
 import { z } from 'zod'
 import { hashGameValue } from '../compiler.ts'
 import type { StudioGraph } from './graph.ts'
@@ -5,6 +6,7 @@ import type { StudioGraph } from './graph.ts'
 const id=z.string().regex(/^[a-z][a-z0-9_.-]{0,79}$/), text=z.string().max(1500), number=z.number().finite()
 const point=z.tuple([number,number,number]), hash=z.string().regex(/^[a-f0-9]{64}$/).nullable()
 export const flexNodeSchema=z.object({
+ locomotion:locomotionProfileSchema.optional(),
  id,label:z.string().min(1).max(120),parent:id.nullable(),kind:z.enum(['clip','machine','blend']),
  description:text,style:id.nullable(),tags:z.array(id).max(12),duration:number.min(.5).max(8),loop:z.boolean(),
  rootMode:z.enum(['in_place','controller_curve','anchor_relative']),entry:id.nullable(),
@@ -39,6 +41,7 @@ export function flexibleProblems(g:FlexibleGraph):string[]{
  for(const field of ['nodes','transitions','styles','parameters','events','props','anchors']as const)if(new Set(g[field].map(x=>x.id)).size!==g[field].length)errors.push(`Duplicate ${field} IDs`)
  if(g.entry!==null&&(!nodes.has(g.entry)||nodes.get(g.entry)?.parent!==null))errors.push('Graph entry must be a root state')
  for(const n of g.nodes){
+  if(n.locomotion){if(n.kind!=='clip'||!n.loop||n.rootMode==='anchor_relative'||n.contacts.length||g.dependencies.some(d=>d.node===n.id))errors.push(`${n.id}: locomotion processing requires a looping clip without authored contacts or entry-source dependencies`);if(n.locomotion.speedParameter&&params.get(n.locomotion.speedParameter)?.type!=='number')errors.push(`${n.id}: locomotion speed must reference a numeric parameter`)}
   if(n.parent!==null&&(nodes.get(n.parent)?.kind!=='machine'||ancestors(g,n.parent).includes(n.id)))errors.push(`${n.id}: invalid or cyclic parent`)
   if(n.style&&!g.styles.some(s=>s.id===n.style))errors.push(`${n.id}: missing style`)
   if(n.kind==='machine'&&(n.entry===null||nodes.get(n.entry)?.parent!==n.id))errors.push(`${n.id}: machine needs a direct child entry`)
@@ -65,11 +68,14 @@ export function flexibleProblems(g:FlexibleGraph):string[]{
  return [...new Set(errors)]
 }
 export function parseFlexible(value:unknown){const g=flexibleGraphSchema.parse(value),errors=flexibleProblems(g);if(errors.length)throw Error(errors.join('\n'));return g}
-export async function motionFingerprint(g:FlexibleGraph,n:FlexNode){return hashGameValue({version:'flex-motion-1',rig:g.rig,description:n.description,style:g.styles.find(s=>s.id===n.style)?.description??null,duration:n.duration,loop:n.loop,rootMode:n.rootMode,entry:n.entryDescription,exit:n.exitDescription,contacts:n.contacts.map(c=>({...c,anchor:g.anchors.find(a=>a.id===c.anchor),prop:g.props.find(p=>p.id===g.anchors.find(a=>a.id===c.anchor)?.prop)})),dependencies:g.dependencies.filter(d=>d.node===n.id)})}
+export async function motionFingerprint(g:FlexibleGraph,n:FlexNode){return hashGameValue({version:'flex-motion-1',...(n.locomotion?{locomotion:processingProfile(n.locomotion)}:{}),rig:g.rig,description:n.description,style:g.styles.find(s=>s.id===n.style)?.description??null,duration:n.duration,loop:n.loop,rootMode:n.rootMode,entry:n.entryDescription,exit:n.exitDescription,contacts:n.contacts.map(c=>({...c,anchor:g.anchors.find(a=>a.id===c.anchor),prop:g.props.find(p=>p.id===g.anchors.find(a=>a.id===c.anchor)?.prop)})),dependencies:g.dependencies.filter(d=>d.node===n.id)})}
 export async function freezeFlexible(value:unknown){const g=parseFlexible(value);return {...g,nodes:await Promise.all(g.nodes.map(async n=>{const contractHash=n.kind==='clip'?await motionFingerprint(g,n):null;return {...n,contractHash,clipId:n.contractHash===contractHash?n.clipId:null}}))}}
 const editsFor=<T extends z.ZodType>(schema:T)=>z.object({upsert:z.array(schema).max(240),remove:z.array(id).max(240)}).strict()
 export const graphEditSchema=z.object({summary:text,nodes:editsFor(flexNodeSchema),transitions:editsFor(flexTransitionSchema),styles:editsFor(styleSchema),parameters:editsFor(parameterSchema),events:editsFor(eventSchema),props:editsFor(propSchema),anchors:editsFor(anchorSchema),dependencies:z.array(dependencySchema).max(120).nullable(),name:text.nullable(),entry:id.nullable(),changeEntry:z.boolean(),gaps:z.array(text).max(30).nullable()}).strict()
 export type GraphEdit=z.infer<typeof graphEditSchema>
+// Strict planner output requires explicit null; persisted legacy nodes keep the field optional.
+export const graphEditPromptSchema=graphEditSchema.extend({nodes:editsFor(flexNodeSchema.extend({locomotion:locomotionProfileSchema.nullable()}))})
+export function parsePromptEdit(value:z.infer<typeof graphEditPromptSchema>):GraphEdit{return graphEditSchema.parse({...value,nodes:{...value.nodes,upsert:value.nodes.upsert.map(({locomotion,...node})=>({...node,...(locomotion?{locomotion}:{})}))}})}
 export async function applyGraphEdit(original:FlexibleGraph,edit:GraphEdit,scope:string[]=[]){
  const g=structuredClone(original),allowed=new Set(original.nodes.filter(n=>ancestors(original,n.id).some(id=>scope.includes(id))).map(n=>n.id))
  for(const field of ['nodes','transitions','styles','parameters','events','props','anchors']as const){

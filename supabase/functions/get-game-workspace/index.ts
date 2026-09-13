@@ -1,3 +1,4 @@
+import { gameCredits } from '../_shared/game-credit-policy.ts'
 import { z } from 'npm:zod@4'
 import { createAdminClient, requireUserClient } from '../_shared/auth.ts'
 import { errorResponse, HttpError, json, maybeHandleOptions } from '../_shared/http.ts'
@@ -7,7 +8,7 @@ Deno.serve(async request => {
   const preflight = maybeHandleOptions(request); if (preflight) return preflight
   try {
     if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed')
-    const { client } = await requireUserClient(request, 'get-game-workspace'), input = schema.parse(await request.json())
+    const { client, user } = await requireUserClient(request, 'get-game-workspace'), input = schema.parse(await request.json())
     const draft = await client.from('project_drafts').select('id').eq('id', input.draftId).eq('project_id', input.projectId).single()
     if (!draft.data || draft.error) throw new HttpError(404, 'Draft not found')
     if (input.animations) {
@@ -76,6 +77,6 @@ Deno.serve(async request => {
       client.from('game_asset_revisions').select('artifact').eq('draft_id', input.draftId).order('created_at', { ascending: false }).limit(100),
     ])
     for (const result of [workspace, jobs, builds, assets]) if (result.error) throw new Error(result.error.message)
-    return json({ revision: workspace.data?.revision ?? 0, design: workspace.data?.design ?? null, activeBuildId: workspace.data?.active_build_id ?? null, publishedBuildId: workspace.data?.published_build_id ?? null, jobs: jobs.data ?? [], builds: builds.data ?? [], assets: (assets.data ?? []).map(a => a.artifact), pricing: { planCredits: Number(Deno.env.get('GAME_PLAN_CREDITS') ?? '25'), assetCredits: Number(Deno.env.get('GAME_ASSET_CREDITS') ?? '150') } })
+    return json({ revision: workspace.data?.revision ?? 0, design: workspace.data?.design ?? null, activeBuildId: workspace.data?.active_build_id ?? null, publishedBuildId: workspace.data?.published_build_id ?? null, jobs: jobs.data ?? [], builds: builds.data ?? [], assets: (assets.data ?? []).map(a => a.artifact), pricing: { planCredits: gameCredits(key => Deno.env.get(key), user.id, Number(Deno.env.get('GAME_PLAN_CREDITS') ?? '25')), assetCredits: gameCredits(key => Deno.env.get(key), user.id, Number(Deno.env.get('GAME_ASSET_CREDITS') ?? '150')) } })
   } catch (error) { return errorResponse(error, 'Could not load game workspace') }
 })

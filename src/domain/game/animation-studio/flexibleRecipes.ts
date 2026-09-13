@@ -1,3 +1,5 @@
+import { flexibleMotionPrompt } from './motionPrompt.ts'
+import { processingProfile } from './locomotionProfile.ts'
 import { animationRecipeProfile } from '../v3/animationProfiles.ts'
 import { motionRecipeSchema } from '../v3/animation.ts'
 import { fabricMannequin, somaMannequin } from '../v3/mannequin.ts'
@@ -20,7 +22,7 @@ export async function flexibleRecipe(g:FlexibleGraph,nodeId:string,seed=42,prede
  const poses=[...posesByTime.values()].sort((a,b)=>a.time-b.time)
  const fullBody=[]
  if(predecessor){if(predecessor.version!==1)throw Error('Continuity requires a Kimodo source');const f=predecessor.frames.at(-1)!;fullBody.push(poseConstraint(sourceRig,{root:[0,f.root[1],0],rotations:Object.fromEntries(predecessor.joints.map((j,i)=>[j.name,f.rotations[i]]))},0))}
- const context=g.transitions.filter(t=>t.from===n.id||t.to===n.id).map(t=>`${t.to===n.id?'Previous':'Next'}: ${g.nodes.find(x=>x.id===(t.to===n.id?t.from:t.to))?.description??''}`).join(' ')
- const recipe=motionRecipeSchema.parse({...animationRecipeProfile('idle',rig.revision,seed),state:'custom',id:n.id,duration:n.duration,loop:n.loop,rootMode:n.rootMode,contacts,poses,fullBody,motionContract:contract,retargetRevision:'soma-fabric-flexible-1.0.0',prompt:[n.description,g.styles.find(s=>s.id===n.style)?.description,n.entryDescription,n.exitDescription,context].filter(Boolean).join(' ').slice(0,1500)})
+ const prompt=flexibleMotionPrompt(g,n);if(prompt.length>1500)throw Error('Motion prompt exceeds provider limit; shorten descriptions before generation')
+ const recipe=motionRecipeSchema.parse({...animationRecipeProfile('idle',rig.revision,seed),state:'custom',...(n.locomotion?{locomotion:processingProfile(n.locomotion)}:{}),id:n.id,duration:n.duration,loop:n.loop,rootMode:n.rootMode,contacts,poses,fullBody,motionContract:contract,retargetRevision:'soma-fabric-flexible-1.0.0',prompt})
  validateKimodoConstraints(recipe);return{rig,recipe,nodeId}
 }

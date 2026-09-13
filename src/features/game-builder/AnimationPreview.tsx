@@ -12,9 +12,10 @@ import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup'
 import { createSwordVisual } from '../../game-runtime/swordVisual'
 
 export type AnimationPreviewClip = Pick<ClipRevision, 'id' | 'glbHash' | 'state' | 'duration' | 'naturalSpeed' | 'rootCurve' | 'contacts'>
-export function AnimationPreview({ url, clip, followRoot = false, equipment }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean; equipment?: 'one_handed_sword' }) {
+export function AnimationPreview({ url, clip, followRoot = false, equipment, poseFrame }: { url: string; clip: AnimationPreviewClip; followRoot?: boolean; equipment?: 'one_handed_sword'; poseFrame?: number }) {
   const canvas = useRef<HTMLCanvasElement>(null), [error, setError] = useState('')
   const groups = useRef<AnimationGroup[]>([])
+  const poseFrameRef=useRef(poseFrame);poseFrameRef.current=poseFrame
   const cameraRef = useRef<ArcRotateCamera | null>(null)
   const source=useRef({url,clip});source.current={url,clip}
   const [retry,setRetry]=useState(0)
@@ -42,7 +43,8 @@ export function AnimationPreview({ url, clip, followRoot = false, equipment }: {
       }
       groups.current=container.animationGroups
       setPlaying(true);setSpeed(1);setPosition(0)
-      container.animationGroups.forEach(group => group.start(true))
+      container.animationGroups.forEach(group => {group.start(true);if(poseFrameRef.current!==undefined){group.pause();group.goToFrame(group.from+(group.to-group.from)*poseFrameRef.current)}})
+      if(poseFrameRef.current!==undefined){setPlaying(false);setPosition(poseFrameRef.current)}
       overlayMeshes.current=[CreateLines('root-path', { points: clip.rootCurve.map(p => Vector3.FromArray(p.position)) }, scene)]
       for (const contact of clip.contacts) {
         const point = Vector3.FromArray(contact.position)
@@ -54,6 +56,7 @@ export function AnimationPreview({ url, clip, followRoot = false, equipment }: {
     const resize = new ResizeObserver(() => engine.resize()); resize.observe(canvas.current!)
     return () => { disposed = true; cameraRef.current=null;groups.current=[];overlayMeshes.current=[];resize.disconnect(); scene.dispose(); engine.dispose() }
   }, [clip.id, clip.glbHash, retry, followRoot, equipment])
+  useEffect(()=>{if(poseFrame===undefined)return;groups.current.forEach(g=>{g.pause();g.goToFrame(g.from+(g.to-g.from)*poseFrame)});setPlaying(false);setPosition(poseFrame)},[poseFrame])
   return <div><canvas ref={canvas} style={{ width: '100%', height: 300 }} aria-label={`Repeated ${clip.state} animation preview`} />
     <p>Drag to orbit · Scroll to zoom · {clip.duration.toFixed(2)}s · {clip.naturalSpeed.toFixed(2)} m/s</p>
     <button onClick={()=>{groups.current.forEach(g=>playing?g.pause():g.play(true));setPlaying(!playing)}}>{playing?'Pause':'Play'}</button>
