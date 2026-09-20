@@ -4,6 +4,13 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City merchant launch readiness (September 2026)
+
+The City branch adds advisory merchant launch checklists, private customer previews, dedicated checkout-test records and exhibit-to-deal attribution. Test codes are isolated from customer inventory across each business’s campaigns; merchant-reported evidence becomes stale when terms change. Public claims validate optional source exhibits against published business content and freeze the original source. The URL setup planner cannot author deal references; worker assembly now preserves owner-selected links for galleries/comparisons/walkthroughs as well as offer stands. Worker version is `2026-09-20-city-launch-1`; no provider requests, budget changes or new inference gates are added.
+
+The additive migration and paired City Edge/Fly rollout remain undeployed pending a designated isolated staging environment. Local behavior, tests and activation requirements are documented in [docs/synarc-city-launch-readiness.md](docs/synarc-city-launch-readiness.md). Checkout test results are merchant reports, not integration-confirmed conversions.
+
+
 ### City Deals and campus offer references (September 2026)
 
 The City branch adds service-only transactional coupon allocation, signed-in entitlements, merchant deal review, a consumer wallet and audited merchant-reported redemption corrections. `CITY_DEALS_ENABLED` defaults off. Deal inventory and metrics remain separate from Land Value, Stripe purchases and legacy public offers. The URL setup planner cannot create commercial terms, codes or entitlements; typed offer exhibits optionally carry owner-selected `dealId` references, and worker assembly preserves those references during refinement. Worker version is `2026-09-20-city-deals-1`.

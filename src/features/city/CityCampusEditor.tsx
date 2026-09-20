@@ -257,7 +257,7 @@ export function CityCampusEditor({
             ))}
           </select>
         </label>
-        {selected.kind === "offer" && <DealExhibitPicker businessId={business.id} value={selected.dealId} onChange={dealId=>update({dealId})}/>}
+        {selected.kind !== "launch" && <DealExhibitPicker businessId={business.id} value={selected.dealId} onChange={dealId=>update({dealId})}/>}
         {selected.kind === "comparison" && (
           <label>
             <input

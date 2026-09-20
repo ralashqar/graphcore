@@ -30,6 +30,22 @@ export type CityDeal = {
   opens?: number;
   clicks?: number;
   reported?: number;
+  businessReady?: boolean;
+  checkoutTest?: {
+    id: string;
+    outcome: string;
+    note: string;
+    reportedAt: string | null;
+    current: boolean;
+  } | null;
+  exhibitStats?: {
+    exhibit_id: string;
+    title: string;
+    opens: number;
+    clicks: number;
+    claims: number;
+    reported: number;
+  }[];
 };
 export type DealClaim = {
   id: string;
@@ -41,6 +57,7 @@ export type DealClaim = {
   redeemed_at: string | null;
   cancelled: boolean;
   merchant_order_id?: string;
+  source_exhibit_id?: string;
 };
 export function dealAvailability(d: CityDeal, now = Date.now()) {
   if (d.status !== "approved") return d.status;
@@ -87,4 +104,53 @@ export function parseDealCodes(text: string): string[] {
     throw new Error("Duplicate codes in this import. Nothing was uploaded.");
   }
   return codes;
+}
+
+export function dealChecklist(d: CityDeal, now = Date.now()) {
+  const state = dealAvailability(d, now);
+  return [
+    {
+      label: "Business published",
+      done: d.businessReady === true,
+      detail: d.businessReady
+        ? "Your business is available to visitors."
+        : "Publish your business and resolve any suspension.",
+    },
+    {
+      label: "Customer codes uploaded",
+      done: d.quantity > d.issued,
+      detail: `${
+        d.quantity - d.issued
+      } unused customer codes. Test codes are separate.`,
+    },
+    {
+      label: "Checkout tested by merchant",
+      done: !!d.checkoutTest?.current && d.checkoutTest.outcome === "passed",
+      detail: !d.checkoutTest
+        ? "Register a separate test code and check it at your store."
+        : !d.checkoutTest.current
+        ? "Terms changed. Test again with a fresh code."
+        : d.checkoutTest.outcome === "passed"
+        ? "Merchant-reported pass; not independently verified."
+        : d.checkoutTest.outcome === "failed"
+        ? "Last test failed. Resolve the issue and test again."
+        : "Test code registered; record your checkout result.",
+    },
+    {
+      label: "Deal approved",
+      done: d.status === "approved",
+      detail: d.status === "approved"
+        ? "Operator approved these terms."
+        : `Deal is ${d.status}. Submit your draft for review.`,
+    },
+    {
+      label: "Launch window ready",
+      done: ["live", "scheduled"].includes(state),
+      detail: state === "scheduled"
+        ? `Scheduled for ${new Date(d.terms.startsAt).toLocaleString()}.`
+        : state === "live"
+        ? "Claims are open."
+        : `Current state: ${state}. Check the schedule, pause and stock.`,
+    },
+  ];
 }

@@ -28,7 +28,7 @@ export function CampusPreview({
   selected?: string;
   onSelect?: (id: string) => void;
   onEvent?: (id: string, kind: string) => void;
-  footer?: (kind: string, dealId?: string) => React.ReactNode;
+  footer?: (kind: string, dealId?: string, exhibitId?: string) => React.ReactNode;
 }) {
   const campus = legacyCampus(profile),
     [local, setLocal] = useState(campus.primaryId),
@@ -82,7 +82,7 @@ export function CampusPreview({
               onEvent={(kind) => onEvent(current.id, kind)}
             />
           )}
-          {current && footer?.(current.kind, current.dealId)}
+          {current && footer?.(current.kind, current.dealId, current.id)}
           {current && !["offer", "launch"].includes(current.kind) && (
             <a
               href={profile.website}
@@ -281,10 +281,10 @@ export default function CityCampus({
             )
           }
           onEvent={track}
-          footer={(kind, dealId) =>
+          footer={(kind, dealId, exhibitId) =>
             kind === "offer" ? (
               <>
-                {dealsEnabled && <CityDeals key={dealId || data.businessId} businessId={data.businessId} dealId={dealId} userId={userId} onAuth={onAuth} demo={demo}/>}
+                {dealsEnabled && <CityDeals key={dealId || data.businessId} businessId={data.businessId} dealId={dealId} sourceExhibitId={dealId ? exhibitId : undefined} userId={userId} onAuth={onAuth} demo={demo}/>}
                 <h3>{data.profile.offer.title ? "Public offer: " + data.profile.offer.title : ""}</h3>
                 <p>{data.profile.offer.description}</p>
                 {activeOffer(data.profile) && (
@@ -345,6 +345,8 @@ export default function CityCampus({
                   </p>
                 )}
               </>
+            ) : dealsEnabled && dealId ? (
+              <div><p className="city-eyebrow">LIKE WHAT YOU SEE? TRY IT WITH THIS OFFER</p><CityDeals key={`${exhibitId}:${dealId}`} businessId={data.businessId} dealId={dealId} sourceExhibitId={exhibitId} userId={userId} onAuth={onAuth} demo={demo}/></div>
             ) : null
           }
         />

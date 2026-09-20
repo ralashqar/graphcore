@@ -271,7 +271,7 @@ export async function processCitySetup(
     const changed = plan.exhibits.map((e: any) => ({
       ...e,
       confirmedPair: false,
-      ...(e.kind === "offer" && prior.exhibits.find((v) => v.id === e.id)?.dealId
+      ...(prior.exhibits.find((v) => v.id === e.id)?.dealId
         ? { dealId: prior.exhibits.find((v) => v.id === e.id)!.dealId }
         : {}),
       items: e.items.map((i: any) => {

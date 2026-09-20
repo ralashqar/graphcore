@@ -4,6 +4,7 @@ import {
   type CityDeal,
   claimState,
   dealAvailability,
+  dealChecklist,
   type DealClaim,
   parseDealCodes,
 } from "./cityDeals.ts";
@@ -49,4 +50,32 @@ test("deal availability is separate from entitlement status", () => {
     "expired",
   );
   assert.equal(claimState({ ...c, redeemed_at: d.terms.endsAt }), "used");
+});
+
+test("launch readiness distinguishes stale merchant evidence from approval and schedule", () => {
+  const d = {
+    status: "approved",
+    paused: false,
+    ended: false,
+    businessReady: true,
+    quantity: 3,
+    issued: 0,
+    checkoutTest: { current: true, outcome: "passed" },
+    terms: { startsAt: "2026-09-20T10:00:00Z", endsAt: "2026-09-20T11:00:00Z" },
+  } as CityDeal;
+  const now = Date.parse("2026-09-20T09:00:00Z");
+  assert.ok(dealChecklist(d, now).every((c) => c.done));
+  assert.equal(
+    dealChecklist({
+      ...d,
+      checkoutTest: { ...d.checkoutTest!, current: false },
+    }, now)[2].done,
+    false,
+  );
+  assert.equal(
+    dealChecklist({ ...d, businessReady: false }, now)[0].done,
+    false,
+  );
+  assert.equal(dealChecklist({ ...d, issued: 3 }, now)[1].done, false);
+  assert.equal(dealChecklist({ ...d, status: "pending" }, now)[3].done, false);
 });

@@ -1,3 +1,4 @@
+import { CityDealLaunch } from "./CityDealLaunch";
 import { type FormEvent, useEffect, useState } from "react";
 import {
   type CityDeal,
@@ -101,6 +102,7 @@ export function CityDealStudio(
   return (
     <section className="city-deals">
       <h2>{admin ? "Deal review queue" : "Business deals"}</h2>
+      <button type="button" disabled={busy} onClick={()=>void run(async()=>{})}>Refresh deal readiness</button>
       <p>
         Unique codes issued through the city. Merchant checkout enforces
         discounts and redemption deadlines.
@@ -336,6 +338,7 @@ export function CityDealStudio(
               {dealAvailability(d)} · revision {d.version}
             </p>
             <h3>{d.terms.title}</h3>
+            <CityDealLaunch deal={d} admin={admin} onRefresh={refresh}/>
             {d.imageUrl && <img src={d.imageUrl} alt="Deal artwork" />}
             <p>{d.terms.description}</p>
             <p>
@@ -541,15 +544,15 @@ export function DealExhibitPicker(
     void cityCall<{ deals: CityDeal[] }>("city-api", {
       action: "deal_workspace",
       businessId,
-    }).then((r) => setRows(r.deals)).catch(() => {});
+    }).then((r) => setRows(Array.isArray(r.deals) ? r.deals : [])).catch(() => {});
   }, [businessId]);
   return (
     <label>
-      Deal shown at this stand<select
+      Offer linked to this exhibit<select
         value={value || ""}
         onChange={(e) => onChange(e.target.value || undefined)}
       >
-        <option value="">All approved business deals</option>
+        <option value="">No specific link (offer stands show all approved deals)</option>
         {value && !rows.some((d) => d.id === value) && (
           <option value={value}>Previously selected deal</option>
         )}

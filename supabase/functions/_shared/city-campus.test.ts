@@ -340,8 +340,8 @@ Deno.test("refinement preserves a manually linked deal without letting the model
       exhibits: [{
         id: "rewards",
         title: "Rewards",
-        kind: "offer",
-        items: [],
+        kind: "gallery",
+        items: [{label:"Example",description:"A supplied result",image:"",sourceUrl:"https://example.com"}],
         confirmedPair: false,
         dealId,
       }],
@@ -359,8 +359,8 @@ Deno.test("refinement preserves a manually linked deal without letting the model
           exhibits: [{
             id: "rewards",
             title: "Creator rewards",
-            kind: "offer",
-            items: [],
+            kind: "gallery",
+            items: [{label:"Example",description:"A supplied result",imageIndex:-1}],
           }],
         }),
       } as any),
@@ -371,4 +371,10 @@ Deno.test("refinement preserves a manually linked deal without letting the model
     Deno.env.delete("CITY_SETUP_ENABLED");
     Deno.env.delete("CITY_CAMPUS_ENABLED");
   }
+});
+
+Deno.test("comparison and gallery exhibits can retain owner-selected offer links",()=>{
+ const id="88888888-8888-4888-8888-888888888888";
+ const value=campusSchema.parse({version:1,layout:"courtyard",primaryId:"sample",exhibits:[{id:"sample",title:"Example",kind:"gallery",confirmedPair:false,dealId:id,items:[{label:"Example",image:"",description:"A creator result",sourceUrl:"https://example.com"}]}]});
+ assert.equal(value.exhibits[0].dealId,id);
 });

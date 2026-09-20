@@ -12,6 +12,7 @@ for (
     "20260920152544_city_discovery",
     "20260920160701_city_campus",
     "20260920172201_city_deals",
+    "20260920182940_city_deal_launch",
   ]
 ) {
   await db.exec(

@@ -73,7 +73,9 @@
     "test:city:campus": "node scripts/city-campus-db-test.mjs && npx deno test --allow-env --config supabase/functions/city-command/deno.json supabase/functions/_shared/city-campus.test.ts",
     "test:city:campus:browser": "node scripts/city-campus-browser.mjs && node scripts/city-campus-ui-flow.mjs",
     "test:city:deals": "node --experimental-strip-types --test src/domain/cityDeals.test.ts && node scripts/city-deals-db-test.mjs && npx deno test --allow-env --config supabase/functions/city-command/deno.json supabase/functions/_shared/city-deals.test.ts",
-    "test:city:deals:browser": "node scripts/city-deals-ui-flow.mjs"
+    "test:city:deals:browser": "node scripts/city-deals-ui-flow.mjs",
+    "test:city:launch": "node --experimental-strip-types --test src/domain/cityDeals.test.ts && node scripts/city-launch-db-test.mjs",
+    "check:city:launch-staging": "node scripts/city-launch-staging.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",

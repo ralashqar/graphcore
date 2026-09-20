@@ -1348,3 +1348,16 @@ body:has(.city-app) {
 .city-deal-code { display:block; padding:16px; font-size:20px; background:#e8eddf; user-select:all; }
 .city-deal-pin { white-space:nowrap; background:#f2de93; color:#283b30; padding:5px 9px; border:1px solid #827a54; border-radius:5px; font-size:11px; }
 @media(max-width:600px) { .city-deals { padding:16px; } }
+
+.city-launch-readiness { padding:16px; margin-block:16px; background:#edf0e6; border-radius:8px; }
+.city-launch-readiness h4 { margin:0 0 8px; font-size:18px; }
+.city-launch-readiness ul { padding:0; list-style:none; }
+.city-launch-readiness li { padding:8px 0; border-bottom:1px solid #d1d8c7; }
+.city-launch-readiness li p { margin:4px 0; font-size:13px; }
+.city-launch-readiness details { margin-top:16px; }
+.city-launch-readiness summary { cursor:pointer; font-weight:600; }
+.city-launch-table { overflow-x:auto; }
+.city-launch-table th,.city-launch-table td { padding:8px; text-align:left; }
+
+.city-launch-readiness label:has(input[type="checkbox"]) { display:flex; align-items:flex-start; gap:10px; }
+.city-launch-readiness input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:3px; }

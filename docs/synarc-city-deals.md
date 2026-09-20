@@ -57,3 +57,7 @@ Staging activation sequence:
 5. Pilot with a small creator-tool cohort only after those checks. Use per-deal pause/end for normal operational stops so issued rewards remain recoverable. Turning the global feature flag off hides the feature and its wallet; it is an emergency shutdown, not a substitute for pausing issuance.
 
 Follow-on integrations should add evidence provenance and reservation/commit/cancel semantics for checkout; verifying an entitlement alone does not reserve it against two concurrent purchases. Physical QR, staff roles, guest identity linking, reward gates, platform cash balances, store OAuth, notifications and cross-business vouchers are intentionally outside this release.
+
+## Merchant launch follow-up
+
+The next iteration adds launch checklists, private previews, separate checkout-test codes and exhibit-linked claims. See [Merchant launch readiness](synarc-city-launch-readiness.md) for the additive migration, endpoints and current staging status.

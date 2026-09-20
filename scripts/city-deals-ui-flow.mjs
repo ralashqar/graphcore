@@ -62,7 +62,7 @@ let business = {
   land_value: 0,
 };
 
-let deals = [], claims = [];
+let deals = [], claims = [], tests = [];
 const actions = [], errors = [];
 const browser = await chromium.launch({
   headless: true,
@@ -101,7 +101,9 @@ try {
           admin: true,
         });
       }
-      if (i.action === "campus_workspace") return reply({jobs:[],metrics:{},setupEnabled:false});
+      if (i.action === "campus_workspace") {
+        return reply({ jobs: [], metrics: {}, setupEnabled: false });
+      }
       if (i.action === "admin") {
         return reply({ businesses: [], orders: [], reports: [] });
       }
@@ -111,6 +113,7 @@ try {
           deals: i.admin ? deals.filter((d) => d.status === "pending") : deals,
         });
       }
+      if (i.action === "deal_launch") return reply({ tests });
       if (i.action === "deal_catalog") {
         return reply({
           enabled: true,
@@ -129,8 +132,20 @@ try {
             campus: {
               version: 1,
               layout: "courtyard",
-              primaryId: "deals",
+              primaryId: "example",
               exhibits: [{
+                id: "example",
+                title: "See a real example",
+                kind: "gallery",
+                confirmedPair: false,
+                items: [{
+                  label: "Product result",
+                  description: "A supplied creator example",
+                  image: "",
+                  sourceUrl: "https://example.com",
+                }],
+                dealId: deals[0]?.id,
+              }, {
                 id: "deals",
                 title: "Creator rewards",
                 kind: "offer",
@@ -162,6 +177,7 @@ try {
         id: crypto.randomUUID(),
         business_id: businessId,
         terms: i.terms,
+        businessReady: true,
         status: "draft",
         paused: false,
         ended: false,
@@ -191,12 +207,48 @@ try {
       d.version++;
       return reply(d);
     }
+    if (i.action === "deal_test_register") {
+      const t = {
+        id: crypto.randomUUID(),
+        code: i.code,
+        terms: d.terms,
+        outcome: "untested",
+        note: "",
+        reported_at: null,
+      };
+      tests.unshift(t);
+      d.checkoutTest = {
+        id: t.id,
+        current: true,
+        outcome: t.outcome,
+        note: "",
+        reportedAt: null,
+      };
+      return reply(t);
+    }
+    if (i.action === "deal_test_report") {
+      const t = tests.find((t) => t.id === i.testId);
+      Object.assign(t, {
+        outcome: i.outcome,
+        note: i.note,
+        reported_at: new Date().toISOString(),
+      });
+      d.checkoutTest = {
+        id: t.id,
+        current: true,
+        outcome: t.outcome,
+        note: t.note,
+        reportedAt: t.reported_at,
+      };
+      return reply(t);
+    }
     if (i.action === "deal_claim") {
       let c = claims.find((c) => c.deal_id === d.id);
       if (!c) {
         c = {
           id: crypto.randomUUID(),
           deal_id: d.id,
+          source_exhibit_id: i.sourceExhibitId,
           terms: d.terms,
           code: "TEST-CREATOR-001",
           business_name: profile.name,
@@ -228,7 +280,10 @@ try {
     return reply({ ok: true });
   });
   const page = await context.newPage();
-  page.on("pageerror", (e) => {errors.push(e.message);console.error("Browser runtime:",e.message);});
+  page.on("pageerror", (e) => {
+    errors.push(e.message);
+    console.error("Browser runtime:", e.message);
+  });
   await page.goto(`${origin}/city/manage`);
   await page.getByRole("button", { name: "Create deal", exact: true }).click();
   await page.getByLabel("Title", { exact: true }).fill(
@@ -252,6 +307,34 @@ try {
   await page.getByRole("button", { name: "Import codes into this deal" })
     .click();
   await page.getByText("2 codes imported.").waitFor();
+  await page.getByText("Private customer preview", { exact: true }).click();
+  await page.getByRole("button", { name: "Preview claimed state", exact: true })
+    .click();
+  await page.getByText("PREVIEW-ONLY", { exact: true }).waitFor();
+  assert.equal(claims.length, 0);
+  assert.equal(deals[0].quantity, 2);
+  assert.equal(actions.includes("deal_track"), false);
+  await page.getByText("Private customer preview", { exact: true }).click();
+  await page.getByText("Test your merchant checkout", { exact: true }).click();
+  await page.getByLabel("Dedicated merchant test code").fill(
+    "TEST-ONLY-SEPARATE",
+  );
+  await page.getByRole("button", { name: "Register test code", exact: true })
+    .click();
+  await page.getByText("TEST-ONLY-SEPARATE", { exact: true }).waitFor();
+  await page.getByLabel("What did you verify?").fill(
+    "Checked the discount, eligibility and single use at the sandbox checkout.",
+  );
+  await page.getByLabel("I tested this code", { exact: false }).check();
+  await page.getByRole("button", { name: "Record merchant test passed" })
+    .click();
+  await page.getByText("Merchant-reported pass; not independently verified.", {
+    exact: true,
+  }).waitFor();
+  assert.equal(deals[0].quantity, 2);
+  assert.equal(deals[0].issued, 0);
+  await page.getByRole("region",{name:"Launch checklist for Creator launch discount"}).screenshot({path:"output/playwright/city-launch-checklist.png"});
+
   await page.getByRole("button", { name: "Submit for review", exact: true })
     .last().click();
   await page.goto(`${origin}/city/admin`);
@@ -259,15 +342,16 @@ try {
     "Checked merchant terms and single-use inventory.",
   );
   await page.getByRole("button", { name: "Approve deal", exact: true }).click();
-  await page.getByText("Creator launch discount", { exact: true }).waitFor({
+  await page.getByRole("button", { name: "Approve deal", exact: true }).waitFor({
     state: "hidden",
   });
-  await page.goto(`${origin}/city/business/campus-studio/space/deals`);
+  await page.goto(`${origin}/city/business/campus-studio/space/example`);
   await page.getByRole("button", { name: "View terms and claim" }).click();
   await page.getByRole("button", { name: "Claim unique code", exact: true })
     .click();
   await page.getByText("TEST-CREATOR-001", { exact: true }).waitFor();
   assert.equal(deals[0].issued, 1);
+  assert.equal(claims[0].source_exhibit_id, "example");
   await page.getByRole("button", { name: "Claim unique code", exact: true })
     .click();
   assert.equal(deals[0].issued, 1);
@@ -346,7 +430,7 @@ try {
     ].every((a) => actions.includes(a)),
   );
   console.log(
-    "City Deals browser fixture passed: merchant create/import/review, campus claim and retry, wallet reload, reporting, mobile layout and guest sign-in return. No real coupon or checkout was used.",
+    "City Deals browser fixture passed: merchant checklist/private preview/separate checkout test/import/review, exhibit-linked claim and retry, wallet reload, reporting, mobile layout and guest sign-in return. No real coupon or checkout was used.",
   );
 } finally {
   await browser.close();

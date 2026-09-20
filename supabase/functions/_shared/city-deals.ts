@@ -116,11 +116,35 @@ export async function deals(
       ).not("city_businesses.published", "is", null).maybeSingle(),
     );
     if (d) {
+      const source = data.sourceExhibitId === undefined
+        ? null
+        : z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/).parse(
+          data.sourceExhibitId,
+        );
+      if (
+        source &&
+        !(d as any).city_businesses.published?.campus?.exhibits?.some((
+          e: any,
+        ) => e.id === source && e.dealId === id)
+      ) throw new HttpError(400, "Exhibit link is no longer published.");
       if (request.headers.get("authorization")) {
         try {
           const { user } = await requireUserClient(request, "city-deals-track");
           if (await owner(db, user.id, d.business_id)) return { ok: true };
         } catch { /* public anonymous metric */ }
+      }
+      if (source) {
+        result(
+          await db.from("city_deal_exhibit_metrics").upsert({
+            deal_id: id,
+            exhibit_id: source,
+            visitor_hash: key,
+            kind,
+          }, {
+            onConflict: "deal_id,exhibit_id,visitor_hash,kind,day",
+            ignoreDuplicates: true,
+          }),
+        );
       }
       result(
         await db.from("city_deal_metrics").upsert({
@@ -147,7 +171,7 @@ export async function deals(
     const offset = z.number().int().min(0).max(100000).parse(data.offset ?? 0);
     const rows = result(
       await db.from("city_deal_claims").select(
-        "id,deal_id,terms,business_name,created_at,redeemed_at,cancelled,city_deal_codes!inner(code)",
+        "id,deal_id,terms,business_name,created_at,redeemed_at,cancelled,source_exhibit_id,city_deal_codes!inner(code)",
       ).eq("user_id", user.id).order("created_at", { ascending: false })
         .range(offset, offset + 49),
     ) || [];
@@ -160,6 +184,51 @@ export async function deals(
       hasMore: rows.length === 50,
     };
   }
+  if (!command && action === "launch") {
+    const id = uuid.parse(data.id),
+      d = result(
+        await db.from("city_deals").select("business_id").eq("id", id).single(),
+      );
+    if (!d || !await owner(db, user.id, d.business_id)) {
+      throw new HttpError(403, "Owner access required.");
+    }
+    const tests = result(
+      await db.from("city_deal_checkout_tests").select("*").eq("deal_id", id)
+        .order("created_at", { ascending: false }).order("id", {
+          ascending: false,
+        }).limit(10),
+    ) || [];
+    return { tests };
+  }
+  if (command && ["test_register", "test_report"].includes(action)) {
+    const payload: Record<string, unknown> = {
+      id: uuid.parse(data.id),
+      version: z.number().int().positive().parse(data.version),
+    };
+    if (action === "test_register") {
+      payload.code = z.string().trim().min(1).max(200).regex(/^[^\x00-\x1f]+$/)
+        .parse(data.code);
+    } else {
+      payload.testId = uuid.parse(data.testId);
+      payload.outcome = z.enum(["passed", "failed"]).parse(data.outcome);
+      payload.note = z.string().trim().min(10).max(1000).parse(data.note);
+      payload.confirmed = z.boolean().parse(data.confirmed);
+    }
+    const r = await db.rpc("city_deal_checkout_command", {
+      p_user: user.id,
+      p_action: action === "test_register" ? "register" : "report",
+      p_data: payload,
+    });
+    if (r.error) {
+      throw new HttpError(
+        409,
+        r.error.message.includes("unique constraint")
+          ? "Test code already registered; reload."
+          : r.error.message,
+      );
+    }
+    return r.data;
+  }
   if (!command && action === "workspace") {
     const admin = data.admin === true;
     if (admin) {
@@ -169,7 +238,9 @@ export async function deals(
     } else if (!await owner(db, user.id, uuid.parse(data.businessId))) {
       throw new HttpError(403, "Owner access required.");
     }
-    let query = db.from("city_deals").select("*").order("created_at", {
+    let query = db.from("city_deals").select(
+      "*,city_businesses!inner(published,status)",
+    ).order("created_at", {
       ascending: false,
     }).limit(100);
     query = admin
@@ -181,10 +252,23 @@ export async function deals(
         await db.rpc("city_deal_stats", { p_ids: rows.map((d: any) => d.id) }),
       ) || []
       : [];
-    const enriched = await Promise.all(
-      rows.map(async (d: any) => ({
+    const ids = rows.map((d: any) => d.id);
+    const tests = ids.length
+      ? result(await db.rpc("city_deal_launch_summary", { p_ids: ids })) || []
+      : [];
+    const exhibits = ids.length
+      ? result(await db.rpc("city_deal_exhibit_stats", { p_ids: ids })) || []
+      : [];
+    const enriched = await Promise.all(rows.map(async (row: any) => {
+      const { city_businesses, ...d } = row;
+      const t = tests.find((t: any) => t.deal_id === d.id);
+      return {
         ...d,
         ...stats.find((v: any) => v.id === d.id),
+        businessReady: !!city_businesses.published &&
+          city_businesses.status !== "suspended",
+        checkoutTest: t?.checkout || null,
+        exhibitStats: exhibits.filter((v: any) => v.deal_id === d.id),
         imageUrl: d.terms.image
           ? result(
             await db.storage.from("city-media").createSignedUrl(
@@ -193,8 +277,8 @@ export async function deals(
             ),
           )?.signedUrl
           : "",
-      })),
-    );
+      };
+    }));
     return { enabled: true, deals: enriched };
   }
   if (!command && action === "claims") {
@@ -266,6 +350,10 @@ export async function deals(
       "correct",
     ].includes(action)
   ) throw new HttpError(400, "Unknown deal command.");
+  if (action === "claim" && data.sourceExhibitId !== undefined) {
+    payload.sourceExhibitId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/)
+      .parse(data.sourceExhibitId);
+  }
   if (action === "claim" && !flag("CITY_BROWSING_ENABLED")) {
     throw new HttpError(503, "City is closed.");
   }

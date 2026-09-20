@@ -7,7 +7,7 @@ import {
   type DealTerms,
 } from "../../domain/cityDeals";
 import { cityCall, cityCommand } from "./api";
-function RewardTerms({ terms: t }: { terms: DealTerms }) {
+export function RewardTerms({ terms: t }: { terms: DealTerms }) {
   const amount = (n: number) => `${(n / 100).toFixed(2)} ${t.currency}`;
   return (
     <p>
@@ -59,6 +59,7 @@ export function DealReceipt({ claim }: { claim: DealClaim }) {
               onClick={() =>
                 void cityCommand("deal_track", {
                   id: claim.deal_id,
+                  sourceExhibitId: claim.source_exhibit_id || undefined,
                   kind: "click",
                 }).catch(() => {})}
             >
@@ -84,11 +85,12 @@ export function DealReceipt({ claim }: { claim: DealClaim }) {
   );
 }
 export function CityDeals(
-  { businessId, userId, onAuth, dealId, demo = false }: {
+  { businessId, userId, onAuth, dealId, sourceExhibitId, demo = false }: {
     businessId: string;
     userId?: string;
     onAuth: () => void;
     dealId?: string;
+    sourceExhibitId?: string;
     demo?: boolean;
   },
 ) {
@@ -173,7 +175,7 @@ export function CityDeals(
             onClick={() => {
               setSelected(selected === d.id ? "" : d.id);
               if (selected !== d.id) {
-                void cityCommand("deal_track", { id: d.id, kind: "open" })
+                void cityCommand("deal_track", { id: d.id, kind: "open", sourceExhibitId })
                   .catch(() => {});
               }
             }}
@@ -213,6 +215,7 @@ export function CityDeals(
                   try {
                     const c = await cityCommand<DealClaim>("deal_claim", {
                       id: d.id,
+                      sourceExhibitId,
                     });
                     if (currentUser.current !== userId) return;
                     setReceipt(c);
