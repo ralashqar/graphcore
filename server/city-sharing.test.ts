@@ -2,6 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cardSVG, escapeHTML, propertyHTML } from "./city-sharing.ts";
 import { GET as card } from "../api/city-share.ts";
+test("discovery shares use their public route without inventing a paid rank", async () => {
+  for (const kind of ["trail", "launch", "storefront"] as const) {
+    const data = { kind, name: "Creator discovery", description: "Try a tool", rank: 0, value: 0, color: "#547364", date: "2026-09-20T12:00:00Z", slug: "creator-discovery" };
+    const html = await propertyHTML(data);
+    const route = kind === "trail" ? "trails" : kind === "launch" ? "launches" : "business";
+    assert.ok(html.includes(`/city/${route}/creator-discovery`));
+    assert.ok(html.includes(`kind=${kind}`));
+    assert.ok(!cardSVG(data).includes("rank #0"));
+    assert.ok(!html.includes("Sponsored city location #0"));
+  }
+});
 test("share metadata escapes business-controlled content", async () => {
   const data = {
     name: "<img src=x onerror=alert(1)>",

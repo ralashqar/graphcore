@@ -29,3 +29,7 @@ Later: themed competitive districts, temporary auctions, billboard rental, teams
 ## Pilot acceptance
 
 Validate onboarding completion, checkout conversion, repeat placement purchases, returning visitors, qualified property views, saves, claims and outbound clicks. Test 400 and 2,000 occupied plots; target 30 FPS mobile / 60 FPS desktop. Demonstration businesses must be labelled and never mixed with live inventory.
+
+## Creator discovery release
+
+The next implemented direction separates free creator-tool discovery from paid geography. See [creator discovery implementation and rollout](synarc-city-discovery.md) for samples, trails, launch reviews, following, verification and remaining pilot checks.

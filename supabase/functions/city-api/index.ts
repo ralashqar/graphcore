@@ -1,3 +1,4 @@
+import { discovery } from "../_shared/city-discovery.ts";
 import { z } from "npm:zod@4";
 import { requireUserClient } from "../_shared/auth.ts";
 import {
@@ -25,6 +26,13 @@ Deno.serve(async (request) => {
   if (options) return options;
   try {
     if (request.method !== "POST") throw new HttpError(405, "Use POST.");
+    const raw = await request.json();
+    if (
+      ["discovery_catalog", "discovery_workspace", "discovery_share"].includes(
+        raw.action,
+      )
+    )
+      return json(await discovery(request, raw));
     const body = z
       .object({
         action: z.enum([
@@ -44,7 +52,7 @@ Deno.serve(async (request) => {
         x: z.number().int().min(-10000).max(10000).optional(),
         z: z.number().int().min(-10000).max(10000).optional(),
       })
-      .parse(await request.json());
+      .parse(raw);
     const db = cityAdmin();
     if (["share", "snapshot", "search", "directory"].includes(body.action)) {
       if (!flag("CITY_BROWSING_ENABLED"))
@@ -82,6 +90,28 @@ Deno.serve(async (request) => {
           .eq("slug", body.slug)
           .maybeSingle(),
       );
+      if (!item && flag("CITY_DISCOVERY_ENABLED")) {
+        const b = result(
+          await db
+            .from("city_businesses")
+            .select("slug,published")
+            .eq("slug", body.slug)
+            .not("published", "is", null)
+            .neq("status", "suspended")
+            .maybeSingle(),
+        );
+        if (b)
+          return json({
+            name: b.published.name,
+            description: b.published.tagline,
+            kind: "storefront",
+            rank: 0,
+            value: 0,
+            color: b.published.color,
+            date: new Date().toISOString(),
+            slug: b.slug,
+          });
+      }
       if (!item) throw new HttpError(404, "Property unavailable.");
       return json({
         name: item.profile.name,
@@ -117,6 +147,7 @@ Deno.serve(async (request) => {
         events: snapshot.events.map(event),
         purchasesEnabled: flag("CITY_PURCHASES_ENABLED"),
         onboardingEnabled: flag("CITY_ONBOARDING_ENABLED"),
+        discoveryEnabled: flag("CITY_DISCOVERY_ENABLED"),
         termsUrl: Deno.env.get("CITY_TERMS_URL") || null,
       });
     }
@@ -141,7 +172,23 @@ Deno.serve(async (request) => {
               ),
           )
         : [];
-      return json({ properties: await listings(db, rows || []) });
+      const storefronts =
+        saved.length && flag("CITY_DISCOVERY_ENABLED")
+          ? (
+              result(
+                await db
+                  .from("city_businesses")
+                  .select("id,slug,published")
+                  .in(
+                    "id",
+                    saved.map((s) => s.business_id),
+                  )
+                  .not("published", "is", null)
+                  .neq("status", "suspended"),
+              ) || []
+            ).map((b) => ({ id: b.id, slug: b.slug, name: b.published.name }))
+          : [];
+      return json({ properties: await listings(db, rows || []), storefronts });
     }
     if (body.action === "admin") {
       if (!(await isAdmin(db, user.id)))

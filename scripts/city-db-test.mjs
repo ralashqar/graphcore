@@ -25,6 +25,7 @@ await db.exec(
     "utf8",
   ),
 );
+await db.exec(await readFile(new URL("../supabase/migrations/20260920152544_city_discovery.sql", import.meta.url), "utf8"));
 const q = async (sql, args = []) => (await db.query(sql, args)).rows;
 const scalar = async (sql, args = []) =>
   Object.values((await q(sql, args))[0])[0];

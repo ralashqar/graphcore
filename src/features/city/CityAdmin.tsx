@@ -1,8 +1,14 @@
+import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
+import { CitySample } from "./CitySample";
 import { useEffect, useState } from "react";
 import type { CityBusiness, CityOrder } from "../../domain/city";
 import { cityCall, cityCommand } from "./api";
 type Report = { id: string; business_id: string; reason: string };
-export function CityAdmin() {
+export function CityAdmin({
+  discoveryEnabled = false,
+}: {
+  discoveryEnabled?: boolean;
+}) {
   const [data, setData] = useState<{
       businesses: (CityBusiness & { analytics?: Record<string, number> })[];
       reports: Report[];
@@ -156,6 +162,7 @@ export function CityAdmin() {
           </small>
         </section>
       )}
+      {discoveryEnabled && <CityDiscoveryStudio admin />}
       {data?.businesses.map((b) => (
         <section className="city-review" key={b.id}>
           <div>
@@ -188,6 +195,7 @@ export function CityAdmin() {
                 alt="Submitted billboard image"
               />
             )}
+            {b.preview?.sample && <CitySample sample={b.preview.sample} />}
             {b.preview?.video && (
               <video
                 className="city-review-media"

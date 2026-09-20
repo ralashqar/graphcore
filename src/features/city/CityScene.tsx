@@ -1,3 +1,6 @@
+import { CityPavilion } from "./CityPavilion";
+import { Html } from "@react-three/drei";
+import type { CityProfile } from "../../domain/city";
 import {
   Component,
   useEffect,
@@ -157,6 +160,8 @@ export default function CityScene({
   onSelect,
   onRegion,
   onFailure,
+  pavilion,
+  trailMarkers,
 }: {
   properties: CityProperty[];
   selected: CityProperty | null;
@@ -165,6 +170,8 @@ export default function CityScene({
   onSelect: (p: CityProperty) => void;
   onRegion: (x: number, z: number) => void;
   onFailure: () => void;
+  pavilion?: { profile?: CityProfile; title?: string };
+  trailMarkers?: (CityProperty & { number: number })[];
 }) {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
@@ -220,6 +227,12 @@ export default function CityScene({
           shadow-bias={-0.0003}
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
+        {pavilion && <CityPavilion {...pavilion} />}
+        {trailMarkers?.map((p) => (
+          <Html key={p.id} center position={[position(p.x), 15, position(p.z)]}>
+            <span className="city-trail-pin">{p.number}</span>
+          </Html>
+        ))}
         <CityKit
           properties={visible}
           selected={selected}

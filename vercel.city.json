@@ -3,11 +3,29 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/city-property.ts": { "includeFiles": "dist/index.html" },
-    "api/city-share.ts": { "includeFiles": "public/fonts/Manrope.ttf" }
+    "api/city-property.ts": {
+      "includeFiles": "dist/index.html"
+    },
+    "api/city-share.ts": {
+      "includeFiles": "public/fonts/Manrope.ttf"
+    }
   },
   "rewrites": [
-    { "source": "/city/business/:slug", "destination": "/api/city-property?slug=:slug" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/city/trails/:slug",
+      "destination": "/api/city-property?kind=trail&slug=:slug"
+    },
+    {
+      "source": "/city/launches/:slug",
+      "destination": "/api/city-property?kind=launch&slug=:slug"
+    },
+    {
+      "source": "/city/business/:slug",
+      "destination": "/api/city-property?slug=:slug"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }

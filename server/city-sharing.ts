@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 export type CityShare = {
+  kind?: "trail" | "launch" | "storefront";
   name: string;
   description?: string;
   rank: number;
@@ -18,6 +19,9 @@ export const escapeHTML = (value: unknown) =>
       ]!,
   );
 export async function shareData(params: URLSearchParams): Promise<CityShare> {
+  const kind = params.get("kind");
+  if (kind && !["trail", "launch", "storefront"].includes(kind))
+    throw new Error("Invalid discovery kind.");
   const slug = params.get("slug"),
     eventId = params.get("eventId");
   if (
@@ -33,7 +37,8 @@ export async function shareData(params: URLSearchParams): Promise<CityShare> {
     method: "POST",
     headers: { apikey: key, "Content-Type": "application/json" },
     body: JSON.stringify({
-      action: "share",
+      action: kind && kind !== "storefront" ? "discovery_share" : "share",
+      ...(kind ? { kind } : {}),
       ...(eventId ? { eventId } : { slug }),
     }),
     signal: AbortSignal.timeout(10000),
@@ -54,13 +59,13 @@ export function cardSVG(data: CityShare) {
       currency: "GBP",
       maximumFractionDigits: 0,
     }).format(data.value / 100);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"><rect width="1200" height="630" fill="#eeeae0"/><rect x="870" width="330" height="630" fill="${color}"/><g font-family="Manrope" fill="#253b31"><text x="70" y="80" font-size="24">SYNARC / CITY</text><text x="70" y="230" font-size="54" font-weight="600">${name}</text><text x="70" y="307" font-size="34">A new perspective. City rank #${Number(data.rank)}.</text><text x="70" y="378" font-size="25">${escapeHTML(value)} in sponsored Land Value</text><text x="70" y="540" font-size="20">${escapeHTML(new Date(data.date).toISOString().slice(0, 10))} · synarc city</text></g><text x="900" y="345" fill="white" font-family="Manrope" font-size="${data.rank > 99 ? 70 : 110}">#${Number(data.rank)}</text></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"><rect width="1200" height="630" fill="#eeeae0"/><rect x="870" width="330" height="630" fill="${color}"/><g font-family="Manrope" fill="#253b31"><text x="70" y="80" font-size="24">SYNARC / CITY</text><text x="70" y="230" font-size="54" font-weight="600">${name}</text><text x="70" y="307" font-size="34">${data.kind ? "Discover, try and create." : `A new perspective. City rank #${Number(data.rank)}.`}</text><text x="70" y="378" font-size="25">${data.kind ? "Explore the creator district" : `${escapeHTML(value)} in sponsored Land Value`}</text><text x="70" y="540" font-size="20">${escapeHTML(new Date(data.date).toISOString().slice(0, 10))} · synarc city</text></g><text x="900" y="345" fill="white" font-family="Manrope" font-size="${data.rank > 99 ? 70 : 110}">${data.kind ? "TRY" : `#${Number(data.rank)}`}</text></svg>`;
 }
 export async function propertyHTML(data: CityShare) {
   const origin = new URL(process.env.CITY_PUBLIC_ORIGIN || "https://synarc.ai")
       .origin,
-    url = `${origin}/city/business/${data.slug}`,
-    image = `${origin}/api/city-share?slug=${encodeURIComponent(data.slug)}`;
+    url = `${origin}/city/${data.kind === "trail" ? "trails" : data.kind === "launch" ? "launches" : "business"}/${data.slug}`,
+    image = `${origin}/api/city-share?slug=${encodeURIComponent(data.slug)}${data.kind ? `&kind=${data.kind}` : ""}`;
   const title = `${data.name} | Synarc City`,
     description =
       data.description || `Discover ${data.name}, city rank #${data.rank}.`;
@@ -82,7 +87,7 @@ export async function propertyHTML(data: CityShare) {
     );
   html = html.replace(
     /<main class="seo-static-landing">[\s\S]*?<\/main>/,
-    `<main class="seo-static-landing"><h1>${escapeHTML(data.name)}</h1><p>${escapeHTML(description)}</p><p>Sponsored city location #${Number(data.rank)}.</p><a href="/city">Explore Synarc City</a></main>`,
+    `<main class="seo-static-landing"><h1>${escapeHTML(data.name)}</h1><p>${escapeHTML(description)}</p><p>${data.kind ? "Explore the creator district." : `Sponsored city location #${Number(data.rank)}.`}</p><a href="/city">Explore Synarc City</a></main>`,
   );
   return html;
 }

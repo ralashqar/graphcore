@@ -1,3 +1,4 @@
+import { discovery } from "../_shared/city-discovery.ts";
 import { z } from "npm:zod@4";
 import { requireUserClient } from "../_shared/auth.ts";
 import {
@@ -65,6 +66,8 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if (action.startsWith("discovery_"))
+      return json(await discovery(request, data, true));
     if (action === "track") {
       if (!flag("CITY_BROWSING_ENABLED"))
         throw new HttpError(503, "City is closed.");
@@ -85,9 +88,11 @@ Deno.serve(async (request) => {
       await limit(db, `track:${hash}`, 100, 3600);
       const row = result(
         await db
-          .from("city_listings")
-          .select("business_id")
-          .eq("business_id", id)
+          .from("city_businesses")
+          .select("id")
+          .not("published", "is", null)
+          .neq("status", "suspended")
+          .eq("id", id)
           .maybeSingle(),
       );
       if (!row) throw new HttpError(404, "Property not found.");
@@ -402,6 +407,10 @@ Deno.serve(async (request) => {
           version: z.number().int().positive().parse(data.version),
         }),
       );
+    if ((action === "claim" || (action === "save_business" && data.saved)) && !flag("CITY_DISCOVERY_ENABLED")) {
+      const listing = result(await db.from("city_listings").select("business_id").eq("business_id", uuid.parse(data.businessId)).maybeSingle());
+      if (!listing) throw new HttpError(404, "Business unavailable.");
+    }
     if (action === "save_business")
       return json(
         await mutate(db, user.id, action, {

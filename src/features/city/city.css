@@ -1306,3 +1306,28 @@ body:has(.city-app) {
 .city-pilot-table th, .city-pilot-table td { padding: 10px; text-align: left; border-bottom: 1px solid #c9cfc4; }
 
 .city-billboard-artwork { width: 100%; max-width: 512px; height: auto; border: 4px solid #343d37; border-radius: 4px; }
+
+.city-explore { overflow:auto; flex:1; padding:32px max(20px,5vw) 80px; }
+.city-explore-heading { max-width:850px; margin:0 0 30px; }
+.city-explore-heading h1 { font-size:clamp(30px,4vw,54px); line-height:1.1; letter-spacing:-.04em; }
+.city-explore-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin:20px 0 36px; }
+.city-explore-card { text-align:left; display:block; border:1px solid #cbd1c4; padding:22px; border-radius:14px; background:#f1f1e8; color:inherit; }
+.city-explore-card img { width:100%; height:150px; object-fit:cover; border-radius:8px; }
+.city-explore-split { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(300px,1fr); gap:24px; align-items:start; }
+.city-explore-map { height:560px; position:sticky; top:0; overflow:hidden; border-radius:16px; background:#e4e5dc; }
+.city-explore-storefront,.city-trail-nav,.city-launch-banner { padding:24px; border:1px solid #cbd1c4; border-radius:14px; margin-bottom:24px; }
+.city-trail-nav ol { display:flex; flex-wrap:wrap; gap:12px; padding:0; list-style:none; }
+.city-trail-nav [aria-current=step],.city-sample-options [aria-pressed=true] { background:#355b45; color:white; }
+.city-sample { margin:22px 0; padding:18px; background:#eeeee3; border-radius:12px; }
+.city-sample-options { display:flex; flex-wrap:wrap; gap:8px; }
+.city-sample-image { max-width:100%; max-height:340px; object-fit:contain; display:block; margin:16px auto; }
+.city-comparison { position:relative; aspect-ratio:1.6; overflow:hidden; }
+.city-comparison img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.city-sample input[type=range] { width:100%; }
+.city-sample-editor-item { padding:12px; border:1px solid #cbd1c4; display:grid; gap:10px; }
+.city-explore-studio { padding:24px 0; border-top:1px solid #cbd1c4; }
+.city-explore-studio fieldset { display:grid; gap:16px; padding:20px; border:1px solid #cbd1c4; }
+.city-explore-studio pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.city-pavilion-label { display:grid; gap:4px; text-align:center; background:#f5f0de; border:2px solid #355b45; padding:8px 12px; border-radius:6px; width:190px; font-size:12px; }
+.city-trail-pin { display:grid; place-items:center; width:28px; height:28px; background:#355b45; border:2px solid white; color:white; border-radius:50%; }
+@media(max-width:760px){.city-explore-split{grid-template-columns:1fr}.city-explore-map{height:300px;position:relative}.city-explore{padding:20px 16px 70px}.city-explore-cards{grid-template-columns:1fr}.city-trail-nav{padding:14px}}

@@ -20,6 +20,7 @@ Edge secrets (never browser variables):
 
 | Variable                     | Purpose                                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `CITY_DISCOVERY_ENABLED` | Creator discovery catalog and actions, default false; see [discovery rollout](synarc-city-discovery.md) |
 | `CITY_BROWSING_ENABLED`      | Public reads, default false                                                              |
 | `CITY_ONBOARDING_ENABLED`    | Business creation/import/editing, default false                                          |
 | `CITY_PURCHASES_ENABLED`     | New Checkout Sessions, default false                                                     |

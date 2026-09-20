@@ -1,3 +1,5 @@
+import { CitySampleEditor } from "./CitySample";
+import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowUpRight, CheckCircle, UploadSimple } from "@phosphor-icons/react";
 import {
@@ -392,6 +394,14 @@ export function CityManage({
               </button>
             )}
           </fieldset>
+          {snapshot?.discoveryEnabled && (
+            <CitySampleEditor
+              value={profile.sample}
+              preview={business?.preview?.sample}
+              disabled={!!busy || !snapshot?.onboardingEnabled}
+              onChange={(sample) => field("sample", sample)}
+            />
+          )}
           <div className="city-section-heading">
             <span>02 / GIVE PEOPLE A REASON TO VISIT</span>
           </div>
@@ -629,6 +639,9 @@ export function CityManage({
           </section>
         </aside>
       </div>
+      {business?.published && snapshot?.discoveryEnabled && (
+        <CityDiscoveryStudio businessId={business.id} />
+      )}
       {business && (
         <section className="city-analytics">
           <div className="city-section-heading">

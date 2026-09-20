@@ -1,4 +1,18 @@
 import assert from "node:assert/strict";
+import { parseProfile } from "./city.ts";
+ Deno.test("sample media requires account ownership, still images and complete comparisons", () => {
+  const user = "11111111-1111-4111-8111-111111111111";
+  const image = `${user}/22222222-2222-4222-8222-222222222222.png`;
+  const profile = { name: "Creator", tagline: "Try it", description: "A sample", website: "https://example.com", category: "Creators", color: "#547364", logo: "", hero: "", video: "", offer: { title: "", description: "", code: "", expiresAt: null, url: "" }, sample: { kind: "comparison", title: "Before and after", items: [{ label: "Before", image, description: "Original" }, { label: "After", image, description: "Result" }] } };
+  assert.equal(parseProfile(profile, user).sample?.items.length, 2);
+  const changed = structuredClone(profile);
+  changed.sample.items[0].image = "";
+  assert.throws(() => parseProfile(changed, user));
+  changed.sample.items[0].image = image.replace(".png", ".mp4");
+  assert.throws(() => parseProfile(changed, user));
+  changed.sample.items[0].image = image.replace(user, "33333333-3333-4333-8333-333333333333");
+  assert.throws(() => parseProfile(changed, user), /belong/);
+});
 import { publicIPv4, importURL, fetchPublicWebsite } from "./city-network.ts";
 import { paymentState } from "./city-payments.ts";
 import { verifySignature } from "../city-stripe-webhook/index.ts";

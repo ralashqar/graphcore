@@ -1,3 +1,5 @@
+import { CityDiscovery } from "./CityDiscovery";
+import { CitySample } from "./CitySample";
 import {
   lazy,
   Suspense,
@@ -76,6 +78,23 @@ export function CityApp() {
     [sort, setSort] = useState("rank");
   const [page, setPage] = useState(0),
     [savedPlaces, setSavedPlaces] = useState<CityProperty[]>([]);
+  const [savedStorefronts, setSavedStorefronts] = useState<
+    { id: string; slug: string; name: string }[]
+  >([]);
+  const [followingIds, setFollowingIds] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    setFollowingIds([]);
+    if (!selected || !session || !snapshot?.discoveryEnabled || demo.current)
+      return;
+    void cityCall<{ follows: string[] }>("city-api", {
+      action: "discovery_catalog",
+      slug: selected.slug,
+    })
+      .then((d) => { if (active) setFollowingIds(d.follows); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [selected?.id, session?.user.id, snapshot?.discoveryEnabled]);
   const demo = useRef(new URLSearchParams(location.search).get("demo") === "1"),
     region = useRef({ x: 0, z: 0 }),
     requestId = useRef(0),
@@ -117,7 +136,10 @@ export function CityApp() {
         if (property) setSelected(property);
         else {
           setSelected(null);
-          setNotice("This property is unavailable or has not been published.");
+          if (!next.discoveryEnabled)
+            setNotice(
+              "This property is unavailable or has not been published.",
+            );
         }
       } else setSelected(null);
     } catch (e) {
@@ -256,11 +278,17 @@ export function CityApp() {
   useEffect(() => {
     if (path !== "/city/account" || !session || demo.current) return;
     let active = true;
-    void cityCall<{ properties: CityProperty[] }>("city-api", {
+    void cityCall<{
+      properties: CityProperty[];
+      storefronts?: { id: string; slug: string; name: string }[];
+    }>("city-api", {
       action: "saved",
     })
       .then((data) => {
-        if (active) setSavedPlaces(data.properties);
+        if (active) {
+          setSavedPlaces(data.properties);
+          setSavedStorefronts(data.storefronts || []);
+        }
       })
       .catch((e) => setError(e.message));
     return () => {
@@ -321,7 +349,21 @@ export function CityApp() {
       setBusy(false);
     }
   }
-  const map = path === "/city" || path.startsWith("/city/business/"),
+  const discoveryEnabled = demo.current || !!snapshot?.discoveryEnabled;
+  const discoveryRoute =
+    path === "/city/discover" ||
+    path === "/city/following" ||
+    path.startsWith("/city/trails/") ||
+    path.startsWith("/city/launches/") ||
+    (discoveryEnabled &&
+      !!snapshot &&
+      path.startsWith("/city/business/") &&
+      !snapshot.properties.some(
+        (p) => p.slug === decodeURIComponent(path.split("/")[3] || ""),
+      ));
+  const map =
+      !discoveryRoute &&
+      (path === "/city" || path.startsWith("/city/business/")),
     management = path === "/city/manage",
     admin = path === "/city/admin",
     account = path === "/city/account";
@@ -352,6 +394,9 @@ export function CityApp() {
             <BookmarkSimple size={18} />
             Saved places
           </button>
+          {discoveryEnabled && (
+            <button onClick={() => navigate("/city/discover")}>Discover</button>
+          )}
           {workspace.admin && (
             <button onClick={() => navigate("/city/admin")}>Operations</button>
           )}
@@ -420,7 +465,22 @@ export function CityApp() {
           </button>
         </div>
       )}
-      {map ? (
+      {discoveryRoute ? (
+        discoveryEnabled ? (
+          <CityDiscovery
+            path={path}
+            demo={demo.current}
+            userId={session?.user.id}
+            snapshot={snapshot}
+            navigate={navigate}
+            onAuth={() => setAuth(true)}
+          />
+        ) : (
+          <main className="city-page">
+            <p>Discovery is not open yet.</p>
+          </main>
+        )
+      ) : map ? (
         <main
           className={
             directory ? "city-map-shell is-directory" : "city-map-shell"
@@ -443,6 +503,7 @@ export function CityApp() {
                 }
               >
                 <CityScene
+                  pavilion={snapshot.discoveryEnabled || demo.current ? {} : undefined}
                   properties={snapshot.properties}
                   capacity={snapshot.capacity}
                   selected={selected}
@@ -667,6 +728,44 @@ export function CityApp() {
                   </div>
                 </div>
                 <p>{selected.profile.description}</p>
+                {discoveryEnabled && (
+                  <button
+                    aria-pressed={followingIds.includes(selected.id)}
+                    onClick={async () => {
+                      if (demo.current) {
+                        setNotice("This is a demonstration property.");
+                        return;
+                      }
+                      if (!session) {
+                        setAuth(true);
+                        return;
+                      }
+                      try {
+                        const enabled = !followingIds.includes(selected.id);
+                        await cityCommand("discovery_follow", {
+                          businessId: selected.id,
+                          enabled,
+                        });
+                        setFollowingIds((ids) =>
+                          enabled
+                            ? [...ids, selected.id]
+                            : ids.filter((id) => id !== selected.id),
+                        );
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    {followingIds.includes(selected.id)
+                      ? "Following"
+                      : "Follow business"}
+                  </button>
+                )}
+                {discoveryEnabled && selected.profile.sample && (
+                  <CitySample key={selected.id} sample={selected.profile.sample} onEvent={(kind) => {
+                    if (!demo.current && snapshot?.discoveryEnabled) void cityCommand("discovery_track", { businessId: selected.id, kind }).catch(() => {});
+                  }} />
+                )}
                 {selected.profile.video && (
                   <video
                     controls
@@ -852,7 +951,7 @@ export function CityApp() {
               onRefresh={refreshWorkspace}
             />
           ) : admin ? (
-            <CityAdmin />
+            <CityAdmin discoveryEnabled={discoveryEnabled} />
           ) : account ? (
             <section className="city-management">
               <header className="city-page-heading">
@@ -870,7 +969,9 @@ export function CityApp() {
                       className="city-account-place"
                       key={id}
                       onClick={async () => {
-                        if (p) select(p);
+                        const free = savedStorefronts.find((s) => s.id === id);
+                        if (free) navigate(`/city/business/${free.slug}`);
+                        else if (p) select(p);
                         else {
                           try {
                             const data = await cityCall<{
@@ -891,7 +992,9 @@ export function CityApp() {
                       }}
                     >
                       <BookmarkSimple size={20} />
-                      {p?.profile.name || "Open saved property"}
+                      {p?.profile.name ||
+                        savedStorefronts.find((s) => s.id === id)?.name ||
+                        "Open saved property"}
                       <ArrowUpRight size={18} />
                     </button>
                   );

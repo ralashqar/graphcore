@@ -67,7 +67,9 @@
     "build:city:kit": "node scripts/build-city-megakit.mjs",
     "test:city:branding": "node --experimental-strip-types --test src/domain/cityBranding.test.ts",
     "check:city:staging": "node scripts/city-staging-readiness.mjs",
-    "test:city:staging-payments": "node scripts/city-staging-payments.mjs"
+    "test:city:staging-payments": "node scripts/city-staging-payments.mjs",
+    "test:city:discovery": "node --experimental-strip-types --test src/domain/cityDiscovery.test.ts && node scripts/city-discovery-db-test.mjs",
+    "test:city:discovery:browser": "node scripts/city-discovery-browser.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",

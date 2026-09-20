@@ -4,6 +4,12 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City creator discovery (September 2026)
+
+The dedicated City API and command boundary add approved free storefronts, constrained image/text samples, curated trails, private progress/follows/saved launches, revision-reviewed launch windows and separate discovery metrics. `CITY_DISCOVERY_ENABLED` defaults off. The additive `20260920152544_city_discovery.sql` migration retains paid allocation and billing behavior while allowing approved free business claims/bookmarks. New RLS tables deny direct client access; service-only mutations enforce actor, owner/operator and revision checks. Deploy the City Edge entries with their shared helper; world/game Fly workers do not execute these modules. Local verification is documented separately from pending hosted staging, Stripe and real pilot acceptance in [docs/synarc-city-discovery.md](docs/synarc-city-discovery.md). No AI inference, emails or paid production actions are introduced.
+
+
+
 ### Synarc City marketplace (September 2026)
 
 The city presentation now uses a vendored CC0 Downtown MegaKit subset, reproducible Blender/glTF Transform baking, 24 m plots in four-plot blocks and connected road junctions. Shared coordinate conversion preserves backend ranking and region contracts. Instanced building variants retain near/far detail and landscaped setbacks. This is frontend/asset work only: no Edge/Fly rollout or schema change. See [asset pipeline and layout](docs/synarc-city-megakit.md).

@@ -21,6 +21,7 @@ export type CityProfile = {
   hero: string;
   billboard?: string;
   billboardCrop?: { x: number; y: number; zoom: number };
+  sample?: import('./cityDiscovery').CitySample | null;
   video: string;
   offer: {
     title: string;
@@ -59,6 +60,7 @@ export type CitySnapshot = {
   events: CityEvent[];
   purchasesEnabled: boolean;
   onboardingEnabled: boolean;
+  discoveryEnabled?: boolean;
   termsUrl?: string | null;
   demo?: boolean;
 };

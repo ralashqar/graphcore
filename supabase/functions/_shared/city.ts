@@ -64,6 +64,30 @@ export const profileSchema = z
       .strict()
       .optional(),
     video: media,
+    sample: z
+      .object({
+        kind: z.enum(["comparison", "gallery", "guided"]),
+        title: z.string().trim().min(1).max(100),
+        items: z
+          .array(
+            z
+              .object({
+                label: z.string().trim().min(1).max(80),
+                image: media.refine((v) => !v || !v.endsWith(".mp4")),
+                description: z.string().max(500),
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(5),
+      })
+      .strict()
+      .refine(
+        (v) => v.kind !== "comparison" || (v.items.length === 2 && v.items.every((item) => Boolean(item.image))),
+        "Comparisons need two images",
+      )
+      .nullable()
+      .optional(),
     offer: z
       .object({
         title: z.string().trim().max(100),
@@ -85,6 +109,7 @@ export function parseProfile(value: unknown, userId: string) {
     profile.hero,
     profile.video,
     profile.billboard,
+    ...(profile.sample?.items.map((i) => i.image) || []),
   ])
     if (path && !path.startsWith(`${userId}/`))
       throw new HttpError(403, "Media must belong to this account.");
@@ -142,6 +167,24 @@ export async function signProfile(
         .createSignedUrl(copy[key] as string, 3600);
       copy[key] = signed.data?.signedUrl || "";
     }
+  if (copy.sample && typeof copy.sample === "object") {
+    const sample = copy.sample as { items: { image: string }[] };
+    copy.sample = {
+      ...sample,
+      items: await Promise.all(
+        sample.items.map(async (item) => ({
+          ...item,
+          image: item.image
+            ? (
+                await db.storage
+                  .from("city-media")
+                  .createSignedUrl(item.image, 3600)
+              ).data?.signedUrl || ""
+            : "",
+        })),
+      ),
+    };
+  }
   return copy;
 }
 export async function listing(db: CityDB, row: Record<string, unknown>) {
@@ -164,9 +207,12 @@ export async function listings(db: CityDB, rows: any[]) {
   const paths = [
     ...new Set(
       rows.flatMap((row) =>
-        ["logo", "hero", "video", "billboard"]
-          .map((key) => row.profile[key])
-          .filter((p): p is string => typeof p === "string" && !!p),
+        [
+          ...["logo", "hero", "video", "billboard"].map(
+            (key) => row.profile[key],
+          ),
+          ...(row.profile.sample?.items || []).map((i: any) => i.image),
+        ].filter((p): p is string => typeof p === "string" && !!p),
       ),
     ),
   ];
@@ -183,6 +229,14 @@ export async function listings(db: CityDB, rows: any[]) {
     };
     for (const key of ["logo", "hero", "video", "billboard"])
       profile[key] = urls.get(profile[key]) || "";
+    if (profile.sample)
+      profile.sample = {
+        ...profile.sample,
+        items: profile.sample.items.map((i: any) => ({
+          ...i,
+          image: urls.get(i.image) || "",
+        })),
+      };
     return {
       id: row.business_id,
       slug: row.slug,
