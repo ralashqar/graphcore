@@ -21,6 +21,7 @@ export const campusSchema = z
               "launch",
             ]),
             confirmedPair: z.boolean(),
+            dealId: z.string().uuid().optional(),
             items: z
               .array(
                 z

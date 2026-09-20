@@ -239,6 +239,7 @@ export default function CityScene({
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
         {pavilion && <CityPavilion {...pavilion} />}
+        {visible.filter(p=>p.hasDeal).slice(0,40).map(p=><Html key={`deal-${p.id}`} center position={[position(p.x), 19, position(p.z)]}><button className="city-deal-pin" aria-label={`City deal at ${p.profile.name}`} onClick={()=>onSelect(p)}>✦ Deal</button></Html>)}
         {trailMarkers?.map((p) => (
           <Html key={p.id} center position={[position(p.x), 15, position(p.z)]}>
             <span className="city-trail-pin">{p.number}</span>

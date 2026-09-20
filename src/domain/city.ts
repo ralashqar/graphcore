@@ -33,6 +33,7 @@ export type CityProfile = {
   };
 };
 export type CityProperty = {
+  hasDeal?: boolean;
   id: string;
   slug: string;
   profile: CityProfile;
@@ -63,6 +64,7 @@ export type CitySnapshot = {
   onboardingEnabled: boolean;
   discoveryEnabled?: boolean;
   campusEnabled?: boolean;
+  dealsEnabled?: boolean;
   setupEnabled?: boolean;
   termsUrl?: string | null;
   demo?: boolean;

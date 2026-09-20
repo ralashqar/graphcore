@@ -4,6 +4,13 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City Deals and campus offer references (September 2026)
+
+The City branch adds service-only transactional coupon allocation, signed-in entitlements, merchant deal review, a consumer wallet and audited merchant-reported redemption corrections. `CITY_DEALS_ENABLED` defaults off. Deal inventory and metrics remain separate from Land Value, Stripe purchases and legacy public offers. The URL setup planner cannot create commercial terms, codes or entitlements; typed offer exhibits optionally carry owner-selected `dealId` references, and worker assembly preserves those references during refinement. Worker version is `2026-09-20-city-deals-1`.
+
+The additive migration and Edge/Fly rollout are staged, not deployed or enabled by this implementation. Shared schema/City helper changes require the affected City Edge bundles and world worker to be released together. No generation budget or provider request is introduced. Local verification, known pilot limits and hosted checkout/concurrency acceptance requirements are documented in [docs/synarc-city-deals.md](docs/synarc-city-deals.md).
+
+
 ### City URL-to-campus setup (September 2026)
 
 City profiles now support versioned multi-exhibit campuses, published atomically with the existing profile review. A dedicated `city_setup` Fly job family performs bounded protected website extraction, typed gateway planning, owned media import, deterministic assembly and candidate validation. Saved stages/responses, revision fencing, global one-job leasing, heartbeats and uncertainty reconciliation protect retries and edits. `CITY_CAMPUS_ENABLED` and `CITY_SETUP_ENABLED` default off; `CITY_SETUP_MODEL` and verified input/output USD-per-million pricing are required. A separate disabled $20 provider budget and $1 per-request ceiling cover one setup and two refinements per business; no app-credit charges, Runpod requests or live visitor inference are introduced. Migration `20260920160701_city_campus.sql` adds RLS-protected revisions/jobs/budget/metrics. Deploy City API/command and the Fly world worker together. Local tests pass; staging/provider acceptance and the existing broad-worker Deno limitations are documented in [docs/synarc-city-campus.md](docs/synarc-city-campus.md). No hosted activation was performed.

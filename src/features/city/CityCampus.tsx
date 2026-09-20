@@ -1,3 +1,4 @@
+import { CityDeals } from "./CityDeals";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { CityProfile } from "../../domain/city";
 import { activeOffer } from "../../domain/city";
@@ -27,7 +28,7 @@ export function CampusPreview({
   selected?: string;
   onSelect?: (id: string) => void;
   onEvent?: (id: string, kind: string) => void;
-  footer?: (kind: string) => React.ReactNode;
+  footer?: (kind: string, dealId?: string) => React.ReactNode;
 }) {
   const campus = legacyCampus(profile),
     [local, setLocal] = useState(campus.primaryId),
@@ -81,7 +82,7 @@ export function CampusPreview({
               onEvent={(kind) => onEvent(current.id, kind)}
             />
           )}
-          {current && footer?.(current.kind)}
+          {current && footer?.(current.kind, current.dealId)}
           {current && !["offer", "launch"].includes(current.kind) && (
             <a
               href={profile.website}
@@ -131,11 +132,13 @@ export default function CityCampus({
   demo,
   userId,
   onAuth,
+  dealsEnabled = false,
 }: {
   path: string;
   demo: boolean;
   userId?: string;
   onAuth: () => void;
+  dealsEnabled?: boolean;
 }) {
   const slug = decodeURIComponent(path.split("/")[3] || ""),
     station = path.split("/")[5];
@@ -267,6 +270,7 @@ export default function CityCampus({
             This exhibit is no longer here. Explore the current exhibits below.
           </p>
         )}
+      {dealsEnabled && data && !legacyCampus(data.profile).exhibits.some(e=>e.kind==="offer") && <CityDeals businessId={data.businessId} userId={userId} onAuth={onAuth} demo={demo}/>}
       {data && (
         <CampusPreview
           profile={data.profile}
@@ -277,10 +281,11 @@ export default function CityCampus({
             )
           }
           onEvent={track}
-          footer={(kind) =>
+          footer={(kind, dealId) =>
             kind === "offer" ? (
               <>
-                <h3>{data.profile.offer.title || "No current offer"}</h3>
+                {dealsEnabled && <CityDeals key={dealId || data.businessId} businessId={data.businessId} dealId={dealId} userId={userId} onAuth={onAuth} demo={demo}/>}
+                <h3>{data.profile.offer.title ? "Public offer: " + data.profile.offer.title : ""}</h3>
                 <p>{data.profile.offer.description}</p>
                 {activeOffer(data.profile) && (
                   <button

@@ -1,3 +1,4 @@
+import { CityDeals } from "./CityDeals";
 import { enterCampus } from "./CityCampus";
 import {
   lazy,
@@ -301,9 +302,10 @@ export function CityDiscovery({
           onEvent={(kind) => track(kind, b.id, entry?.id)}
         />
       )}
+      {snapshot?.dealsEnabled && <CityDeals businessId={b.id} userId={userId} onAuth={onAuth} demo={demo}/>}
       {activeOffer(b.profile) && (
         <section className="city-offer">
-          <h3>{b.profile.offer.title}</h3>
+          <h3>Public offer: {b.profile.offer.title}</h3>
           <p>{b.profile.offer.description}</p>
           {b.profile.offer.expiresAt && (
             <small>

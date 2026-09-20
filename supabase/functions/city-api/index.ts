@@ -1,3 +1,4 @@
+import { deals } from "../_shared/city-deals.ts";
 import { campus } from "../_shared/city-campus.ts";
 import { discovery } from "../_shared/city-discovery.ts";
 import { z } from "npm:zod@4";
@@ -28,6 +29,7 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== "POST") throw new HttpError(405, "Use POST.");
     const raw = await request.json();
+    if (String(raw.action).startsWith("deal_")) return json(await deals(request,raw), {headers:{"Cache-Control":"private, no-store"}});
     if (["campus_public", "campus_workspace"].includes(raw.action)) return json(await campus(request,raw));
     if (
       ["discovery_catalog", "discovery_workspace", "discovery_share"].includes(
@@ -151,6 +153,7 @@ Deno.serve(async (request) => {
         onboardingEnabled: flag("CITY_ONBOARDING_ENABLED"),
         discoveryEnabled: flag("CITY_DISCOVERY_ENABLED"),
         campusEnabled: flag("CITY_CAMPUS_ENABLED"),
+        dealsEnabled: flag("CITY_DEALS_ENABLED"),
         setupEnabled: flag("CITY_SETUP_ENABLED"),
         termsUrl: Deno.env.get("CITY_TERMS_URL") || null,
       });

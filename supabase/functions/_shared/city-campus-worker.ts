@@ -267,9 +267,13 @@ export async function processCitySetup(
     }
     await checkpoint("checkpoint", { stage: "assemble" });
     const plan = job.plan;
+    const prior = legacyCampus(job.input.profile);
     const changed = plan.exhibits.map((e: any) => ({
       ...e,
       confirmedPair: false,
+      ...(e.kind === "offer" && prior.exhibits.find((v) => v.id === e.id)?.dealId
+        ? { dealId: prior.exhibits.find((v) => v.id === e.id)!.dealId }
+        : {}),
       items: e.items.map((i: any) => {
         const image = manifest.images[i.imageIndex];
         return {
@@ -280,7 +284,6 @@ export async function processCitySetup(
         };
       }),
     }));
-    const prior = legacyCampus(job.input.profile);
     const exhibits =
       job.kind === "refine"
         ? [

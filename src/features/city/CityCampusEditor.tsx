@@ -1,3 +1,4 @@
+import { DealExhibitPicker } from "./CityDealStudio";
 import { useEffect, useState } from "react";
 import type { CityBusiness, CityProfile } from "../../domain/city";
 import {
@@ -256,6 +257,7 @@ export function CityCampusEditor({
             ))}
           </select>
         </label>
+        {selected.kind === "offer" && <DealExhibitPicker businessId={business.id} value={selected.dealId} onChange={dealId=>update({dealId})}/>}
         {selected.kind === "comparison" && (
           <label>
             <input

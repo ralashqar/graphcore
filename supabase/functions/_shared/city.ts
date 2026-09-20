@@ -213,6 +213,8 @@ export async function listing(db: CityDB, row: Record<string, unknown>) {
   };
 }
 export async function listings(db: CityDB, rows: any[]) {
+  const activeDeals = flag("CITY_DEALS_ENABLED") && rows.length ? result(await db.from("city_deals").select("business_id,terms,quantity,issued").in("business_id",rows.map(r=>r.business_id)).eq("status","approved").eq("paused",false).eq("ended",false)) || [] : [];
+  const deals = new Set(activeDeals.filter((d:any)=>d.quantity>d.issued && Date.parse(d.terms.startsAt)<=Date.now() && Date.parse(d.terms.endsAt)>Date.now()).map((d:any)=>d.business_id));
   const paths = [
     ...new Set(
       rows.flatMap((row) =>
@@ -249,6 +251,7 @@ export async function listings(db: CityDB, rows: any[]) {
       };
     return {
       id: row.business_id,
+      hasDeal: deals.has(row.business_id),
       slug: row.slug,
       profile,
       landValue: Number(row.land_value),

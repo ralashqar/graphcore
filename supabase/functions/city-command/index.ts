@@ -1,3 +1,4 @@
+import { deals } from "../_shared/city-deals.ts";
 import { campus } from "../_shared/city-campus.ts";
 import { discovery } from "../_shared/city-discovery.ts";
 import { z } from "npm:zod@4";
@@ -67,6 +68,7 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if (action.startsWith("deal_")) return json(await deals(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("campus_")) return json(await campus(request,data,true));
     if (action.startsWith("discovery_"))
       return json(await discovery(request, data, true));

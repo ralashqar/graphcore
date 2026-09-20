@@ -6,6 +6,7 @@ export type CityExhibit = {
   title: string;
   kind: ExhibitKind;
   confirmedPair: boolean;
+  dealId?: string;
   items: {
     label: string;
     image: string;

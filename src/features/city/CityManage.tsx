@@ -1,3 +1,4 @@
+import { CityDealStudio } from "./CityDealStudio";
 import { CityCampusEditor } from "./CityCampusEditor";
 import { CitySampleEditor } from "./CitySample";
 import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
@@ -640,6 +641,7 @@ export function CityManage({
           </section>
         </aside>
       </div>
+      {business && snapshot?.dealsEnabled && <CityDealStudio businessId={business.id}/>}
       {business && snapshot?.campusEnabled && <CityCampusEditor business={business} onRefresh={onRefresh}/>}
       {business?.published && snapshot?.discoveryEnabled && (
         <CityDiscoveryStudio businessId={business.id} />

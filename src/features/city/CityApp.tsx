@@ -1,3 +1,4 @@
+import { CityDeals, CityDealWallet } from "./CityDeals";
 import CityCampus, { enterCampus } from "./CityCampus";
 import { CityDiscovery } from "./CityDiscovery";
 import { CitySample } from "./CitySample";
@@ -468,7 +469,7 @@ export function CityApp() {
           </button>
         </div>
       )}
-      {campusRoute ? (campusEnabled ? <Suspense fallback={<main className="city-page">Opening business space…</main>}><CityCampus path={path} demo={demo.current} userId={session?.user.id} onAuth={()=>setAuth(true)}/></Suspense> : <main className="city-page">Business spaces are not open yet.</main>) : discoveryRoute ? (
+      {campusRoute ? (campusEnabled ? <Suspense fallback={<main className="city-page">Opening business space…</main>}><CityCampus dealsEnabled={snapshot?.dealsEnabled} path={path} demo={demo.current} userId={session?.user.id} onAuth={()=>setAuth(true)}/></Suspense> : <main className="city-page">Business spaces are not open yet.</main>) : discoveryRoute ? (
         discoveryEnabled ? (
           <CityDiscovery
             path={path}
@@ -778,9 +779,10 @@ export function CityApp() {
                     src={selected.profile.video}
                   />
                 )}
+                {snapshot?.dealsEnabled && <CityDeals key={selected.id} businessId={selected.id} userId={session?.user.id} onAuth={()=>setAuth(true)} demo={demo.current}/>}
                 {activeOffer(selected.profile) && (
                   <section className="city-offer">
-                    <span className="city-eyebrow">SOMETHING FOR YOU</span>
+                    <span className="city-eyebrow">PUBLIC OFFER</span>
                     <h3>{selected.profile.offer.title}</h3>
                     <p>{selected.profile.offer.description}</p>
                     {selected.profile.offer.expiresAt && (
@@ -955,13 +957,14 @@ export function CityApp() {
               onRefresh={refreshWorkspace}
             />
           ) : admin ? (
-            <CityAdmin discoveryEnabled={discoveryEnabled} />
+            <CityAdmin discoveryEnabled={discoveryEnabled} dealsEnabled={snapshot?.dealsEnabled} />
           ) : account ? (
             <section className="city-management">
               <header className="city-page-heading">
                 <p className="city-eyebrow">YOUR NEIGHBOURHOOD</p>
                 <h1>Places worth coming back to.</h1>
               </header>
+              {snapshot?.dealsEnabled && <CityDealWallet key={session.user.id}/>}
               <h2>Saved businesses</h2>
               {workspace.saved.length ? (
                 workspace.saved.map((id) => {
@@ -1006,7 +1009,7 @@ export function CityApp() {
               ) : (
                 <p>Save a business while exploring and it will appear here.</p>
               )}
-              <h2>Offer history</h2>
+              <h2>Public offer history</h2>
               {workspace.claims.length ? (
                 workspace.claims.map((c, i) => (
                   <p key={`${c.business_id}-${i}`}>

@@ -325,3 +325,50 @@ Deno.test(
     }
   },
 );
+
+Deno.test("refinement preserves a manually linked deal without letting the model author entitlements", async () => {
+  Deno.env.set("CITY_SETUP_ENABLED", "true");
+  Deno.env.set("CITY_CAMPUS_ENABLED", "true");
+  const f = fixture(), dealId = "88888888-8888-4888-8888-888888888888";
+  f.get().kind = "refine";
+  f.get().input.profile = {
+    ...profile,
+    campus: {
+      version: 1,
+      layout: "courtyard",
+      primaryId: "rewards",
+      exhibits: [{
+        id: "rewards",
+        title: "Rewards",
+        kind: "offer",
+        items: [],
+        confirmedPair: false,
+        dealId,
+      }],
+    },
+  };
+  try {
+    await processCitySetup(f.client, "fixture", {
+      extract: async () => ({ pages: [], images: [], warnings: [] }),
+      plan: async () => ({
+        response: new Response("{}"),
+        body: { usage: { input_tokens: 20, output_tokens: 20 } },
+        id: "deal-refine",
+        outputText: JSON.stringify({
+          ...plan,
+          exhibits: [{
+            id: "rewards",
+            title: "Creator rewards",
+            kind: "offer",
+            items: [],
+          }],
+        }),
+      } as any),
+    });
+    assert.equal(f.get().status, "ready");
+    assert.equal(f.get().candidate.profile.campus.exhibits[0].dealId, dealId);
+  } finally {
+    Deno.env.delete("CITY_SETUP_ENABLED");
+    Deno.env.delete("CITY_CAMPUS_ENABLED");
+  }
+});
