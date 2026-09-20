@@ -63,6 +63,8 @@ try{
   const i=route.request().postDataJSON();actions.push(i);const reply=json=>route.fulfill({json});
   switch(i.action){
    case 'snapshot':return reply({revision:1,capacity:400,total:1,properties:[property],events:[],discoveryEnabled:true,campusEnabled:true,dealsEnabled:true,customerDiscoveryEnabled:true});
+   case 'customer_nearby':return reply({items:[item]});
+   case 'customer_destination':return reply({items:[item]});
    case 'customer_search':return reply({items:(!i.query||'free editor trial'.includes(i.query))?[item]:[],hasMore:false,categories:['Creators'],now:new Date().toISOString(),revision:1});
    case 'customer_activity':return reply({items:[{key:item.key,label:'Campus Studio: Free editor trial · 10 codes available',destination:item.destination}]});
    case 'customer_resolve':return reply(item);
@@ -79,7 +81,7 @@ try{
  });
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  const started=Date.now();await page.goto(origin+'/city');
- await page.getByRole('heading',{name:'Find your next good thing.'}).waitFor();
+ await page.getByRole('heading',{name:'Discover what’s happening here.'}).waitFor();
  const usefulContentMs=Date.now()-started;
  await page.getByRole('button',{name:'Save deal',exact:true}).click();
  assert.equal(actions.filter(a=>a.action==='deal_claim').length,0);
@@ -102,6 +104,11 @@ try{
  await page.getByRole('button',{name:'My deals, 1 active'}).waitFor();
  assert.ok(actions.some(a=>a.action==='customer_merge'),'guest save merged');
  await mkdir('output/playwright',{recursive:true});
+ await page.waitForTimeout(2500);
+ const labelBox=await page.locator('.city-map-label.is-selected').boundingBox();
+ const searchBox=await page.locator('.city-discovery').boundingBox();
+ const dealBox=await page.locator('.city-linked-deal').boundingBox();
+ assert.ok(labelBox && searchBox && dealBox && labelBox.x>searchBox.x+searchBox.width && labelBox.x+labelBox.width<dealBox.x,'selected building framed between panels');
  await page.screenshot({path:'output/playwright/city-customer-desktop.png'});
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'no mobile horizontal overflow');

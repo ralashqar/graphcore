@@ -1,6 +1,13 @@
+import {
+  BusinessDestination,
+  CityAbout,
+  TakeoverResult,
+  useClearCityViewport,
+} from "./CityLanding";
+import { initialWelcome } from "../../domain/cityLanding";
 import { CityMarketBoard } from "./CityMarket";
 import type { MarketPlayback } from "./CityMarketMotion";
-import { marketHeadline } from "../../domain/cityMarket";
+import { type MarketEvent, marketHeadline } from "../../domain/cityMarket";
 import {
   CustomerDiscovery,
   CustomerProvider,
@@ -24,7 +31,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   BookmarkSimple,
-  Buildings,
   Compass,
   House,
   List,
@@ -70,6 +76,35 @@ const blankWorkspace: CityWorkspace = {
 };
 
 export function CityApp() {
+  const [welcome, setWelcome] = useState(() => {
+    try {
+      return initialWelcome(
+        localStorage,
+        location.pathname,
+        sessionStorage.getItem("city-discovery-query") || "",
+      );
+    } catch {
+      return location.pathname === "/city";
+    }
+  });
+  const [about, setAbout] = useState<"city" | "business" | null>(null);
+  const [marketOpen, setMarketOpen] = useState(0);
+  const [lastMarketEvent, setLastMarketEvent] = useState<MarketEvent | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!lastMarketEvent) return;
+    const timer = setTimeout(() => setLastMarketEvent(null), 20000);
+    return () => clearTimeout(timer);
+  }, [lastMarketEvent]);
+  const [centralLeader, setCentralLeader] = useState<CityProperty | null>(null);
+  const explore = useCallback(() => {
+    setWelcome(false);
+    try {
+      localStorage.setItem("city-explored-v1", "1");
+    } catch {}
+  }, []);
+
   const [sceneReady, setSceneReady] = useState(false);
   const [queuedPlayback, setQueuedPlayback] = useState<MarketPlayback | null>(
     null,
@@ -102,6 +137,9 @@ export function CityApp() {
     [results, setResults] = useState<CityProperty[]>([]),
     [session, setSession] = useState<Session | null>(null),
     [workspace, setWorkspace] = useState<CityWorkspace>(blankWorkspace);
+  useEffect(() => {
+    if (path !== "/city") explore();
+  }, [path, explore]);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [auth, setAuth] = useState(false),
@@ -126,6 +164,8 @@ export function CityApp() {
   const [customerMatches, setCustomerMatches] = useState<string[] | null>(null);
   const [sheetCollapsed, setSheetCollapsed] = useState(false);
   useEffect(() => setSheetCollapsed(false), [path]);
+  const [nearbyMarkers, setNearbyMarkers] = useState<CustomerItem[]>([]);
+  const [nearbyCenter, setNearbyCenter] = useState({ x: 0, z: 0 });
   const [customerMarkers, setCustomerMarkers] = useState<CustomerItem[]>([]);
   const updateCustomerResults = useCallback(
     (items: CustomerItem[], filtered: boolean, matches?: string[]) => {
@@ -138,6 +178,27 @@ export function CityApp() {
   );
   const [linkedDeal, setLinkedDeal] = useState<CustomerItem | null>(null);
   const customerEnabled = !!snapshot?.customerDiscoveryEnabled;
+  const viewport = useClearCityViewport(
+    `${welcome}:${path}:${snapshot?.marketEnabled}:${!!selected}:${sceneReady}`,
+  );
+  useEffect(() => {
+    if (!customerEnabled) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void cityCall<{ items: CustomerItem[] }>("city-api", {
+        action: "customer_nearby",
+        ...nearbyCenter,
+      }).then((r) => {
+        if (live) setNearbyMarkers(r.items || []);
+      }).catch(() => {
+        if (live) setNearbyMarkers([]);
+      });
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [customerEnabled, nearbyCenter.x, nearbyCenter.z, snapshot?.revision]);
   const dealRoute = path.startsWith("/city/deal/");
   useEffect(() => {
     if (!dealRoute || !customerEnabled) {
@@ -198,8 +259,18 @@ export function CityApp() {
       ? `${selected.profile.name} | Synarc City`
       : "Synarc City | Discover your next favourite";
   }, [selected?.profile.name]);
-  const navigate = (url: string) =>
-    cityNavigate(url + (demo.current ? "?demo=1" : ""));
+  const navigate = (url: string) => {
+    const target = new URL(url, location.origin);
+    if (demo.current) target.searchParams.set("demo", "1");
+    cityNavigate(target.pathname + target.search + target.hash);
+  };
+  const reportExposure = useCallback(
+    (ids: string[], kind: "canvas" | "card") => {
+      if (!snapshot?.exposureEnabled || demo.current) return;
+      void cityCommand("market_exposure", { ids, kind }).catch(() => {});
+    },
+    [snapshot?.exposureEnabled],
+  );
   const refreshWorkspace = useCallback(async () => {
     const userId = sessionUser.current;
     if (demo.current || !userId) return;
@@ -410,11 +481,17 @@ export function CityApp() {
   const onRegion = useCallback(
     (x: number, z: number) => {
       region.current = { x, z };
+      setNearbyCenter((previous) =>
+        Math.abs(previous.x - x) > 2 || Math.abs(previous.z - z) > 2
+          ? { x, z }
+          : previous
+      );
       if (!demo.current) void refresh();
     },
     [refresh],
   );
   function select(p: CityProperty, source = "city") {
+    explore();
     setSelected(p);
     setQuery("");
     setClaim(null);
@@ -479,12 +556,14 @@ export function CityApp() {
       onAuth={() => setAuth(true)}
     >
       <div
-        className={`city-app ${customerEnabled ? "city-customer-enabled" : ""}`}
+        className={`city-app ${
+          customerEnabled ? "city-customer-enabled" : ""
+        } ${welcome ? "city-landing-welcome" : "city-landing-compact"}`}
       >
         <header className="city-header">
           <a className="city-wordmark" href="/" aria-label="Synarc home">
             <span className="city-brand-symbol">
-              <Buildings weight="fill" size={25} />
+              <img src="/brand/synarc-logo.png" alt="" />
             </span>
             synarc<span className="city-wordmark-divider">/</span>
             <span>city</span>
@@ -504,6 +583,16 @@ export function CityApp() {
               <BookmarkSimple size={18} />
               Saved places
             </button>
+            {(snapshot?.marketEnabled || demo.current) && (
+              <button
+                onClick={() => {
+                  navigate("/city");
+                  setMarketOpen((v) => v + 1);
+                }}
+              >
+                Top spots
+              </button>
+            )}
             {discoveryEnabled && (
               <button onClick={() => navigate("/city/discover")}>
                 Discover
@@ -516,6 +605,9 @@ export function CityApp() {
             )}
           </nav>
           <div className="city-header-actions">
+            <button className="city-about-nav" onClick={() => setAbout("city")}>
+              About City
+            </button>
             <button
               className="city-mobile-saves"
               aria-label="Saved places"
@@ -654,6 +746,13 @@ export function CityApp() {
                     >
                       <CityScene
                         onReady={markSceneReady}
+                        viewport={viewport}
+                        central={centralLeader ||
+                          snapshot.properties.find((p) => p.rank === 1) || null}
+                        onExplore={explore}
+                        onExposure={snapshot.exposureEnabled && !demo.current
+                          ? reportExposure
+                          : undefined}
                         playback={marketPlayback}
                         pavilion={snapshot.discoveryEnabled || demo.current
                           ? {}
@@ -694,7 +793,9 @@ export function CityApp() {
                           ]
                           : snapshot.properties}
                         matches={customerMatches}
-                        markers={customerEnabled ? customerMarkers : undefined}
+                        markers={customerEnabled
+                          ? (customerMatches ? customerMarkers : nearbyMarkers)
+                          : undefined}
                         onDiscoverySelect={(item) => navigate(item.destination)}
                         capacity={snapshot.capacity}
                         selected={selected}
@@ -714,13 +815,21 @@ export function CityApp() {
               </div>
               {(snapshot?.marketEnabled || demo.current) && snapshot && (
                 <CityMarketBoard
+                  openToken={marketOpen}
+                  onLeader={setCentralLeader}
+                  onExposure={reportExposure}
+                  exposureEnabled={!!snapshot.exposureEnabled && !demo.current}
                   demoProperties={demo.current
                     ? snapshot.properties
                     : undefined}
                   revision={snapshot.revision}
                   onSelect={(p) => select(p, "paid_top_spots")}
-                  onChallenge={() => navigate("/city/manage")}
+                  onChallenge={() => {
+                    explore();
+                    navigate("/city/manage?challenge=1#city-next-move");
+                  }}
                   onTransition={(event, replay) => {
+                    setLastMarketEvent(event);
                     if (replay) {
                       setSelected(null);
                       setHome((h) => h + 1);
@@ -733,6 +842,21 @@ export function CityApp() {
                   }}
                 />
               )}
+              {lastMarketEvent && !marketPlayback && (
+                <TakeoverResult
+                  event={lastMarketEvent}
+                  onClose={() => setLastMarketEvent(null)}
+                  onReplay={() => {
+                    setSelected(null);
+                    setHome((h) => h + 1);
+                    setMarketPlayback({
+                      event: lastMarketEvent,
+                      started: performance.now(),
+                      replay: true,
+                    });
+                  }}
+                />
+              )}
               {marketPlayback && (
                 <div className="city-market-replay" role="status">
                   {marketPlayback.replay
@@ -741,19 +865,39 @@ export function CityApp() {
                   {marketHeadline(marketPlayback.event)}
                 </div>
               )}
-              <aside className="city-discovery">
-                {customerEnabled
+              <aside
+                className="city-discovery"
+                onClickCapture={(e) => {
+                  if (
+                    (e.target as HTMLElement).closest(
+                      "input,select,.city-property-row,.city-customer-result",
+                    )
+                  ) explore();
+                }}
+              >
+                {(customerEnabled || demo.current)
                   ? (
                     <CustomerDiscovery
+                      demoProperties={demo.current
+                        ? snapshot?.properties
+                        : undefined}
+                      onExplore={explore}
                       query={query}
-                      onQuery={setQuery}
+                      onQuery={(value) => {
+                        explore();
+                        setQuery(value);
+                      }}
                       onResults={updateCustomerResults}
-                      onChoose={(item) =>
+                      onChoose={(item) => {
+                        explore();
                         navigate(
                           item.destination +
-                            "?source=" +
+                            (item.destination.includes("?")
+                              ? "&source="
+                              : "?source=") +
                             (item.kind === "deal" ? "deal" : "organic"),
-                        )}
+                        );
+                      }}
                     />
                   )
                   : (
@@ -764,14 +908,11 @@ export function CityApp() {
                           A NEW KIND OF HIGH STREET
                         </p>
                         <h1>
-                          Good things
-                          <br />
-                          live here.
+                          Discover what’s happening here.
                         </h1>
                         <p>
-                          Discover your next favourite.
-                          <br />
-                          One neighbourhood at a time.
+                          Explore businesses, exclusive deals, new launches and
+                          experiences.
                         </p>
                       </div>
                       <label className="city-search">
@@ -892,6 +1033,12 @@ export function CityApp() {
                       </div>
                     </>
                   )}
+                <div className="city-welcome-footer">
+                  <button onClick={() => setAbout("business")}>
+                    For businesses: build your place ↗
+                  </button>
+                  {welcome && <button onClick={explore}>Explore city</button>}
+                </div>
               </aside>
               {dealRoute && linkedDeal && (
                 <aside
@@ -1020,6 +1167,25 @@ export function CityApp() {
                     </div>
                     <h2>{selected.profile.name}</h2>
                     <p className="city-tagline">{selected.profile.tagline}</p>
+                    <BusinessDestination
+                      key={selected.id}
+                      property={selected}
+                      enabled={customerEnabled && !demo.current}
+                      onChoose={(item) => {
+                        explore();
+                        navigate(
+                          item.destination +
+                            (item.destination.includes("?") ? "&" : "?") +
+                            "source=organic",
+                        );
+                      }}
+                      onEnter={campusEnabled
+                        ? () => {
+                          explore();
+                          enterCampus(selected.slug, demo.current);
+                        }
+                        : undefined}
+                    />
                     <div className="city-property-stats">
                       <div>
                         <strong>{formatGBP(selected.landValue)}</strong>
@@ -1030,15 +1196,16 @@ export function CityApp() {
                         <small>Property type</small>
                       </div>
                     </div>
-                    <p>{selected.profile.description}</p>
-                    {campusEnabled && (
-                      <button
-                        className="city-primary"
-                        onClick={() => enterCampus(selected.slug, demo.current)}
-                      >
-                        Enter business space ↗
-                      </button>
+                    {snapshot?.dealsEnabled && (
+                      <CityDeals
+                        key={selected.id}
+                        businessId={selected.id}
+                        userId={session?.user.id}
+                        onAuth={() => setAuth(true)}
+                        demo={demo.current}
+                      />
                     )}
+                    <p>{selected.profile.description}</p>
                     {discoveryEnabled && (
                       <button
                         aria-pressed={followingIds.includes(selected.id)}
@@ -1092,15 +1259,6 @@ export function CityApp() {
                         preload="none"
                         poster={selected.profile.hero || undefined}
                         src={selected.profile.video}
-                      />
-                    )}
-                    {snapshot?.dealsEnabled && (
-                      <CityDeals
-                        key={selected.id}
-                        businessId={selected.id}
-                        userId={session?.user.id}
-                        onAuth={() => setAuth(true)}
-                        demo={demo.current}
                       />
                     )}
                     {activeOffer(selected.profile) && (
@@ -1389,6 +1547,16 @@ export function CityApp() {
                 : <p>Page not found.</p>}
             </main>
           )}
+        {about && (
+          <CityAbout
+            business={about === "business"}
+            onClose={() => setAbout(null)}
+            onBuild={() => {
+              setAbout(null);
+              navigate("/city/manage");
+            }}
+          />
+        )}
         {auth && (
           <CityAuth
             onClose={() => setAuth(false)}

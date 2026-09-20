@@ -1,10 +1,11 @@
+import { useCardExposure } from "./CityLanding";
 import { useEffect, useRef, useState } from "react";
-import { CITY_TIERS, formatGBP, type CityProperty } from "../../domain/city";
+import { CITY_TIERS, type CityProperty, formatGBP } from "../../domain/city";
 import {
-  marketHeadline,
   type CityMarket,
-  type MarketEvent,
   type CityQuote,
+  type MarketEvent,
+  marketHeadline,
 } from "../../domain/cityMarket";
 import { cityCall, cityCommand, downloadCityCard } from "./api";
 import { CityDialog } from "./CityAuth";
@@ -21,7 +22,15 @@ export function CityMarketBoard({
   onChallenge,
   onTransition,
   demoProperties,
+  onLeader,
+  onExposure,
+  exposureEnabled = false,
+  openToken = 0,
 }: {
+  onLeader?: (p: CityProperty | null) => void;
+  onExposure?: (ids: string[], kind: "card") => void;
+  exposureEnabled?: boolean;
+  openToken?: number;
   demoProperties?: CityProperty[];
   revision: number;
   onSelect: (p: CityProperty) => void;
@@ -33,7 +42,7 @@ export function CityMarketBoard({
     [error, setError] = useState(""),
     [more, setMore] = useState(true),
     [busy, setBusy] = useState(false);
-  const loadedOlder=useRef(false);
+  const loadedOlder = useRef(false);
   const seen = useRef<number | null>(null),
     callback = useRef(onTransition);
   callback.current = onTransition;
@@ -56,19 +65,35 @@ export function CityMarketBoard({
         const next = await cityCall<CityMarket>("city-api", {
           action: "market_public",
         });
-        if (!active || (seen.current !== null && next.revision < seen.current))
+        if (
+          !active || (seen.current !== null && next.revision < seen.current)
+        ) {
           return;
+        }
         const latest = next.events[0];
         if (
           seen.current !== null &&
           latest &&
           latest.revision > seen.current &&
           Date.now() - Date.parse(latest.created_at) < 15000
-        )
+        ) {
           callback.current(latest);
+        }
         seen.current = next.revision;
-        setData(current=>current&&loadedOlder.current?{...next,events:[...next.events,...current.events.filter(e=>e.revision<(next.events.at(-1)?.revision??Infinity))]}:next);
-        if(!loadedOlder.current)setMore(next.events.length === 20);
+        setData((current) =>
+          current && loadedOlder.current
+            ? {
+              ...next,
+              events: [
+                ...next.events,
+                ...current.events.filter((e) =>
+                  e.revision < (next.events.at(-1)?.revision ?? Infinity)
+                ),
+              ],
+            }
+            : next
+        );
+        if (!loadedOlder.current) setMore(next.events.length === 20);
         setError("");
       } catch (e) {
         if (active) setError((e as Error).message);
@@ -103,10 +128,21 @@ export function CityMarketBoard({
     };
   }, []);
   const leader = data?.top[0];
+  useEffect(() => {
+    if (data) onLeader?.(leader || null);
+  }, [data, leader, onLeader]);
+  useEffect(() => {
+    if (openToken) setOpen(true);
+  }, [openToken]);
+  const card = useCardExposure(
+    leader?.id,
+    exposureEnabled,
+    onExposure || (() => {}),
+  );
   async function older() {
     if (!data || busy) return;
     setBusy(true);
-    loadedOlder.current=true;
+    loadedOlder.current = true;
     try {
       const next = await cityCall<CityMarket>("city-api", {
         action: "market_public",
@@ -115,15 +151,15 @@ export function CityMarketBoard({
       setData((current) =>
         current
           ? {
-              ...current,
-              events: [
-                ...current.events,
-                ...next.events.filter(
-                  (e) => !current.events.some((c) => c.revision === e.revision),
-                ),
-              ],
-            }
-          : current,
+            ...current,
+            events: [
+              ...current.events,
+              ...next.events.filter(
+                (e) => !current.events.some((c) => c.revision === e.revision),
+              ),
+            ],
+          }
+          : current
       );
       setMore(next.events.length === 20);
     } catch (e) {
@@ -134,24 +170,28 @@ export function CityMarketBoard({
   }
   return (
     <>
-      <section className="city-market-leader" aria-label="Paid city positions">
+      <section
+        ref={card}
+        className="city-market-leader"
+        aria-label="Paid city positions"
+      >
         <span className="city-eyebrow">CENTRAL PLAZA · SPONSORED LOCATION</span>
-        {leader ? (
-          <>
-            <button
-              className="city-market-title"
-              onClick={() => onSelect(leader)}
-            >
-              #1 {leader.profile.name}
-            </button>
-            <small>
-              {formatGBP(leader.landValue)} City Value ·{" "}
-              {CITY_TIERS[leader.tier].name}
-            </small>
-          </>
-        ) : (
-          <strong>{error ? "Market unavailable" : "Central Plaza"}</strong>
-        )}
+        {leader
+          ? (
+            <>
+              <button
+                className="city-market-title"
+                onClick={() => onSelect(leader)}
+              >
+                #1 {leader.profile.name}
+              </button>
+              <small>
+                {formatGBP(leader.landValue)} City Value ·{" "}
+                {CITY_TIERS[leader.tier].name}
+              </small>
+            </>
+          )
+          : <strong>{error ? "Market unavailable" : "Central Plaza"}</strong>}
         <div>
           <button onClick={() => setOpen(true)}>Top spots & market feed</button>
           <button onClick={onChallenge}>Challenge #1 ↗</button>
@@ -183,9 +223,11 @@ export function CityMarketBoard({
                         .flatMap((e) => e.moves)
                         .find((m) => m.id === p.id);
                       return m?.before &&
-                        m.after &&
-                        m.before.rank !== m.after.rank
-                        ? ` · ${m.before.rank > m.after.rank ? "↑" : "↓"}${Math.abs(m.before.rank - m.after.rank)}`
+                          m.after &&
+                          m.before.rank !== m.after.rank
+                        ? ` · ${m.before.rank > m.after.rank ? "↑" : "↓"}${
+                          Math.abs(m.before.rank - m.after.rank)
+                        }`
                         : "";
                     })()}
                   </span>
@@ -202,11 +244,12 @@ export function CityMarketBoard({
                 {e.revision}
               </small>
               {e.moves
-                .filter((m) => m.id === e.initiator)
+                .filter((m) =>
+                  m.id === e.initiator
+                )
                 .map((m) => (
                   <p key={m.id}>
-                    {m.before ? `#${m.before.rank}` : "New arrival"} →{" "}
-                    {m.after
+                    {m.before ? `#${m.before.rank}` : "New arrival"} → {m.after
                       ? `#${m.after.rank} · ${formatGBP(m.after.value)}`
                       : "Unplaced"}
                   </p>
@@ -223,8 +266,7 @@ export function CityMarketBoard({
                 onClick={() =>
                   void navigator.clipboard
                     .writeText(`${location.origin}/city?market=${e.revision}`)
-                    .catch((err) => setError(String(err)))
-                }
+                    .catch((err) => setError(String(err)))}
               >
                 Copy event link
               </button>
@@ -247,7 +289,10 @@ export function CityMarketBoard({
             </article>
           ))}
           {more && (
-            <button disabled={busy} onClick={() => void older()}>
+            <button
+              disabled={busy}
+              onClick={() => void older()}
+            >
               Older events
             </button>
           )}
@@ -263,10 +308,11 @@ export function QuotePreview({
   quote: CityQuote | null;
   onAmount: (value: string) => void;
 }) {
-  if (!quote)
+  if (!quote) {
     return (
       <p>Enter a valid amount to request a city-wide position estimate.</p>
     );
+  }
   return (
     <div className="city-market-quote">
       <div className="city-market-ranks">
@@ -417,9 +463,14 @@ export function MerchantPosition({
           ? `#${data.place.rank} · ${CITY_TIERS[data.place.tier].name}`
           : "No paid position yet"}
       </h2>
-      {data?.place&&<p>{formatGBP(data.place.land_value)} City Value</p>}
+      {data?.place && <p>{formatGBP(data.place.land_value)} City Value</p>}
       <a href="#city-next-move">Increase City Value →</a>
-      {data?.categoryRank&&<p>#{data.categoryRank} by City Value in {data.category}. Category comparison; no separate district plot.</p>}
+      {data?.categoryRank && (
+        <p>
+          #{data.categoryRank} by City Value in{" "}
+          {data.category}. Category comparison; no separate district plot.
+        </p>
+      )}
       {data?.bestRank && <p>Best recorded position: #{data.bestRank}</p>}
       {data?.place && CITY_TIERS[data.place.tier + 1] && (
         <p>
@@ -429,12 +480,20 @@ export function MerchantPosition({
       )}
       <h3>Traffic sources · last 30 days</h3>
       <p>
-        Daily deduplicated interactions. These are property opens and outbound
-        clicks, not measured canvas exposure or attributed purchases.
+        Daily deduplicated observations. Scene exposure requires a readable
+        building with visible sampled surfaces for two seconds, excluding UI and
+        geometry occlusion. Card impressions are separate. Browser reports do
+        not prove human attention or purchases.
       </p>
       {data?.metrics?.map((m) => (
         <p key={m.source + m.kind}>
-          {m.source.replaceAll("_", " ")} · {m.kind}: {m.count}
+          {m.source.replaceAll("_", " ")} · {{
+            canvas_exposure: "Observed building exposure",
+            card_impression: "Leader card impressions",
+            view: "Property opens",
+            click: "Website clicks",
+            share: "Shares",
+          }[m.kind] || m.kind}: {m.count}
         </p>
       ))}
       <h3>Position alerts</h3>
@@ -452,18 +511,17 @@ export function MerchantPosition({
                     setData((d) =>
                       d
                         ? {
-                            ...d,
-                            alerts: d.alerts.map((x) =>
-                              x.id === a.id
-                                ? { ...x, read_at: new Date().toISOString() }
-                                : x,
-                            ),
-                          }
-                        : d,
-                    ),
+                          ...d,
+                          alerts: d.alerts.map((x) =>
+                            x.id === a.id
+                              ? { ...x, read_at: new Date().toISOString() }
+                              : x
+                          ),
+                        }
+                        : d
+                    )
                   )
-                  .catch((e) => setError(e.message))
-              }
+                  .catch((e) => setError(e.message))}
             >
               Mark read
             </button>
@@ -474,8 +532,7 @@ export function MerchantPosition({
           type="checkbox"
           checked={prefs.lose_central}
           onChange={(e) =>
-            setPrefs((p) => ({ ...p, lose_central: e.target.checked }))
-          }
+            setPrefs((p) => ({ ...p, lose_central: e.target.checked }))}
         />{" "}
         Lose Central Plaza
       </label>
@@ -484,8 +541,7 @@ export function MerchantPosition({
           type="checkbox"
           checked={prefs.leave_top_ten}
           onChange={(e) =>
-            setPrefs((p) => ({ ...p, leave_top_ten: e.target.checked }))
-          }
+            setPrefs((p) => ({ ...p, leave_top_ten: e.target.checked }))}
         />{" "}
         Leave Top 10
       </label>
@@ -500,8 +556,7 @@ export function MerchantPosition({
             setPrefs((p) => ({
               ...p,
               below_rank: e.target.value ? Number(e.target.value) : null,
-            }))
-          }
+            }))}
         />
       </label>
       <button disabled={saving} onClick={() => void save()}>

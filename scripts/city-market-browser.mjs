@@ -5,15 +5,19 @@ import { mkdir, writeFile } from "node:fs/promises";
 const origin = process.env.CITY_TEST_ORIGIN || "http://127.0.0.1:5188";
 const userId = "11111111-1111-4111-8111-111111111111",
   businessId = "44444444-4444-4444-8444-444444444444";
-const jwt = `${Buffer.from(
-  JSON.stringify({ alg: "HS256", typ: "JWT" }),
-).toString("base64url")}.${Buffer.from(
-  JSON.stringify({
-    sub: userId,
-    role: "authenticated",
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  }),
-).toString("base64url")}.fixture`;
+const jwt = `${
+  Buffer.from(
+    JSON.stringify({ alg: "HS256", typ: "JWT" }),
+  ).toString("base64url")
+}.${
+  Buffer.from(
+    JSON.stringify({
+      sub: userId,
+      role: "authenticated",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+  ).toString("base64url")
+}.fixture`;
 const user = {
   id: userId,
   aud: "authenticated",
@@ -213,8 +217,10 @@ try {
       ),
     session,
   );
-  await context.route("**/auth/v1/**", (r) =>
-    r.fulfill({ json: r.request().url().includes("/user") ? user : session }),
+  await context.route(
+    "**/auth/v1/**",
+    (r) =>
+      r.fulfill({ json: r.request().url().includes("/user") ? user : session }),
   );
   await context.route("**/functions/v1/city-*", async (route) => {
     const i = route.request().postDataJSON();
@@ -229,6 +235,7 @@ try {
           properties: [rival, property],
           events: [],
           marketEnabled: true,
+          exposureEnabled: true,
           onboardingEnabled: true,
           purchasesEnabled: true,
           termsUrl: "https://example.com/terms",
@@ -245,6 +252,11 @@ try {
           quotedAt: new Date().toISOString(),
           businessId,
           amount: i.amount,
+          leader: {
+            id: rival.id,
+            name: rival.profile.name,
+            value: rival.landValue,
+          },
           currentRank: 2,
           currentValue: 10000,
           newValue: 10000 + i.amount,
@@ -254,8 +266,9 @@ try {
           from: { x: -1, z: 1 },
           to: { x: -1, z: i.amount > 10000 ? -1 : 1 },
           targets: [{ rank: 1, amount: 10001, available: true }],
-          overtaken:
-            i.amount > 10000 ? [{ name: "Rival Studio", rank: 1 }] : [],
+          overtaken: i.amount > 10000
+            ? [{ name: "Rival Studio", rank: 1 }]
+            : [],
         });
       case "market_position":
         return reply({
@@ -301,6 +314,20 @@ try {
   await page
     .getByRole("button", { name: "#1 Rival Studio", exact: true })
     .waitFor();
+  assert.ok(await page.locator(".city-landing-welcome").count());
+  await page.getByRole("button", { name: "About City", exact: true }).click();
+  await page.getByRole("dialog", { name: "Welcome to Synarc City" }).waitFor();
+  const coveredCount = actions.filter(a => a.action === "market_exposure" && a.kind === "canvas").length;
+  await page.waitForTimeout(2500);
+  assert.equal(actions.filter(a => a.action === "market_exposure" && a.kind === "canvas").length, coveredCount, "dialog-covered canvas does not record exposure");
+  await page.keyboard.press("Escape");
+  assert.ok(
+    await page.locator(".city-landing-welcome").count(),
+    "about/login does not dismiss welcome",
+  );
+  await page.locator("canvas").waitFor();
+  await page.waitForTimeout(3500);
+  await page.screenshot({ path: "output/playwright/city-landing-desktop.png" });
   await page.getByRole("button", { name: "Top spots & market feed" }).click();
   await page.getByRole("dialog", { name: "City market" }).waitFor();
   await page
@@ -325,11 +352,16 @@ try {
         a.source === "paid_top_spots",
     ),
   );
-  await page.goto(origin + "/city/manage");
-  await page.getByText("Best recorded position: #1").waitFor();
-  await page
-    .getByRole("button", { name: "Reach #1 · +£100.01", exact: true })
+  await page.goto(origin + "/city");
+  await page.locator(".city-landing-compact").waitFor();
+  await page.getByRole("button", { name: "Challenge #1 ↗", exact: true })
     .click();
+  await page.waitForURL((url) =>
+    url.pathname === "/city/manage" && url.searchParams.get("challenge") === "1"
+  );
+  await page.getByText("Best recorded position: #1").waitFor();
+  await page.getByText("Current leader: Rival Studio · £200 City Value")
+    .waitFor();
   await page.getByText("Potentially passing: Rival Studio.").waitFor();
   assert.ok(
     actions.some((a) => a.action === "market_quote" && a.amount === 10001),
@@ -358,6 +390,18 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(origin + "/city?market=2");
   await page.getByText(/Historical movement replay/).waitFor();
+  assert.ok(
+    actions.some((a) => a.action === "market_exposure" && a.kind === "card"),
+    "card exposure recorded separately",
+  );
+  assert.ok(
+    actions.some((a) => a.action === "market_exposure" && a.kind === "canvas"),
+    "visible building exposure recorded",
+  );
+  assert.ok(
+    !actions.some((a) => a.action === "checkout"),
+    "challenge preview never starts payment",
+  );
   assert.deepEqual(errors, []);
   console.log(
     "City market browser passed: leader, feed, replay, paid attribution, global quote targets, merchant alerts, mobile, reduced motion event link, runtime.",

@@ -93,10 +93,23 @@ export function CustomerProvider(
     let live = true;
     void (async () => {
       if (userId) {
-        const local=localSaves();
-        if(local.length){
-          const result=await cityCommand<{merged:string[]}>('customer_merge',{items:local.map(i=>({id:i.content_id,kind:i.kind}))});
-          if(live){const remaining=local.filter(i=>!result.merged.includes(i.content_id));localStorage.setItem(localKey,JSON.stringify(remaining));if(remaining.length)setError('Some saved items are unavailable and remain on this device.');}
+        const local = localSaves();
+        if (local.length) {
+          const result = await cityCommand<{ merged: string[] }>(
+            "customer_merge",
+            { items: local.map((i) => ({ id: i.content_id, kind: i.kind })) },
+          );
+          if (live) {
+            const remaining = local.filter((i) =>
+              !result.merged.includes(i.content_id)
+            );
+            localStorage.setItem(localKey, JSON.stringify(remaining));
+            if (remaining.length) {
+              setError(
+                "Some saved items are unavailable and remain on this device.",
+              );
+            }
+          }
         }
       }
       if (live) await refresh();
@@ -263,7 +276,9 @@ export function CustomerSave({ item }: { item: CustomerItem }) {
           ? "Saved · remove"
           : item.kind === "business"
           ? "Save business"
-          : item.kind === "launch" ? "Save launch" : "Save deal"}
+          : item.kind === "launch"
+          ? "Save launch"
+          : "Save deal"}
       </button>
       {error && <small role="alert">{error}</small>}
     </>
@@ -275,12 +290,18 @@ export function CustomerDiscovery({
   onResults,
   onChoose,
   demoProperties,
+  onExplore,
 }: {
   query: string;
   onQuery: (q: string) => void;
-  onResults: (items: CustomerItem[], filtered: boolean, matches?:string[]) => void;
+  onResults: (
+    items: CustomerItem[],
+    filtered: boolean,
+    matches?: string[],
+  ) => void;
   onChoose: (item: CustomerItem) => void;
   demoProperties?: CityProperty[];
+  onExplore?: () => void;
 }) {
   const [filter, setFilter] = useState<DiscoveryFilter>(() => {
       try {
@@ -415,7 +436,11 @@ export function CustomerDiscovery({
         if (live && request === sequence) {
           setData(r);
           setError("");
-          onResults(r.items, !!(query || filter !== "all" || category),r.matches);
+          onResults(
+            r.items,
+            !!(query || filter !== "all" || category),
+            r.matches,
+          );
         }
       } catch (e) {
         if (live && request === sequence) setError((e as Error).message);
@@ -457,16 +482,23 @@ export function CustomerDiscovery({
   }, [demoProperties]);
   return (
     <>
-      <p className="city-eyebrow">THE CREATOR DISTRICT</p>
-      <h1>Find your next good thing.</h1>
-      <p>Tools to try. Offers to claim. Ideas to explore.</p>
+      <div className="city-introduction">
+        <p className="city-eyebrow">SYNARC CITY / DISCOVER SOMETHING GOOD</p>
+        <h1>Discover what’s happening here.</h1>
+        <p>
+          Explore businesses, exclusive deals, new launches and experiences.
+        </p>
+      </div>
       <label className="city-search">
         <input
           aria-label="Search the city"
           placeholder="Search tools, demos and deals"
           maxLength={160}
           value={query}
-          onChange={(e) => onQuery(e.target.value)}
+          onChange={(e) => {
+            onExplore?.();
+            onQuery(e.target.value);
+          }}
         />
         {query && (
           <button onClick={() => onQuery("")} aria-label="Clear search">
@@ -482,7 +514,10 @@ export function CustomerDiscovery({
           <button
             key={id}
             aria-pressed={filter === id}
-            onClick={() => setFilter(id)}
+            onClick={() => {
+              onExplore?.();
+              setFilter(id);
+            }}
           >
             {label}
           </button>
@@ -490,7 +525,13 @@ export function CustomerDiscovery({
       </div>
       <label>
         Category{" "}
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <select
+          value={category}
+          onChange={(e) => {
+            onExplore?.();
+            setCategory(e.target.value);
+          }}
+        >
           <option value="">All creators</option>
           {data?.categories.map((c) => <option key={c}>{c}</option>)}
         </select>
@@ -549,13 +590,13 @@ export function CustomerDiscovery({
                 {item.remaining !== null
                   ? `${item.remaining} codes available · `
                   : ""}
-                {item.ends_at && `Ends ${new Date(item.ends_at).toLocaleString()} · `}
+                {item.ends_at &&
+                  `Ends ${new Date(item.ends_at).toLocaleString()} · `}
                 {item.rank ? "Sponsored city location" : "Discovery Pavilion"}
               </small>
             </button>
-            {(item.kind === "deal" || item.kind === "business" || item.kind === "launch") && (
-              <CustomerSave item={item} />
-            )}
+            {(item.kind === "deal" || item.kind === "business" ||
+              item.kind === "launch") && <CustomerSave item={item} />}
           </article>
         ))}
         {data && !data.items.length && (

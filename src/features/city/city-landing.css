@@ -1,0 +1,275 @@
+.city-app .city-introduction h1 {
+  font-size: clamp(28px,3vw,42px);
+  line-height: 1.04;
+  letter-spacing: -.05em;
+  margin: 12px 0;
+}
+.city-introduction > p:last-child {
+  margin-bottom: 18px;
+  max-width: 28ch;
+}
+.city-welcome-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 14px;
+}
+.city-app .city-welcome-footer button {
+  font-size: 11px;
+  padding: 5px 0;
+  background: none;
+  border: 0;
+}
+.city-app .city-discovery {
+  max-height: calc(100% - 100px);
+}
+.city-landing-compact .city-introduction,
+.city-landing-compact .city-discovery-heading,
+.city-landing-compact .city-discovery-footer,
+.city-landing-compact .city-customer-hint {
+  display: none;
+}
+.city-landing-compact .city-discovery {
+  padding: 16px;
+  width: 300px;
+}
+.city-landing-compact .city-discovery .city-property-list {
+  max-height: 260px;
+  overflow: auto;
+}
+.city-landing-compact .city-discovery h2 {
+  font-size: 14px;
+}
+.city-app .city-market-leader {
+  top: auto;
+  bottom: 65px;
+  left: auto;
+  right: 24px;
+  transform: none;
+  width: 280px;
+  padding: 12px 15px;
+  gap: 5px;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px #253b3112;
+}
+.city-app .city-market-title {
+  font-size: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  justify-content: flex-start;
+}
+.city-app .city-market-leader > div button {
+  font-size: 11px;
+  padding: 7px 8px;
+}
+.city-app .city-market-leader .city-eyebrow {
+  font-size: 8px;
+  letter-spacing: .13em;
+}
+.city-about-steps {
+  list-style: none;
+  padding: 0;
+  counter-reset: step;
+}
+.city-about-steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 25px 1fr;
+  gap: 6px 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--city-line);
+}
+.city-about-steps li:before {
+  content: counter(step,decimal-leading-zero);
+  grid-row: span 2;
+  color: var(--city-muted);
+}
+.city-about-steps span {
+  grid-column: 2;
+  color: var(--city-muted);
+}
+.city-destination {
+  padding: 18px;
+  margin: 18px 0;
+  background: #edf1e6;
+  border-left: 3px solid #9aae76;
+}
+.city-destination h3 {
+  font-size: 23px;
+  line-height: 1.16;
+  margin: 8px 0;
+}
+.city-destination small {
+  display: block;
+  margin: 8px 0;
+}
+.city-app .city-takeover-result {
+  position: absolute;
+  z-index: 9;
+  bottom: 65px;
+  left: 360px;
+  width: min(360px,calc(100% - 390px));
+  background: #f8f9f4ed;
+  border: 1px solid var(--city-line);
+  padding: 14px 18px;
+  border-radius: 8px;
+}
+.city-takeover-result p {
+  margin: 6px 0;
+}
+.city-takeover-result small {
+  display: block;
+  color: var(--city-muted);
+}
+.city-app .city-takeover-result button {
+  font-size: 12px;
+  padding: 5px 10px;
+  margin: 6px 6px 0 0;
+}
+.city-challenge-target {
+  background: #edf1e6;
+  padding: 16px;
+  border-left: 3px solid #9aae76;
+}
+.city-header .city-about-nav {
+  font-size: 12px;
+}
+.city-brand-symbol img {
+  width: 27px;
+  height: 27px;
+  object-fit: contain;
+}
+.city-app .city-discovery .city-customer-filters {
+  flex-wrap: wrap;
+}
+.city-landing-compact .city-discovery .city-pagination {
+  font-size: 11px;
+}
+.city-landing-compact .city-discovery .city-pagination button {
+  padding: 5px 8px;
+}
+@media (max-width:899px) {
+  .city-app .city-discovery,
+  .city-landing-compact .city-discovery {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    width: auto;
+    max-height: 42dvh;
+    padding: 14px;
+  }
+  .city-app .city-discovery .city-introduction h1 {
+    font-size: 26px;
+    max-width: 14ch;
+  }
+  .city-app .city-discovery .city-introduction > p:last-child {
+    font-size: 12px;
+    max-width: none;
+    margin: 6px 0;
+  }
+  .city-app .city-discovery .city-introduction .city-eyebrow {
+    display: none;
+  }
+  .city-app .city-discovery .city-property-list {
+    max-height: 110px;
+    overflow: auto;
+  }
+  .city-landing-compact .city-discovery .city-property-list {
+    max-height: 100px;
+  }
+  .city-app .city-discovery:has(.city-introduction) .city-customer-hint {
+    display: none;
+  }
+  .city-app:not(.city-landing-compact) .city-discovery .city-customer-result:nth-child(n+2) {
+    display: none;
+  }
+  .city-app:not(.city-landing-compact) .city-discovery .city-pagination {
+    display: none;
+  }
+  .city-app .city-market-leader {
+    left: auto;
+    right: 12px;
+    bottom: 60px;
+    width: 235px;
+    padding: 10px 12px;
+  }
+  .city-app .city-market-title {
+    font-size: 15px;
+  }
+  .city-app .city-market-leader > div {
+    gap: 6px;
+  }
+  .city-app .city-map-tools {
+    top: auto;
+    bottom: 12px;
+    left: 12px;
+    right: auto;
+    gap: 6px;
+  }
+  .city-app .city-map-tools button {
+    padding: 8px;
+    font-size: 11px;
+  }
+  .city-app .city-takeover-result {
+    left: 12px;
+    right: 12px;
+    bottom: 205px;
+    width: auto;
+    font-size: 12px;
+  }
+  .city-app .city-header {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .city-header .city-about-nav {
+    padding: 6px;
+    font-size: 10px;
+  }
+  .city-app .city-welcome-footer {
+    padding-top: 4px;
+  }
+  .city-app .city-customer-activity {
+    font-size: 11px;
+  }
+  .city-app .city-discovery > label:not(.city-search),
+  .city-app .city-discovery > h2 {
+    display: none;
+  }
+  .city-app .city-discovery > button {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  .city-app .city-customer-filters button {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+  .city-app .city-discovery .city-search {
+    margin: 0 0 6px;
+  }
+  .city-map-shell:has(.city-property-panel) .city-market-leader,
+  .city-map-shell:has(.city-linked-deal) .city-market-leader {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion:reduce) {
+  .city-app .city-discovery {
+    transition: none;
+  }
+}
+
+.city-app .city-discovery-heading h1 {
+  font-size: 36px;
+  line-height: 1.06;
+}
+.city-app .city-welcome-footer {
+  padding: 12px 18px;
+}
+@media (max-width:899px) {
+  .city-app .city-discovery-heading h1 {
+    font-size: 26px;
+  }
+  .city-app .city-welcome-footer {
+    padding: 8px 0;
+  }
+}

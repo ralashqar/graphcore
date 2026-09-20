@@ -4,6 +4,11 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City adaptive landing and exposure (September 2026)
+
+The city-first entry frames the paid leader in the unobstructed canvas, collapses introduction on exploration independently of login, and preserves explicit business/deal destinations. Public bounded nearby/destination reads reuse the approved customer projection. Challenge #1 preselects an authoritative quote without submitting checkout. Separate sampled canvas and leader-card observations use the service-only exposure RPC, daily deduplication and owner exclusion; neither contributes to organic trending. `CITY_EXPOSURE_ENABLED` defaults off and additionally requires the market flag. Apply the additive landing migration before deploying City API/command and frontend to designated staging. No Fly worker, generation, provider or payment admission changes are made. Local verification and remaining hosted/mobile performance acceptance are documented in [docs/synarc-city-landing.md](docs/synarc-city-landing.md).
+
+
 ### City permanent market competition (September 2026)
 
 The default-off `CITY_MARKET_ENABLED` surface adds a Central Plaza leader, paid Top 10, global server quotes, versioned allocation replay and merchant rank controls. The additive market migration wraps the serialized allocator, retains the existing net-principal payment ledger and records immutable before/after movement facts. First fulfilled payments are purchase events; refunds, disputes, reinstatements and moderation remain neutral corrections. Owner-only preference/read actions provide revision-deduplicated in-app displacement alerts. Separate source observations do not enter organic trending. Deploy the four City Edge entries after the migration; world/game Fly workers do not execute these modules. Local verification is distinct from pending hosted staging/Stripe and physical-device acceptance. No inference, real payment or production activation was performed. See [docs/synarc-city-market.md](docs/synarc-city-market.md).

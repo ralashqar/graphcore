@@ -148,6 +148,19 @@ export function CityManage({
     snapshot?.revision,
     snapshot?.marketEnabled,
   ]);
+  const challenge =
+    new URLSearchParams(location.search).get("challenge") === "1";
+  const [challengeApplied, setChallengeApplied] = useState("");
+  useEffect(() => {
+    if (
+      !challenge || !business?.id || !quote || challengeApplied === business.id
+    ) return;
+    const target = quote.targets.find((t) => t.rank === 1);
+    if (target?.available) {
+      setAmount((target.amount / 100).toFixed(2));
+      setChallengeApplied(business.id);
+    }
+  }, [challenge, business?.id, quote, challengeApplied]);
   const dirty = JSON.stringify(profile) !== JSON.stringify(business?.draft);
   const previewProfile: CityProfile = {
     ...profile,
@@ -584,6 +597,27 @@ export function CityManage({
           )}
           <section id="city-next-move" className="city-business-section">
             <span className="city-eyebrow">YOUR NEXT MOVE</span>
+            {challenge && (
+              <div className="city-challenge-target">
+                <strong>Target: Central Plaza #1</strong>
+                {quote?.leader && (
+                  <p>
+                    Current leader: {quote.leader.name} ·{" "}
+                    {formatGBP(quote.leader.value)} City Value
+                  </p>
+                )}
+                <p>
+                  {quote?.currentRank === 1
+                    ? "You currently hold the central spot."
+                    : quote?.targets.find((t) => t.rank === 1)?.available ===
+                        false
+                    ? "The current gap exceeds the maximum single contribution. Choose a smaller step below."
+                    : business?.published
+                    ? "The contribution below is calculated against the live leader. Review the estimate before paying."
+                    : "Publish your property first. We’ll calculate the contribution needed to challenge the current leader when it is eligible."}
+                </p>
+              </div>
+            )}
             <h2>Move closer to the centre.</h2>
             <p>
               Your current City Value{" "}

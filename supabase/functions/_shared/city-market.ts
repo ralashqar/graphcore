@@ -23,6 +23,27 @@ export async function market(
   const db = cityAdmin(),
     action = String(raw.action).replace("market_", "");
   await limit(db, `market:${await publicKey(request)}`, 120);
+  if (command && action === "exposure") {
+    if (!flag("CITY_EXPOSURE_ENABLED")) return { ok: true };
+    const body = z.object({
+      ids: z.array(uuid).min(1).max(20),
+      kind: z.enum(["canvas", "card"]),
+    }).parse(raw);
+    let userId: string | null = null;
+    try {
+      userId = (await requireUserClient(request, "city-exposure")).user.id;
+    } catch { /* public browsing */ }
+    const actor = userId ? `u:${userId}` : `n:${await publicKey(request)}`;
+    result(
+      await db.rpc("city_record_exposures", {
+        p_actor: actor,
+        p_user: userId,
+        p_ids: [...new Set(body.ids)],
+        p_kind: body.kind === "canvas" ? "canvas_exposure" : "card_impression",
+      }),
+    );
+    return { ok: true };
+  }
   if (!command && action === "public") {
     const before = z.number().int().positive().optional().parse(raw.before);
     const data = result(

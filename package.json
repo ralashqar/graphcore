@@ -78,6 +78,7 @@
     "check:city:launch-staging": "node scripts/city-launch-staging.mjs",
     "test:city:customer": "node --experimental-strip-types --test src/domain/cityCustomer.test.ts && node scripts/city-customer-db-test.mjs",
     "test:city:customer:browser": "node scripts/city-customer-browser.mjs",
+    "test:city:landing": "node --experimental-strip-types --test src/domain/cityLanding.test.ts",
     "test:city:market": "node --experimental-strip-types --test src/domain/cityMarket.test.ts && node scripts/city-market-db-test.mjs",
     "test:city:market:browser": "node scripts/city-market-browser.mjs"
   },

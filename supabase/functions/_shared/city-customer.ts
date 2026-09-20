@@ -28,6 +28,66 @@ export async function customer(
     command ? (action === "event" ? 600 : 120) : 180,
     command ? 3600 : 60,
   );
+  if (!command && action === "nearby") {
+    const point = z.object({
+      x: z.number().min(-10000).max(10000),
+      z: z.number().min(-10000).max(10000),
+    }).parse(raw);
+    const kinds = [
+      ...(flag("CITY_DEALS_ENABLED") ? ["deal"] : []),
+      ...(flag("CITY_CAMPUS_ENABLED") ? ["exhibit", "launch"] : []),
+    ];
+    if (!kinds.length) return { items: [] };
+    const items = result(
+      await db.from("city_customer_content").select(
+        "key,business_id,slug,business_name,category,kind,content_id,title,description,destination,rank,x,z,created_at,starts_at,ends_at,remaining,free,exclusive,available",
+      ).gte("x", point.x - 6).lte("x", point.x + 6).gte("z", point.z - 6).lte(
+        "z",
+        point.z + 6,
+      ).in("kind", kinds).eq("available", true).order("created_at", {
+        ascending: false,
+      }).limit(40),
+    ) || [];
+    return {
+      items: items.filter((
+        i: { starts_at: string | null; ends_at: string | null },
+      ) =>
+        (!i.starts_at || Date.parse(i.starts_at) <= Date.now()) &&
+        (!i.ends_at || Date.parse(i.ends_at) > Date.now())
+      ).slice(0, 12),
+    };
+  }
+  if (!command && action === "destination") {
+    const id = uuid.parse(raw.businessId);
+    const kinds = [
+      "business",
+      ...(flag("CITY_DEALS_ENABLED") ? ["deal"] : []),
+      ...(flag("CITY_CAMPUS_ENABLED") ? ["exhibit", "launch"] : []),
+    ];
+    const items = result(
+      await db.from("city_customer_content").select(
+        "key,business_id,slug,business_name,category,kind,content_id,title,description,destination,rank,x,z,created_at,starts_at,ends_at,remaining,free,exclusive,available",
+      ).eq("business_id", id).in("kind", kinds).eq("available", true).order(
+        "created_at",
+        { ascending: false },
+      ).limit(24),
+    ) || [];
+    const priority = (
+      item: { kind: string; exclusive: boolean; free: boolean },
+    ) =>
+      item.kind === "deal"
+        ? (item.exclusive ? 0 : 1)
+        : item.kind === "exhibit"
+        ? 2
+        : item.kind === "launch"
+        ? 3
+        : 4;
+    return {
+      items: items.filter((i: { ends_at: string | null }) =>
+        !i.ends_at || Date.parse(i.ends_at) > Date.now()
+      ).sort((a: any, b: any) => priority(a) - priority(b)).slice(0, 3),
+    };
+  }
   if (!command && action === "search") {
     const p = z.object({
       query: z.string().max(160).default(""),
@@ -172,9 +232,19 @@ export async function customer(
     return { ok: true };
   }
   if (!userId) throw new HttpError(401, "Sign in to access your wallet.");
-  if(command && action === 'merge'){
-    const items=z.array(z.object({id:uuid,kind:z.enum(['deal','business','launch'])})).max(200).parse(raw.items);
-    return {merged:result(await db.rpc('city_customer_merge',{p_user:userId,p_items:items,p_deals:flag('CITY_DEALS_ENABLED')}))};
+  if (command && action === "merge") {
+    const items = z.array(
+      z.object({ id: uuid, kind: z.enum(["deal", "business", "launch"]) }),
+    ).max(200).parse(raw.items);
+    return {
+      merged: result(
+        await db.rpc("city_customer_merge", {
+          p_user: userId,
+          p_items: items,
+          p_deals: flag("CITY_DEALS_ENABLED"),
+        }),
+      ),
+    };
   }
   if (!command && action === "metrics") {
     const id = uuid.parse(raw.businessId);
@@ -183,8 +253,18 @@ export async function customer(
     }
     return result(await db.rpc("city_customer_funnel", { p_business: id }));
   }
-  if(command && action === 'save' && raw.kind==='launch'){
-    result(await db.rpc('city_discovery_mutate',{p_user:userId,p_action:'save_launch',p_data:{id:uuid.parse(raw.id),enabled:z.boolean().parse(raw.saved)}}));return {ok:true};
+  if (command && action === "save" && raw.kind === "launch") {
+    result(
+      await db.rpc("city_discovery_mutate", {
+        p_user: userId,
+        p_action: "save_launch",
+        p_data: {
+          id: uuid.parse(raw.id),
+          enabled: z.boolean().parse(raw.saved),
+        },
+      }),
+    );
+    return { ok: true };
   }
   if (command && action === "save" && raw.kind === "business") {
     result(

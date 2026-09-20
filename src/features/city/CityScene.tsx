@@ -1,3 +1,6 @@
+import { CityExposure } from "./CityExposure";
+import type { ViewportRect } from "../../domain/cityLanding";
+import { BUILDING_RECIPES } from "../../domain/cityLayout";
 import { MarketMotionContext, type MarketPlayback } from "./CityMarketMotion";
 import { type CustomerItem, discoveryLabel } from "../../domain/cityCustomer";
 import { CityPavilion } from "./CityPavilion";
@@ -31,12 +34,18 @@ function CameraRig({
   reduced,
   onRegion,
   onZoom,
+  central,
+  viewport,
+  onExplore,
 }: {
   target: CityProperty | null;
   home: number;
   reduced: boolean;
   onRegion: (x: number, z: number) => void;
   onZoom: (zoom: number) => void;
+  central: CityProperty | null;
+  viewport: ViewportRect | null;
+  onExplore?: () => void;
 }) {
   const controls = useRef<ComponentRef<typeof MapControls>>(null),
     destination = useRef<Vector3 | null>(null),
@@ -44,6 +53,8 @@ function CameraRig({
     timer = useRef(0);
   const { camera, size } = useThree();
   const restore = useRef(true);
+  const previousCamera = useRef(savedCityCamera);
+  const manual = useRef(false), lastFocus = useRef("");
   const selection = useRef(target?.id || "");
   selection.current = target?.id || "";
   useEffect(
@@ -60,27 +71,52 @@ function CameraRig({
     [camera],
   );
   useEffect(() => {
+    const control = controls.current;
+    if (!control || !("isOrthographicCamera" in camera) || control.object !== camera) return;
+    const focusKey = `${target?.id || "central"}:${home}`;
+    if (lastFocus.current !== focusKey) {
+      manual.current = false;
+      lastFocus.current = focusKey;
+    }
+    if (manual.current) return;
     if (
-      restore.current &&
-      savedCityCamera &&
-      savedCityCamera.selection === (target?.id || "") &&
-      controls.current
+      restore.current && previousCamera.current &&
+      previousCamera.current.selection === (target?.id || "")
     ) {
-      camera.position.copy(savedCityCamera.position);
-      camera.zoom = savedCityCamera.zoom;
+      camera.position.copy(previousCamera.current.position);
+      camera.zoom = previousCamera.current.zoom;
       camera.updateProjectionMatrix();
-      controls.current.target.copy(savedCityCamera.target);
-      controls.current.update();
+      control.target.copy(previousCamera.current.target);
+      control.update();
       restore.current = false;
       return;
     }
     restore.current = false;
-    const next = new Vector3(
-      target ? position(target.x) : 0,
-      0,
-      target ? position(target.z) : 0,
-    );
+    if (!establishedCentre) {
+      camera.zoom = size.width < 900 ? 5 : 6;
+      camera.updateProjectionMatrix();
+    }
+    const framed = (property: CityProperty | null) => {
+      const p = new Vector3(
+        property ? position(property.x) : 0,
+        property ? BUILDING_RECIPES[property.tier].floors * 1.5 : 0,
+        property ? position(property.z) : 0,
+      );
+      const cx = viewport
+          ? (viewport.left + viewport.right) / 2
+          : size.width / 2,
+        cy = viewport ? (viewport.top + viewport.bottom) / 2 : size.height / 2;
+      const right = new Vector3(1, 0, 0).applyQuaternion(camera.quaternion),
+        up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      return p.addScaledVector(right, -(cx - size.width / 2) / camera.zoom)
+        .addScaledVector(up, -(size.height / 2 - cy) / camera.zoom);
+    };
+    const next = framed(target || central);
     if (!establishedCentre && !reduced) {
+      const initial = framed(central);
+      camera.position.add(initial.clone().sub(control.target));
+      control.target.copy(initial);
+      control.update();
       const wait = setTimeout(() => {
         establishedCentre = true;
         destination.current = next;
@@ -99,10 +135,24 @@ function CameraRig({
     }
     establishedCentre = true;
     destination.current = next;
-  }, [target?.id, target?.x, target?.z, home, reduced]);
+  }, [
+    target?.id,
+    target?.x,
+    target?.z,
+    central?.id,
+    central?.x,
+    central?.z,
+    central?.tier,
+    home,
+    reduced,
+    viewport,
+    size.width,
+    size.height,
+    camera,
+  ]);
   useFrame((_, delta) => {
     const control = controls.current;
-    if (!control) return;
+    if (!control || !("isOrthographicCamera" in camera) || control.object !== camera) return;
     if (destination.current) {
       const diff = destination.current.clone().sub(control.target);
       if (diff.length() < 0.02) {
@@ -152,6 +202,8 @@ function CameraRig({
       if (step) {
         e.preventDefault();
         destination.current = null;
+        manual.current = true;
+        onExplore?.();
         const offset = new Vector3(step[0], 0, step[1]);
         camera.position.add(offset);
         controls.current.target.add(offset);
@@ -171,6 +223,8 @@ function CameraRig({
       dampingFactor={0.12}
       onStart={() => {
         destination.current = null;
+        manual.current = true;
+        onExplore?.();
       }}
       mouseButtons={{ LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
       touches={{ ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_PAN }}
@@ -315,8 +369,16 @@ export default function CityScene({
   onDiscoverySelect,
   playback,
   onReady,
+  central = null,
+  viewport = null,
+  onExplore,
+  onExposure,
 }: {
   onReady?: () => void;
+  central?: CityProperty | null;
+  viewport?: ViewportRect | null;
+  onExplore?: () => void;
+  onExposure?: (ids: string[], kind: "canvas") => void;
   playback?: MarketPlayback | null;
   properties: CityProperty[];
   selected: CityProperty | null;
@@ -341,7 +403,11 @@ export default function CityScene({
         (p) =>
           (Math.abs(p.x - center.x) <= 12 && Math.abs(p.z - center.z) <= 12) ||
           p.id === selected?.id ||
-          !!playback?.event.moves.some(m=>m.id===p.id&&m.before&&Math.abs(m.before.x-center.x)<=12&&Math.abs(m.before.z-center.z)<=12),
+          !!playback?.event.moves.some((m) =>
+            m.id === p.id && m.before &&
+            Math.abs(m.before.x - center.x) <= 12 &&
+            Math.abs(m.before.z - center.z) <= 12
+          ),
       ),
     [properties, center.x, center.z, selected?.id, playback],
   );
@@ -445,7 +511,17 @@ export default function CityScene({
           />
         </MarketMotionContext.Provider>
         <SceneReady onReady={onReady} />
+        {onExposure && (
+          <CityExposure
+            properties={visible}
+            onExposure={onExposure}
+            paused={!!playback}
+          />
+        )}
         <CameraRig
+          central={central}
+          viewport={viewport}
+          onExplore={onExplore}
           onZoom={setZoom}
           target={selected}
           home={home}

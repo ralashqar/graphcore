@@ -14,6 +14,7 @@ for (const name of [
   "20260920182940_city_deal_launch",
   "20260920185857_city_customer_discovery",
   "20260920202005_city_market_competition",
+    "20260920220724_city_landing_exposure",
 ]) {
   await db.exec(
     await readFile(
@@ -180,6 +181,16 @@ await assert.rejects(
   q("update city_market_transitions set cause='correction'"),
   /immutable/,
 );
+const actor='n:exposure-test';
+assert.equal(await val('select city_record_exposures($1,null,$2,$3)',[actor,[b.id,b.id],'canvas_exposure']),1);
+assert.equal(await val('select city_record_exposures($1,null,$2,$3)',[actor,[b.id],'canvas_exposure']),0);
+assert.equal(await val('select city_record_exposures($1,null,$2,$3)',[actor,[b.id],'card_impression']),1);
+assert.equal(await val('select city_record_exposures($1,$2,$3,$4)',['u:'+b.owner_id,b.owner_id,[b.id],'canvas_exposure']),0);
+assert.equal(await val('select city_record_exposures($1,null,$2,$3)',[actor,[a.id],'canvas_exposure']),0,'suspended excluded');
+await assert.rejects(q('select city_record_exposures($1,null,$2,$3)',[actor,[b.id],'view']),/Invalid/);
+await assert.rejects(q('select city_record_exposures($1,null,$2,$3)',[actor,Array(21).fill(b.id),'canvas_exposure']),/Invalid/);
+const withLeader=await val('select city_market_quote($1,1000)',[b.id]);assert.ok(withLeader.leader.name);assert.ok(withLeader.leader.value>0);
+for(const role of ['anon','authenticated']){await db.exec(`set role ${role}`);await assert.rejects(q('select city_record_exposures($1,null,$2,$3)',[actor,[b.id],'canvas_exposure']),/permission denied/);await db.exec('reset role');}
 console.log(
   "Market SQL passed: ties, global rank, upgrades, displacement, exact target, max bounds, payment retry/refund/reinstatement, threshold alerts, pagination, moderation, RLS.",
 );

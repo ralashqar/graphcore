@@ -129,6 +129,7 @@ export function Batch({
             refs.current[index] = m;
           }}
           args={[piece.geometry, piece.material, instances.length]}
+          userData={{cityInstances:instances}}
           castShadow={animate}
           receiveShadow
           onClick={

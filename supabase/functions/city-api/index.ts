@@ -159,6 +159,7 @@ Deno.serve(async (request) => {
         campusEnabled: flag("CITY_CAMPUS_ENABLED"),
         dealsEnabled: flag("CITY_DEALS_ENABLED"),
         marketEnabled: flag("CITY_MARKET_ENABLED"),
+        exposureEnabled: flag("CITY_MARKET_ENABLED") && flag("CITY_EXPOSURE_ENABLED"),
         customerDiscoveryEnabled: flag("CITY_CUSTOMER_DISCOVERY_ENABLED") && flag("CITY_DISCOVERY_ENABLED"),
         setupEnabled: flag("CITY_SETUP_ENABLED"),
         termsUrl: Deno.env.get("CITY_TERMS_URL") || null,

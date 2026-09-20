@@ -39,7 +39,7 @@ Apply `20260920202005_city_market_competition.sql` after the existing City migra
 
 `city-command`: `market_preferences`, `market_read`; existing `track` accepts the bounded attribution source. Owner checks protect quotes, metrics, preferences and alert reads. RLS denies direct browser access. Public reads are rate limited, private/no-store and signed through the existing listing media helper. Feed pages contain at most 20 revisions; each revision describes its affected allocation.
 
-Source labels are `paid_top_spots`, `organic`, `deal`, `share`, and `city`. These are browser-reported discovery attribution, not verified purchases. Reports explicitly distinguish property opens/outbound clicks from measured 3D exposure. This release does not manufacture canvas impressions, conversion revenue or ROAS. Existing customer funnel analytics, campaign checklist, deals and campus editor remain available.
+Source labels are `paid_top_spots`, `organic`, `deal`, `share`, and `city`. These are browser-reported discovery attribution, not verified purchases. Reports explicitly distinguish property opens/outbound clicks from measured 3D exposure. The follow-up landing release adds separately labelled sampled canvas exposure and leader-card observations; see [landing measurement](synarc-city-landing.md). Neither establishes human attention, conversion revenue or ROAS. Existing customer funnel analytics, campaign checklist, deals and campus editor remain available.
 
 ## Activation and verification
 

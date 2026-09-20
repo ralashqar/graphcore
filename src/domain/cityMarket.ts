@@ -32,6 +32,7 @@ export type CityMarket = {
   events: MarketEvent[];
 };
 export type CityQuote = {
+  leader?: { id: string; name: string; value: number } | null;
   revision: number;
   quotedAt: string;
   businessId: string;
@@ -59,8 +60,9 @@ export function marketMotion(move: MarketMove, elapsed: number) {
     x: from.x + (to.x - from.x) * eased,
     z: from.z + (to.z - from.z) * eased,
     lift: Math.sin(Math.PI * t) * 6,
-    scale:
-      move.before?.tier !== to.tier ? Math.max(0.05, Math.min(1, t * 4)) : 1,
+    scale: move.before?.tier !== to.tier
+      ? Math.max(0.05, Math.min(1, t * 4))
+      : 1,
     turn: eased,
     done: t === 1,
   };
@@ -69,11 +71,14 @@ export function marketHeadline(event: MarketEvent) {
   const actor = event.moves.find((m) => m.id === event.initiator),
     p = actor?.after;
   if (event.cause !== "purchase") return "City positions updated";
-  if (p?.rank === 1 && actor?.before?.rank !== 1)
+  if (p?.rank === 1 && actor?.before?.rank !== 1) {
     return `${p.name} took Central Plaza`;
-  if (p && p.rank <= 10 && (actor?.before?.rank ?? Infinity) > 10)
+  }
+  if (p && p.rank <= 10 && (actor?.before?.rank ?? Infinity) > 10) {
     return `${p.name} entered the Top 10`;
-  if (p && actor?.before && p.tier > actor.before.tier)
+  }
+  if (p && actor?.before && p.tier > actor.before.tier) {
     return `${p.name} upgraded its property`;
+  }
   return p ? `${p.name} increased City Value` : "City positions updated";
 }
