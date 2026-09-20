@@ -14,6 +14,16 @@ const brands = [
   ["Tidal", "Everyday essentials, considered.", "Shopping", "#668c88"],
   ["Monday Studio", "Build something worth keeping.", "Apps", "#c6a262"],
 ];
+const artwork = [
+  "fieldwork",
+  "offscript",
+  "forma",
+  "northline",
+  "common-ground",
+  "papercut",
+  "tidal",
+  "monday",
+];
 export function demoCity(count = 72): CitySnapshot {
   const plots = cityPlots(Math.max(count, 400));
   return {
@@ -37,6 +47,12 @@ export function demoCity(count = 72): CitySnapshot {
         category,
         color,
         website: "https://example.com",
+        logo: [4, 5].includes(i % 8)
+          ? ""
+          : `/city/demo-signs/${artwork[i % 8]}-logo.svg`,
+        hero: [3, 5, 6].includes(i % 8)
+          ? ""
+          : `/city/demo-signs/${artwork[i % 8]}-hero.svg`,
         description:
           "A demonstration property showing how a business can make a home in Synarc City. These brands and placements are fictional.",
       });

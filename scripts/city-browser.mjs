@@ -27,9 +27,7 @@ try {
   await page
     .getByRole("textbox", { name: "Search the city" })
     .fill("Offscript");
-  await page
-    .getByRole("button", { name: "O Offscript Games #2", exact: true })
-    .click();
+  await page.getByRole("button", { name: /Offscript Games #2$/ }).click();
   await page
     .getByRole("complementary", { name: "Offscript property" })
     .waitFor();
@@ -71,7 +69,7 @@ try {
   );
   await page
     .getByRole("button", {
-      name: "F Fieldwork SaaS · Offer available #1",
+      name: /Fieldwork SaaS.*Offer available #1$/,
       exact: true,
     })
     .click();
@@ -119,9 +117,7 @@ try {
     .getByRole("button", { name: "Close property", exact: true })
     .click();
   await page.getByRole("textbox", { name: "Search the city" }).fill("Forma");
-  await page
-    .getByRole("button", { name: "F Forma Shopping #3", exact: true })
-    .waitFor();
+  await page.getByRole("button", { name: /Forma Shopping #3$/ }).waitFor();
   checks.push("deep links and searchable WebGL fallback");
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto(`${origin}/city?demo=1&stress=1`);

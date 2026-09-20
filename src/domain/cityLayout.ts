@@ -40,6 +40,12 @@ export function buildingVariant(id: string): number {
   for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   return (hash >>> 0) % 2;
 }
+export function billboardEnvelope(tier: number) {
+  const recipe = BUILDING_RECIPES[tier];
+  const width = Math.min(6, recipe.width - 0.6);
+  const front = Math.min(7.7, recipe.depth / 2 + 1.8);
+  return { width, height: width / 2, front, depth: front - recipe.depth / 2 };
+}
 /** Local +Z façade faces the nearer east/west street. Stable within its plot. */
 export function frontage(x: number): number {
   const towardPositive = (Math.abs(x) % 2 === 0) === x > 0;

@@ -1,18 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { Batch, type Instance, type Piece } from "./CityInstances";
+import { CityBillboards } from "./CityBillboards";
+import { useEffect, useMemo } from "react";
 import { Html, useGLTF } from "@react-three/drei";
 import {
   BoxGeometry,
   Float32BufferAttribute,
   CylinderGeometry,
   IcosahedronGeometry,
-  Color,
-  InstancedMesh,
   Mesh,
   MeshLambertMaterial,
-  Object3D,
-  Vector3,
-  type BufferGeometry,
   type Material,
   type MeshStandardMaterial,
 } from "three";
@@ -25,21 +21,9 @@ import {
   roadNetwork,
 } from "../../domain/cityLayout";
 
-type Instance = {
-  key: string;
-  x: number;
-  y?: number;
-  z: number;
-  rotation?: number;
-  scale?: [number, number, number];
-  color?: string;
-  property?: CityProperty;
-};
-type Piece = { geometry: BufferGeometry; material: Material };
 const unitBox = new BoxGeometry(1, 1, 1);
 const paving = new MeshLambertMaterial({ color: "#d7d0bc" });
 const grass = new MeshLambertMaterial({ color: "#8e9d79" });
-const brand = new MeshLambertMaterial({ color: "white" });
 const canopy = {
   geometry: new IcosahedronGeometry(1, 1),
   material: new MeshLambertMaterial({ color: "#607c57" }),
@@ -48,94 +32,6 @@ const trunk = {
   geometry: new CylinderGeometry(0.14, 0.22, 1, 6),
   material: new MeshLambertMaterial({ color: "#746652" }),
 };
-
-/** One draw per shared primitive/material, not one draw per building component. */
-function Batch({
-  pieces,
-  instances,
-  onSelect,
-  reduced = false,
-  animate = false,
-}: {
-  pieces: Piece[];
-  instances: Instance[];
-  onSelect?: (p: CityProperty) => void;
-  reduced?: boolean;
-  animate?: boolean;
-}) {
-  const refs = useRef<(InstancedMesh | null)[]>([]),
-    poses = useRef(new Map<string, Vector3>()),
-    dirty = useRef(true);
-  const dummy = useMemo(() => new Object3D(), []),
-    target = useMemo(() => new Vector3(), []);
-  const { gl } = useThree();
-  useLayoutEffect(() => {
-    dirty.current = true;
-    const keys = new Set(instances.map((i) => i.key));
-    for (const key of poses.current.keys())
-      if (!keys.has(key)) poses.current.delete(key);
-    for (const mesh of refs.current)
-      if (mesh) {
-        instances.forEach((item, i) =>
-          mesh.setColorAt(i, new Color(item.color || "#ffffff")),
-        );
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      }
-  }, [instances, pieces]);
-  useFrame((_, delta) => {
-    if (!dirty.current) return;
-    let moving = false;
-    instances.forEach((item, index) => {
-      target.set(item.x, item.y || 0, item.z);
-      const pose = poses.current.get(item.key) || target.clone();
-      if (!animate || reduced) pose.copy(target);
-      else pose.lerp(target, Math.min(1, delta * 5));
-      poses.current.set(item.key, pose);
-      if (pose.distanceToSquared(target) > 0.0001) moving = true;
-      dummy.position.copy(pose);
-      dummy.rotation.set(0, item.rotation || 0, 0);
-      dummy.scale.set(...(item.scale || [1, 1, 1]));
-      dummy.updateMatrix();
-      for (const mesh of refs.current) mesh?.setMatrixAt(index, dummy.matrix);
-    });
-    for (const mesh of refs.current)
-      if (mesh) {
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.computeBoundingSphere();
-      }
-    dirty.current = moving;
-    gl.shadowMap.needsUpdate = true;
-  });
-  return (
-    <>
-      {pieces.map((piece, index) => (
-        <instancedMesh
-          key={index}
-          ref={(m) => {
-            refs.current[index] = m;
-          }}
-          args={[piece.geometry, piece.material, instances.length]}
-          castShadow={animate}
-          receiveShadow
-          onClick={
-            onSelect
-              ? (e) => {
-                  const p =
-                    e.instanceId === undefined
-                      ? undefined
-                      : instances[e.instanceId]?.property;
-                  if (p) {
-                    e.stopPropagation();
-                    onSelect(p);
-                  }
-                }
-              : undefined
-          }
-        />
-      ))}
-    </>
-  );
-}
 
 export function CityKit({
   properties,
@@ -283,9 +179,8 @@ export function CityKit({
     }
     return groups;
   }, [properties, selected?.id, zoom, center.x, center.z]);
-  const { signs, paths, planters } = useMemo(() => {
-    const signs: Instance[] = [],
-      paths: Instance[] = [],
+  const { paths, planters } = useMemo(() => {
+    const paths: Instance[] = [],
       planters: Instance[] = [];
     for (const p of properties) {
       const recipe = BUILDING_RECIPES[p.tier],
@@ -293,28 +188,18 @@ export function CityKit({
         sign = Math.sin(rotation),
         x = plotAxis(p.x),
         z = plotAxis(p.z);
-      signs.push({
-        key: p.id,
-        x: x + sign * (recipe.depth / 2 + 0.35),
-        y: 2.6,
-        z: z - 1,
-        rotation,
-        scale: [Math.min(5, recipe.width - 0.5), 0.65, 0.22],
-        color: p.profile.color,
-        property: p,
-      });
       const length = 12 - recipe.depth / 2;
       paths.push({
         key: p.id,
         x: x + sign * (recipe.depth / 2 + length / 2),
         y: 0.025,
-        z: z - 1,
+        z: z - sign,
         scale: [length, 0.05, 2],
       });
       if (Math.abs(p.x - center.x) <= 5 && Math.abs(p.z - center.z) <= 5)
         planters.push({ key: p.id, x: x + sign * 9.5, z: z + 7 });
     }
-    return { signs, paths, planters };
+    return { paths, planters };
   }, [properties, center.x, center.z]);
   const plaza = useMemo(() => {
     const paving: Instance[] = [],
@@ -396,12 +281,12 @@ export function CityKit({
           animate
         />
       ))}
-      <Batch
-        pieces={[{ geometry: unitBox, material: brand }]}
-        instances={signs}
+      <CityBillboards
+        properties={properties}
+        selected={selected}
+        center={center}
         onSelect={onSelect}
         reduced={reduced}
-        animate
       />
       {properties
         .filter((p) => p.rank <= 3 || p.id === selected?.id)
@@ -425,25 +310,6 @@ export function CityKit({
             </button>
           </Html>
         ))}
-      {selected?.profile.logo && (
-        <Html
-          position={[
-            plotAxis(selected.x) +
-              Math.sin(frontage(selected.x)) *
-                (BUILDING_RECIPES[selected.tier].depth / 2 + 0.6),
-            3,
-            plotAxis(selected.z) - 1,
-          ]}
-          center
-          zIndexRange={[2, 0]}
-        >
-          <img
-            className="city-building-logo"
-            alt={`${selected.profile.name} sign`}
-            src={selected.profile.logo}
-          />
-        </Html>
-      )}
       <Html position={[0, 0.2, 0]} center zIndexRange={[2, 0]}>
         <span className="city-plaza-label">CENTRAL PLAZA</span>
       </Html>

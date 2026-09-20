@@ -7,7 +7,24 @@ import {
   buildingVariant,
   roadNetwork,
   BUILDING_RECIPES,
+  billboardEnvelope,
 } from "./cityLayout.ts";
+
+test("billboard canopy stays inside the setback envelope and clears the entrance path", () => {
+  for (let tier = 0; tier < BUILDING_RECIPES.length; tier++) {
+    const sign = billboardEnvelope(tier);
+    assert.ok(sign.front + 0.15 <= 8, "Canopy encroaches into the 4m setback");
+    assert.ok(
+      1 + (sign.width + 0.22) / 2 <= 8,
+      "Sign exceeds plot frontage envelope",
+    );
+    assert.ok(
+      sign.width / 2 - 0.12 - 0.07 > 1,
+      "Support obstructs the 2m entrance path",
+    );
+    assert.ok(sign.depth > 0 && sign.height > 0);
+  }
+});
 
 test("logical positions round-trip across blocks and expansion rings", () => {
   for (let coordinate = -100; coordinate <= 100; coordinate++)
