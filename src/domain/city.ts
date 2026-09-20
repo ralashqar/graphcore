@@ -19,6 +19,8 @@ export type CityProfile = {
   color: string;
   logo: string;
   hero: string;
+  billboard?: string;
+  billboardCrop?: { x: number; y: number; zoom: number };
   video: string;
   offer: {
     title: string;

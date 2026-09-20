@@ -10,6 +10,7 @@ import {
   SRGBColorSpace,
 } from "three";
 import type { CityProperty } from "../../domain/city";
+import { billboardImageRect } from "../../domain/cityBranding";
 import {
   BUILDING_RECIPES,
   billboardEnvelope,
@@ -28,7 +29,7 @@ const TILE_W = 512,
   LIMIT = COLS * ROWS;
 
 /** Text stays on the physical sign. The existing property panel is its accessible alternative. */
-function drawTile(
+export function drawTile(
   ctx: CanvasRenderingContext2D,
   p: CityProperty,
   index: number,
@@ -45,17 +46,12 @@ function drawTile(
   ctx.fillStyle = p.profile.color;
   ctx.fillRect(0, 0, TILE_W, TILE_H);
   if (hero) {
-    const scale = Math.max(
-      TILE_W / hero.naturalWidth,
-      TILE_H / hero.naturalHeight,
+    const rect = billboardImageRect(
+      hero.naturalWidth,
+      hero.naturalHeight,
+      p.profile.billboardCrop,
     );
-    ctx.drawImage(
-      hero,
-      (TILE_W - hero.naturalWidth * scale) / 2,
-      (TILE_H - hero.naturalHeight * scale) / 2,
-      hero.naturalWidth * scale,
-      hero.naturalHeight * scale,
-    );
+    ctx.drawImage(hero, rect.x, rect.y, rect.width, rect.height);
   }
   if (logo) {
     ctx.fillStyle = "#faf8f0";
@@ -182,7 +178,7 @@ export function CityBillboards({
         const index = next++,
           p = featured[index];
         const [hero, logo] = await Promise.all([
-          load(p.profile.hero),
+          load(p.profile.billboard || p.profile.hero),
           load(p.profile.logo),
         ]);
         if (!active) return;

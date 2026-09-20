@@ -78,3 +78,5 @@ output/motionbricks-build.log
 output/director-*.json
 output/director-*.mjs
 output/director-edge-bundles/
+
+output/city-staging/

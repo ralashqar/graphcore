@@ -91,25 +91,32 @@ Deno.serve(async (request) => {
           .maybeSingle(),
       );
       if (!row) throw new HttpError(404, "Property not found.");
+      let visitorId: string | null = null;
       // Authenticated owners are excluded without trusting a user-provided identifier.
       if (request.headers.get("authorization")) {
         try {
           const { user } = await requireUserClient(request, "city-command");
           if (await owner(db, user.id, id)) return json({ ok: true });
+          visitorId = user.id;
         } catch {
           /* anonymous browser */
         }
       }
+      if (visitorId && kind === "view")
+        result(
+          await db.rpc("city_record_visit", {
+            p_business: id,
+            p_user: visitorId,
+          }),
+        );
       result(
-        await db
-          .from("city_engagement")
-          .upsert(
-            { business_id: id, visitor_hash: hash, kind },
-            {
-              onConflict: "business_id,visitor_hash,kind,day",
-              ignoreDuplicates: true,
-            },
-          ),
+        await db.from("city_engagement").upsert(
+          { business_id: id, visitor_hash: hash, kind },
+          {
+            onConflict: "business_id,visitor_hash,kind,day",
+            ignoreDuplicates: true,
+          },
+        ),
       );
       return json({ ok: true });
     }
@@ -122,6 +129,19 @@ Deno.serve(async (request) => {
       !flag("CITY_ONBOARDING_ENABLED")
     )
       throw new HttpError(503, "Business onboarding is paused.");
+    const pilotUsers = (Deno.env.get("CITY_PILOT_USER_IDS") || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (
+      action === "create" &&
+      pilotUsers.length &&
+      !pilotUsers.includes(user.id)
+    )
+      throw new HttpError(
+        403,
+        "Business registration is currently limited to the pilot. Your consumer account can still explore the city.",
+      );
     if (action === "create" || action === "save") {
       const profile = parseProfile(data.profile, user.id);
       if (action === "create")

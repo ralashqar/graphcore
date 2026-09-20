@@ -64,7 +64,10 @@
     "game:migrate:unified": "node scripts/apply-game-migration.mjs --unified",
     "test:game-unified-live": "node scripts/game-unified-live.mjs",
     "test:city:kit": "node --experimental-strip-types --test src/domain/cityLayout.test.ts && node scripts/city-kit-test.mjs",
-    "build:city:kit": "node scripts/build-city-megakit.mjs"
+    "build:city:kit": "node scripts/build-city-megakit.mjs",
+    "test:city:branding": "node --experimental-strip-types --test src/domain/cityBranding.test.ts",
+    "check:city:staging": "node scripts/city-staging-readiness.mjs",
+    "test:city:staging-payments": "node scripts/city-staging-payments.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",

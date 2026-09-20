@@ -16,6 +16,15 @@ const migration = await readFile(
   "utf8",
 );
 await db.exec(migration);
+await db.exec(
+  await readFile(
+    new URL(
+      "../supabase/migrations/20260920145000_city_pilot_analytics.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
 const q = async (sql, args = []) => (await db.query(sql, args)).rows;
 const scalar = async (sql, args = []) =>
   Object.values((await q(sql, args))[0])[0];
@@ -259,12 +268,46 @@ assert.equal(
   ),
   7500,
 );
+// Return visits count distinct authenticated people across UTC dates, never owners.
+await q("select city_record_visit($1,$2)", [b.id, other]);
+assert.equal(await scalar("select count(*)::int from city_visit_days"), 0);
+await q("select city_record_visit($1,$2)", [b.id, user]);
+await q("select city_record_visit($1,$2)", [b.id, user]);
+assert.equal(
+  (await scalar("select city_analytics($1)", [b.id])).signedInVisitors30d,
+  1,
+);
+assert.equal(
+  (await scalar("select city_analytics($1)", [b.id])).returningVisitors30d,
+  0,
+);
+await q(
+  "insert into city_visit_days values($1,$2,current_date-1),($1,$2,current_date-31)",
+  [b.id, user],
+);
+await q("select city_record_visit($1,$2)", [b.id, user]);
+assert.equal(await scalar("select count(*)::int from city_visit_days"), 2);
+assert.equal(
+  (await scalar("select city_analytics($1)", [b.id])).returningVisitors30d,
+  1,
+);
+await q("select city_record_visit($1,$2)", [a.id, other]); // suspended property
+assert.equal(
+  await scalar(
+    "select count(*)::int from city_visit_days where business_id=$1",
+    [a.id],
+  ),
+  0,
+);
 for (const role of ["anon", "authenticated"]) {
   await db.exec(`set role ${role}`);
   assert.equal(await scalar("select count(*)::int from city_state"), 1);
   for (const sql of [
     "select * from city_businesses",
     "select * from city_orders",
+    "select * from city_visit_days",
+    "select city_record_visit(gen_random_uuid(),gen_random_uuid())",
+    "select city_analytics(gen_random_uuid())",
     "select * from city_ledger",
     "select city_reallocate()",
     "update city_state set revision=999",

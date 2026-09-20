@@ -49,6 +49,20 @@ export const profileSchema = z
     color: z.string().regex(/^#[\da-fA-F]{6}$/),
     logo: media,
     hero: media,
+    billboard: media
+      .refine(
+        (v) => !v || !v.endsWith(".mp4"),
+        "Use a still image for the billboard.",
+      )
+      .optional(),
+    billboardCrop: z
+      .object({
+        x: z.number().min(0).max(100),
+        y: z.number().min(0).max(100),
+        zoom: z.number().min(1).max(3),
+      })
+      .strict()
+      .optional(),
     video: media,
     offer: z
       .object({
@@ -66,7 +80,12 @@ export const profileSchema = z
   .strict();
 export function parseProfile(value: unknown, userId: string) {
   const profile = profileSchema.parse(value);
-  for (const path of [profile.logo, profile.hero, profile.video])
+  for (const path of [
+    profile.logo,
+    profile.hero,
+    profile.video,
+    profile.billboard,
+  ])
     if (path && !path.startsWith(`${userId}/`))
       throw new HttpError(403, "Media must belong to this account.");
   return profile;
@@ -116,7 +135,7 @@ export async function signProfile(
   profile: Record<string, unknown>,
 ) {
   const copy = { ...profile };
-  for (const key of ["logo", "hero", "video"])
+  for (const key of ["logo", "hero", "video", "billboard"])
     if (typeof copy[key] === "string" && copy[key]) {
       const signed = await db.storage
         .from("city-media")
@@ -145,7 +164,7 @@ export async function listings(db: CityDB, rows: any[]) {
   const paths = [
     ...new Set(
       rows.flatMap((row) =>
-        ["logo", "hero", "video"]
+        ["logo", "hero", "video", "billboard"]
           .map((key) => row.profile[key])
           .filter((p): p is string => typeof p === "string" && !!p),
       ),
@@ -162,7 +181,7 @@ export async function listings(db: CityDB, rows: any[]) {
       ...row.profile,
       offer: { ...row.profile.offer, code: "" },
     };
-    for (const key of ["logo", "hero", "video"])
+    for (const key of ["logo", "hero", "video", "billboard"])
       profile[key] = urls.get(profile[key]) || "";
     return {
       id: row.business_id,

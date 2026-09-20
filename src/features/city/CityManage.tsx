@@ -4,13 +4,14 @@ import {
   emptyCityProfile,
   formatGBP,
   parsePurchase,
-  CITY_TIERS,
   buildingTier,
   type CityProfile,
   type CitySnapshot,
   type CityWorkspace,
 } from "../../domain/city";
 import { cityCommand } from "./api";
+import { CityBrandPreview, CityBillboardArtwork } from "./CityBrandPreview";
+import { defaultBillboardCrop } from "../../domain/cityBranding";
 
 export function CityManage({
   workspace,
@@ -34,6 +35,7 @@ export function CityManage({
   const [previews, setPreviews] = useState<Record<string, string>>({});
   useEffect(() => {
     setProfile(business?.draft || emptyCityProfile());
+    setPreviews({});
   }, [business?.id, business?.draft_version]);
   useEffect(() => {
     const order = new URLSearchParams(location.search).get("order");
@@ -117,6 +119,26 @@ export function CityManage({
     (p) => p.id !== business?.id && p.landValue >= nextValue,
   ).length;
   const dirty = JSON.stringify(profile) !== JSON.stringify(business?.draft);
+  const previewProfile: CityProfile = {
+    ...profile,
+    logo: profile.logo
+      ? previews.logo ||
+        (profile.logo === business?.draft.logo ? business.preview?.logo : "") ||
+        ""
+      : "",
+    hero: profile.hero
+      ? previews.hero ||
+        (profile.hero === business?.draft.hero ? business.preview?.hero : "") ||
+        ""
+      : "",
+    billboard: profile.billboard
+      ? previews.billboard ||
+        (profile.billboard === business?.draft.billboard
+          ? business.preview?.billboard
+          : "") ||
+        ""
+      : "",
+  };
   return (
     <div className="city-management">
       <header className="city-page-heading">
@@ -258,7 +280,7 @@ export function CityManage({
             />
           </label>
           <div className="city-upload-row">
-            {(["logo", "hero", "video"] as const).map((key) => (
+            {(["logo", "hero", "billboard", "video"] as const).map((key) => (
               <label className="city-upload" key={key}>
                 <UploadSimple size={22} />
                 <span>{profile[key] ? `Replace ${key}` : `Upload ${key}`}</span>
@@ -268,6 +290,7 @@ export function CityManage({
                     : "PNG, JPG, WebP · up to 5 MB"}
                 </small>
                 <input
+                  aria-label={`Upload ${key}`}
                   type="file"
                   accept={
                     key === "video"
@@ -298,16 +321,77 @@ export function CityManage({
                           url: string;
                         }>("upload", { base64 });
                         field(key, uploaded.path);
+                        if (key === "billboard")
+                          field("billboardCrop", defaultBillboardCrop);
                         setPreviews((p) => ({ ...p, [key]: uploaded.url }));
                       });
                   }}
                 />
-                {previews[key] && key !== "video" && (
-                  <img src={previews[key]} alt={`${key} preview`} />
-                )}
+                {(previews[key] || business?.preview?.[key]) &&
+                  key !== "video" && (
+                    <img
+                      src={previews[key] || business?.preview?.[key]}
+                      alt={`${key} preview`}
+                    />
+                  )}
               </label>
             ))}
           </div>
+          <fieldset className="city-crop-controls">
+            <legend>Billboard composition</legend>
+            <CityBillboardArtwork profile={previewProfile} />
+            <p>
+              Use a dedicated image or your hero image. The sign is 2:1; your
+              logo and name stay overlaid.
+            </p>
+            {(
+              [
+                ["x", "Horizontal position", 0, 100, 1],
+                ["y", "Vertical position", 0, 100, 1],
+                ["zoom", "Image zoom", 1, 3, 0.05],
+              ] as const
+            ).map(([key, label, min, max, step]) => (
+              <label key={key}>
+                {label}
+                <input
+                  aria-label={label}
+                  type="range"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={(profile.billboardCrop || defaultBillboardCrop)[key]}
+                  onChange={(e) =>
+                    field("billboardCrop", {
+                      ...(profile.billboardCrop || defaultBillboardCrop),
+                      [key]: Number(e.target.value),
+                    })
+                  }
+                />
+                <output>
+                  {(profile.billboardCrop || defaultBillboardCrop)[key]}
+                  {key === "zoom" ? "x" : "%"}
+                </output>
+              </label>
+            ))}
+            <button
+              type="button"
+              onClick={() => field("billboardCrop", defaultBillboardCrop)}
+            >
+              Reset crop
+            </button>
+            {profile.billboard && (
+              <button
+                type="button"
+                onClick={() => {
+                  field("billboard", "");
+                  field("billboardCrop", defaultBillboardCrop);
+                  setPreviews((p) => ({ ...p, billboard: "" }));
+                }}
+              >
+                Use hero image instead
+              </button>
+            )}
+          </fieldset>
           <div className="city-section-heading">
             <span>02 / GIVE PEOPLE A REASON TO VISIT</span>
           </div>
@@ -383,20 +467,11 @@ export function CityManage({
           )}
         </form>
         <aside className="city-business-aside">
-          <div
-            className="city-property-preview"
-            style={{ "--brand": profile.color } as React.CSSProperties}
-          >
-            <div className="city-preview-building">
-              <span>{profile.name.slice(0, 1) || "S"}</span>
-            </div>
-            <span className="city-eyebrow">PROPERTY PREVIEW</span>
-            <h2>{profile.name || "Your next address."}</h2>
-            <p>
-              {profile.tagline || "A little space. A world of possibilities."}
-            </p>
-            <span>{CITY_TIERS[buildingTier(nextValue)].name}</span>
-          </div>
+          <CityBrandPreview
+            id={business?.id}
+            tier={buildingTier(nextValue)}
+            profile={previewProfile}
+          />
           {business && (
             <section className="city-business-section">
               <h2>Verify & publish</h2>
@@ -570,6 +645,26 @@ export function CityManage({
               </div>
             ))}
           </div>
+          <h2>Last 30 days</h2>
+          <div className="city-metrics">
+            {Object.entries({
+              views30d: "Property views",
+              clicks30d: "Website clicks",
+              claims30d: "Offer claims",
+              signedInVisitors30d: "Signed-in visitors",
+              returningVisitors30d: "Returning signed-in visitors",
+            }).map(([key, label]) => (
+              <div key={key}>
+                <strong>{workspace.analytics[key] || 0}</strong>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+          <p>
+            Returning means visiting this property on at least two different UTC
+            days. Only signed-in visitors are counted; your own visits are
+            excluded. Offer claims do not confirm sales.
+          </p>
           <h2>Payment history</h2>
           {workspace.orders.length ? (
             <div className="city-table-wrap">

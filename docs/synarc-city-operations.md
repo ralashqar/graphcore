@@ -83,3 +83,8 @@ The 2,000-property desktop scene measured 60.17 FPS over 2.51 seconds on Intel U
 That rendering measurement used the original procedural kit. Updated Downtown MegaKit measurements and asset checks are recorded in the [MegaKit documentation](synarc-city-megakit.md).
 
 Hosted Supabase migration/auth/storage/realtime acceptance, multi-session concurrency, real Stripe test payments/refunds/disputes, live merchant configuration and physical mobile testing remain rollout gates. Nothing has been deployed or charged by this implementation. The Blender kit is generated locally; the bundled Manrope font includes its OFL licence.
+
+
+## Branding and pilot extension
+
+Apply `20260920145000_city_pilot_analytics.sql` after the base City migration, deploy the four City functions, and install the updated scheduler before enabling the new editor. Optional `CITY_PILOT_USER_IDS` restricts new business registrations to exact Auth UUIDs. The [pilot runbook](synarc-city-pilot.md) covers billboard editing, aggregate measurement, sandbox readiness, test payment/refund acceptance and remaining hosted gates. Neither existing connected Supabase project has been selected as staging.

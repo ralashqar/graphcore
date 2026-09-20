@@ -15,3 +15,8 @@ select cron.schedule('synarc-city-reconcile','* * * * *',$job$
     timeout_milliseconds := 90000
   );
 $job$);
+
+-- Keep authenticated return measurement limited to 30 UTC calendar days even during idle periods.
+select cron.schedule('synarc-city-visit-retention','15 2 * * *',$job$
+  delete from public.city_visit_days where day < current_date - 29;
+$job$);

@@ -41,6 +41,7 @@ export function CityKit({
   zoom,
   onSelect,
   reduced,
+  labels = true,
 }: {
   properties: CityProperty[];
   selected: CityProperty | null;
@@ -49,6 +50,7 @@ export function CityKit({
   zoom: number;
   onSelect: (p: CityProperty) => void;
   reduced: boolean;
+  labels?: boolean;
 }) {
   const { scene } = useGLTF("/city/downtown/downtown.glb", false, true);
   const assets = useMemo(() => {
@@ -289,7 +291,7 @@ export function CityKit({
         reduced={reduced}
       />
       {properties
-        .filter((p) => p.rank <= 3 || p.id === selected?.id)
+        .filter((p) => labels && (p.rank <= 3 || p.id === selected?.id))
         .map((p) => (
           <Html
             key={p.id}
@@ -310,9 +312,11 @@ export function CityKit({
             </button>
           </Html>
         ))}
-      <Html position={[0, 0.2, 0]} center zIndexRange={[2, 0]}>
-        <span className="city-plaza-label">CENTRAL PLAZA</span>
-      </Html>
+      {labels && (
+        <Html position={[0, 0.2, 0]} center zIndexRange={[2, 0]}>
+          <span className="city-plaza-label">CENTRAL PLAZA</span>
+        </Html>
+      )}
     </>
   );
 }

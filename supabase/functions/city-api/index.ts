@@ -159,6 +159,9 @@ Deno.serve(async (request) => {
           businesses.map(async (b) => ({
             ...b,
             preview: await signProfile(db, b.draft),
+            analytics: result(
+              await db.rpc("city_analytics", { p_business: b.id }),
+            ),
           })),
         ),
         reports: result(
@@ -179,7 +182,9 @@ Deno.serve(async (request) => {
     }
     const business = await owner(db, user.id);
     return json({
-      business,
+      business: business
+        ? { ...business, preview: await signProfile(db, business.draft) }
+        : null,
       orders: business
         ? result(
             await db

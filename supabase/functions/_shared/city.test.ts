@@ -122,3 +122,53 @@ if (Deno.env.get("CITY_NETWORK_SMOKE") === "true")
     assert.ok(response.bytes.length > 0);
     assert.ok(response.type.includes("text/html"));
   });
+
+Deno.test(
+  "billboard crop and media ownership are validated without breaking legacy profiles",
+  async () => {
+    const { parseProfile } = await import("./city.ts");
+    const uid = "11111111-1111-4111-8111-111111111111";
+    const profile = {
+      name: "Test",
+      tagline: "",
+      description: "",
+      website: "https://example.com",
+      category: "Apps",
+      color: "#547364",
+      logo: "",
+      hero: "",
+      video: "",
+      offer: { title: "", description: "", code: "", expiresAt: null, url: "" },
+    };
+    assert.equal(parseProfile(profile, uid).billboard, undefined);
+    const valid = {
+      ...profile,
+      billboard: `${uid}/66666666-6666-4666-8666-666666666666.png`,
+      billboardCrop: { x: 0, y: 100, zoom: 3 },
+    };
+    assert.deepEqual(
+      parseProfile(valid, uid).billboardCrop,
+      valid.billboardCrop,
+    );
+    assert.throws(() =>
+      parseProfile({ ...valid, billboardCrop: { x: 101, y: 0, zoom: 1 } }, uid),
+    );
+    assert.throws(() =>
+      parseProfile({ ...valid, billboardCrop: { x: 50, y: 0, zoom: 0 } }, uid),
+    );
+    assert.throws(
+      () =>
+        parseProfile(
+          {
+            ...valid,
+            billboard: valid.billboard.replace(
+              uid,
+              "22222222-2222-4222-8222-222222222222",
+            ),
+          },
+          uid,
+        ),
+      /belong/,
+    );
+  },
+);

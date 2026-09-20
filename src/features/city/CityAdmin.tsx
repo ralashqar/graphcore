@@ -4,7 +4,7 @@ import { cityCall, cityCommand } from "./api";
 type Report = { id: string; business_id: string; reason: string };
 export function CityAdmin() {
   const [data, setData] = useState<{
-      businesses: CityBusiness[];
+      businesses: (CityBusiness & { analytics?: Record<string, number> })[];
       reports: Report[];
       orders: CityOrder[];
     } | null>(null),
@@ -51,6 +51,111 @@ export function CityAdmin() {
         </p>
       )}
       {!data && !error && <p>Loading review queue…</p>}
+      {data && (
+        <section className="city-business-section" aria-label="Pilot dashboard">
+          <h2>Pilot readiness & results</h2>
+          <p>
+            Start with 5-10 approved businesses. This table covers the latest
+            100 businesses; metrics cover the last 30 UTC days.
+          </p>
+          <button
+            onClick={() => {
+              const rows = [
+                [
+                  "Business",
+                  "Stage",
+                  "Views",
+                  "Clicks",
+                  "Claims",
+                  "Signed-in visitors",
+                  "Returning signed-in visitors",
+                ],
+                ...data.businesses.map((b) => [
+                  b.draft.name,
+                  b.status,
+                  ...[
+                    "views30d",
+                    "clicks30d",
+                    "claims30d",
+                    "signedInVisitors30d",
+                    "returningVisitors30d",
+                  ].map((k) => b.analytics?.[k] || 0),
+                ]),
+              ];
+              const csv = rows
+                .map((row) =>
+                  row
+                    .map(
+                      (value) =>
+                        '"' +
+                        String(value)
+                          .replace(/^[=+@\-\t\r]/, "'$&")
+                          .replaceAll('"', '""') +
+                        '"',
+                    )
+                    .join(","),
+                )
+                .join("\r\n");
+              const url = URL.createObjectURL(
+                new Blob([csv], { type: "text/csv;charset=utf-8" }),
+              );
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = "synarc-city-pilot.csv";
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }}
+          >
+            Export pilot results
+          </button>
+          <div className="city-table-wrap">
+            <table className="city-pilot-table">
+              <thead>
+                <tr>
+                  <th>Business</th>
+                  <th>Next step</th>
+                  <th>Views</th>
+                  <th>Clicks</th>
+                  <th>Claims</th>
+                  <th>Returning / signed-in</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.businesses.map((b) => (
+                  <tr key={b.id}>
+                    <td>{b.draft.name}</td>
+                    <td>
+                      {b.status === "suspended"
+                        ? "Suspended"
+                        : !b.verified_at
+                          ? "Verify domain"
+                          : b.status !== "approved"
+                            ? "Review property"
+                            : !b.land_value
+                              ? "First purchase"
+                              : !b.published?.offer.title
+                                ? "Add an offer"
+                                : "Pilot active"}
+                    </td>
+                    <td>{b.analytics?.views30d || 0}</td>
+                    <td>{b.analytics?.clicks30d || 0}</td>
+                    <td>{b.analytics?.claims30d || 0}</td>
+                    <td>
+                      {b.analytics?.returningVisitors30d || 0} /{" "}
+                      {b.analytics?.signedInVisitors30d || 0}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <small>
+            Views and clicks use daily anonymous deduplication. Returns measure
+            signed-in people visiting a property on multiple days, excluding
+            owners. No purchase attribution is claimed.
+          </small>
+        </section>
+      )}
       {data?.businesses.map((b) => (
         <section className="city-review" key={b.id}>
           <div>
@@ -74,6 +179,13 @@ export function CityAdmin() {
                 className="city-review-media"
                 src={b.preview.hero}
                 alt="Submitted property image"
+              />
+            )}
+            {b.preview?.billboard && (
+              <img
+                className="city-review-media"
+                src={b.preview.billboard}
+                alt="Submitted billboard image"
               />
             )}
             {b.preview?.video && (
