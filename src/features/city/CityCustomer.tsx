@@ -1,3 +1,4 @@
+import { StorefrontBadge, useLiving } from "./CityLiving";
 import { supabase } from "../../utils/supabase";
 import { CityDialog } from "./CityAuth";
 import {
@@ -303,10 +304,13 @@ export function CustomerDiscovery({
   demoProperties?: CityProperty[];
   onExplore?: () => void;
 }) {
+  const living = useLiving();
   const [filter, setFilter] = useState<DiscoveryFilter>(() => {
       try {
         const v = sessionStorage.getItem("city-discovery-filter");
-        return ["all", "hot", "free", "exclusive", "ending"].includes(v || "")
+        return ["all", "hot", "free", "exclusive", "ending", "drops"].includes(
+            v || "",
+          )
           ? v as DiscoveryFilter
           : "all";
       } catch {
@@ -334,6 +338,7 @@ export function CustomerDiscovery({
         return true;
       }
     });
+  useEffect(()=>{if(filter==="drops"&&(!living.storefronts||!living.launches))setFilter("all");},[filter,living.storefronts,living.launches]);
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!listRef.current) return;
@@ -507,10 +512,19 @@ export function CustomerDiscovery({
         )}
       </label>
       <div className="city-customer-filters" aria-label="Discovery filters">
-        {([["all", "Discover"], ["hot", "Hot now"], ["free", "Freebies"], [
-          "exclusive",
-          "Exclusives",
-        ], ["ending", "Ending soon"]] as const).map(([id, label]) => (
+        {([
+          ["all", "Discover"],
+          ["hot", "Hot now"],
+          ["free", "Freebies"],
+          [
+            "exclusive",
+            "Exclusives",
+          ],
+          ["ending", "Ending soon"],
+          ["drops", "New Drops"],
+        ] as const).filter(([id]) =>
+          id !== "drops" || (living.storefronts && living.launches)
+        ).map(([id, label]) => (
           <button
             key={id}
             aria-pressed={filter === id}
@@ -595,6 +609,7 @@ export function CustomerDiscovery({
                 {item.rank ? "Sponsored city location" : "Discovery Pavilion"}
               </small>
             </button>
+            <StorefrontBadge businessId={item.business_id} compact />
             {(item.kind === "deal" || item.kind === "business" ||
               item.kind === "launch") && <CustomerSave item={item} />}
           </article>

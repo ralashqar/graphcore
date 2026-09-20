@@ -1,3 +1,4 @@
+import { living } from "./city-living.ts";
 import { z } from "npm:zod@4";
 import { requireUserClient } from "./auth.ts";
 import {
@@ -28,6 +29,17 @@ export async function customer(
     command ? (action === "event" ? 600 : 120) : 180,
     command ? 3600 : 60,
   );
+  if (
+    [
+      "city_state",
+      "inbox",
+      "inbox_read",
+      "reminder",
+      "campaign_history",
+      "moment",
+      "resolve_launch",
+    ].includes(action)
+  ) return living(request, raw, command);
   if (!command && action === "nearby") {
     const point = z.object({
       x: z.number().min(-10000).max(10000),
@@ -91,9 +103,10 @@ export async function customer(
   if (!command && action === "search") {
     const p = z.object({
       query: z.string().max(160).default(""),
-      filter: z.enum(["all", "hot", "free", "exclusive", "ending"]).default(
-        "all",
-      ),
+      filter: z.enum(["all", "hot", "free", "exclusive", "ending", "drops"])
+        .default(
+          "all",
+        ),
       category: z.string().max(80).default(""),
       offset: z.number().int().min(0).max(10000).default(0),
     }).parse(raw);

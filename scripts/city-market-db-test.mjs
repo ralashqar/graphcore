@@ -15,6 +15,7 @@ for (const name of [
   "20260920185857_city_customer_discovery",
   "20260920202005_city_market_competition",
     "20260920220724_city_landing_exposure",
+    "20260920223031_city_living_storefronts",
 ]) {
   await db.exec(
     await readFile(

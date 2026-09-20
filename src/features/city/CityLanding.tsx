@@ -1,3 +1,4 @@
+import { useLiving } from "./CityLiving";
 import { type MarketEvent, marketHeadline } from "../../domain/cityMarket";
 import { formatGBP } from "../../domain/city";
 import { useEffect, useRef, useState } from "react";
@@ -117,6 +118,7 @@ export function BusinessDestination(
     onEnter?: () => void;
   },
 ) {
+  const living = useLiving();
   const [items, setItems] = useState<CustomerItem[]>([]),
     [loading, setLoading] = useState(enabled),
     [failed, setFailed] = useState(false);
@@ -142,6 +144,14 @@ export function BusinessDestination(
     };
   }, [property.id, enabled]);
   const item = items[0];
+  if (
+    living.enabled &&
+    living.states.some((s) => s.businessId === property.id && s.primary)
+  ) {
+    return onEnter
+      ? <button onClick={onEnter}>Enter full business space ↗</button>
+      : null;
+  }
   return (
     <section
       className="city-destination"

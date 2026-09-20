@@ -1,3 +1,4 @@
+import { MerchantLiving } from "./CityLiving";
 import { marketQuote, MerchantPosition, QuotePreview } from "./CityMarket";
 import type { CityQuote } from "../../domain/cityMarket";
 import { CustomerMetrics } from "./CityCustomer";
@@ -711,16 +712,23 @@ export function CityManage({
         </aside>
       </div>
       {business && snapshot?.customerDiscoveryEnabled && (
-        <CustomerMetrics businessId={business.id} />
+        <>
+          <CustomerMetrics businessId={business.id} />
+          <MerchantLiving businessId={business.id} />
+        </>
       )}
       {business && snapshot?.dealsEnabled && (
-        <CityDealStudio businessId={business.id} />
+        <div id="city-deal-studio">
+          <CityDealStudio businessId={business.id} />
+        </div>
       )}
       {business && snapshot?.campusEnabled && (
         <CityCampusEditor business={business} onRefresh={onRefresh} />
       )}
       {business?.published && snapshot?.discoveryEnabled && (
-        <CityDiscoveryStudio businessId={business.id} />
+        <div id="city-launch-studio">
+          <CityDiscoveryStudio businessId={business.id} />
+        </div>
       )}
       {business && (
         <section className="city-analytics">

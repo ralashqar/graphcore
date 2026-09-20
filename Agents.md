@@ -4,6 +4,11 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### Living storefronts and in-app return visits (September 2026)
+
+Default-off `CITY_STOREFRONTS_ENABLED` and `CITY_ACTIVITY_ENABLED` connect approved deals/launches and existing organic observations to a shared storefront resolver and bounded street motifs. The service-only living-state read returns aggregate bands with expiry, never actor identities or concurrent-person counts. Append-only publication, sell-out and organic milestone evidence supports owner history and revalidated share-card downloads. Private launch preferences and read receipts provide explicit in-app reminders; saving a launch does not opt into notifications. New Drops and launch links retain the city and paid allocation remains unchanged. The new domain resolver is imported only by City customer Edge code and frontend; world/game Fly workers do not execute it. Apply the additive migration before deploying City API/command and frontend to designated staging. No production activation, real checkout, provider spending or physical-device certification was performed. See [docs/synarc-city-living.md](docs/synarc-city-living.md).
+
+
 ### City adaptive landing and exposure (September 2026)
 
 The city-first entry frames the paid leader in the unobstructed canvas, collapses introduction on exploration independently of login, and preserves explicit business/deal destinations. Public bounded nearby/destination reads reuse the approved customer projection. Challenge #1 preselects an authoritative quote without submitting checkout. Separate sampled canvas and leader-card observations use the service-only exposure RPC, daily deduplication and owner exclusion; neither contributes to organic trending. `CITY_EXPOSURE_ENABLED` defaults off and additionally requires the market flag. Apply the additive landing migration before deploying City API/command and frontend to designated staging. No Fly worker, generation, provider or payment admission changes are made. Local verification and remaining hosted/mobile performance acceptance are documented in [docs/synarc-city-landing.md](docs/synarc-city-landing.md).

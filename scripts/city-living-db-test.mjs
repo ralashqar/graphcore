@@ -140,22 +140,50 @@ const launch=await val("insert into city_discovery_entries(kind,slug,business_id
 await val('select city_customer_merge($1,$2,true)',[visitor,JSON.stringify([{kind:'launch',id:launch}])]);
 assert.equal(await val('select count(*)::int from city_saved_launches where user_id=$1',[visitor]),1);
 assert.equal((await search('new editor')).items[0].kind,'launch');
-await q("update city_businesses set status='suspended' where id=$1", [bid]);
-assert.equal((await search()).items.length, 0);
-assert.ok(await val("select revision>0 from city_customer_revision"));
-await db.exec("set role anon");
-await assert.rejects(
-  q("select * from city_customer_activity"),
-  /permission denied/,
-);
-await assert.rejects(
-  q("select * from city_customer_content"),
-  /permission denied/,
-);
-await assert.rejects(q("select * from city_saved_deals"), /permission denied/);
-await assert.rejects(q("select city_customer_search()"), /permission denied/);
-assert.equal((await q("select * from city_customer_revision")).length, 1);
-await db.close();
-console.log(
-  "Customer search, availability, deduplication, organic ranking, saves and private access checks passed.",
-);
+
+assert.equal((await search('', 'drops')).items.length,1);
+assert.equal((await search('', 'drops',false,true)).items.length,1,'launches work with deals disabled');
+assert.equal((await search('', 'drops',false,false)).items.length,0);
+assert.equal(await val('select count(*)::int from city_launch_reminders'),0,'saving launch is not a reminder');
+await q('select city_living_preference($1,$2,true)',[visitor,launch]);
+await q('select city_living_preference($1,$2,true)',[visitor,launch]);
+assert.equal(await val('select count(*)::int from city_launch_reminders'),1);
+let inbox=await val('select city_living_inbox($1,true,true,true)',[visitor]);
+assert.equal(inbox.items.filter(i=>i.kind==='launch_reminder').length,0,'not early');
+await q("update city_discovery_entries set published=jsonb_set(published,'{startsAt}',to_jsonb((now()-interval '1 minute')::text)) where id=$1",[launch]);
+inbox=await val('select city_living_inbox($1,true,true,true)',[visitor]);
+const reminder=inbox.items.find(i=>i.kind==='launch_reminder');assert.ok(reminder);
+await q('insert into city_inbox_receipts(user_id,item_key) values($1,$2) on conflict do nothing',[visitor,reminder.key]);
+assert.equal((await val('select city_living_inbox($1,true,true,true)',[visitor])).unread,0);
+assert.equal((await val('select city_living_inbox($1,true,true,true)',[owner])).items.length,0,'owner cannot read visitor inbox');
+await q("update city_discovery_entries set published=jsonb_set(published,'{endsAt}',to_jsonb((now()-interval '1 second')::text)) where id=$1",[launch]);
+assert.equal((await val('select city_living_inbox($1,true,true,true)',[visitor])).items.length,0,'expired reminders are not delivered late');
+await q('select city_living_preference($1,$2,false)',[visitor,launch]);
+assert.equal((await val('select city_living_inbox($1,true,true,true)',[visitor])).items.length,0);
+await q("insert into city_follows(user_id,business_id) values($1,$2)",[visitor,bid]);
+await q("update city_businesses set published=jsonb_set(published,'{description}','\"A new approved experience\"') where id=$1",[bid]);
+inbox=await val('select city_living_inbox($1,true,true,true)',[visitor]);assert.equal(inbox.items.length,1);
+await q('delete from city_follows where user_id=$1',[visitor]);
+assert.equal((await val('select city_living_inbox($1,true,true,true)',[visitor])).items.length,0,'unfollow removes updates');
+await q('update city_deals set paused=false,issued=quantity where id=$1',[deal]);
+assert.equal(await val("select count(*)::int from city_content_events where kind='sold_out'"),1);
+await q('update city_deals set issued=quantity where id=$1',[deal]);
+assert.equal(await val("select count(*)::int from city_content_events where kind='sold_out'"),1,'no duplicate sellout');
+let content=await val('select city_living_content(array[$1::uuid],true,true)',[bid]);assert.ok(content.find(i=>i.kind==='deal').sold_out_at);
+await q('update city_deals set paused=true where id=$1',[deal]);
+assert.ok(!(await val('select city_living_content(array[$1::uuid],true,true)',[bid])).some(i=>i.kind==='deal'));
+await q('delete from city_customer_activity');
+for(let i=0;i<10;i++) await q("select city_customer_record($1,$2,'claim')",[bid,'fixture:'+i]);
+await db.exec('begin');
+const before=await val('select to_jsonb(s) from city_activity_summary(array[$1::uuid]) s',[bid]);
+assert.equal(Number(before.score),60);assert.equal(Number(before.actors),10);
+await q('update city_businesses set land_value=10000000 where id=$1',[bid]);
+const after=await val('select to_jsonb(s) from city_activity_summary(array[$1::uuid]) s',[bid]);assert.deepEqual(after,before,'spending never changes activity');
+await db.exec('commit');
+assert.equal(await val("select count(*)::int from city_content_events where kind='organic_milestone'"),1);
+await assert.rejects(q("update city_content_events set title='Fake'"),/immutable/);
+await q("update city_businesses set status='suspended' where id=$1",[bid]);
+assert.deepEqual(await val('select city_living_content(array[$1::uuid],true,true)',[bid]),[]);
+assert.equal((await q('select * from city_activity_summary(array[$1::uuid])',[bid])).length,0);
+for(const role of ['anon','authenticated']){await db.exec('set role '+role);for(const table of ['city_content_events','city_launch_reminders','city_inbox_receipts'])await assert.rejects(q('select * from '+table),/permission denied/);await assert.rejects(q('select city_living_inbox($1,true,true,true)',[visitor]),/permission denied/);await db.exec('reset role');}
+await db.close();console.log('Living storefront SQL passed: drops, explicit reminders, expiry boundaries, private read state, follows, sell-out evidence, organic independence, suspension and RLS.');

@@ -1,3 +1,4 @@
+import { LaunchReminder, StorefrontBadge } from "./CityLiving";
 import { CityDeals } from "./CityDeals";
 import { enterCampus } from "./CityCampus";
 import {
@@ -422,6 +423,8 @@ export function CityDiscovery({
       )}
       {launch && entry && (
         <section className="city-launch-banner">
+          {entry.business_id&&<StorefrontBadge businessId={entry.business_id}/>}
+          {launchState(launch,now)!=="Past"&&<LaunchReminder launchId={entry.id}/>}
           <strong>{launchState(launch, now)}</strong>
           <p>
             {new Date(launch.startsAt).toLocaleString()} —{" "}

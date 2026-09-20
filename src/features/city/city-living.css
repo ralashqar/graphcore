@@ -1,0 +1,101 @@
+.city-storefront-state {
+  border-left: 3px solid;
+  padding: 10px 14px;
+  margin: 12px 0;
+  background: #f0f2e9;
+}
+.city-storefront-state:empty {
+  display: none;
+}
+.city-storefront-state small {
+  display: block;
+  color: #52665b;
+  margin-top: 6px;
+}
+.city-storefront-state p {
+  margin: 8px 0;
+}
+.city-inbox-item {
+  padding: 18px 0;
+  border-bottom: 1px solid #d7ddd3;
+}
+.city-inbox-item small {
+  color: #52665b;
+}
+.city-inbox-item button {
+  margin-right: 8px;
+}
+.city-app .city-inbox-button {
+  font-size: 12px;
+}
+.city-living-pin {
+  border: 1px solid currentColor;
+  background: #fafbf5;
+  padding: 5px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.city-launch-panel {
+  position: absolute;
+  right: 24px;
+  top: 24px;
+  bottom: 90px;
+  width: 340px;
+  padding: 22px;
+  background: #f8f8f0;
+  overflow: auto;
+  z-index: 10;
+  border-radius: 12px;
+}
+.city-launch-panel h2 {
+  font-size: 26px;
+}
+.city-launch-panel button {
+  margin: 5px 5px 5px 0;
+}
+@media (max-width:899px) {
+  .city-app .city-inbox-button {
+    font-size: 10px;
+    padding: 6px;
+  }
+  .city-app .city-header-actions {
+    gap: 4px;
+  }
+  .city-app:has(.city-inbox-button) .city-about-nav {
+    display: none;
+  }
+  .city-launch-panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    max-height: 48dvh;
+    border-radius: 16px 16px 0 0;
+  }
+}
+
+@media (max-width:899px) {
+  .city-app.city-customer-enabled .city-map-tools {
+    top: auto;
+  }
+  .city-map-shell:has(.city-launch-panel) .city-discovery .city-property-list,
+  .city-map-shell:has(.city-launch-panel) .city-discovery .city-pagination,
+  .city-map-shell:has(.city-launch-panel) .city-discovery > h2,
+  .city-map-shell:has(.city-launch-panel) .city-discovery > button,
+  .city-map-shell:has(.city-launch-panel) .city-welcome-footer {
+    display: none;
+  }
+  .city-map-shell:has(.city-launch-panel) .city-map-tools {
+    top: auto;
+    bottom: calc(48dvh + 8px);
+  }
+  .city-map-shell:has(.city-launch-panel.is-collapsed) .city-map-tools {
+    bottom: 108px;
+  }
+  .city-app .city-launch-panel.is-collapsed {
+    max-height: 100px;
+    overflow: hidden;
+  }
+}

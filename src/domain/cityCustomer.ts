@@ -1,4 +1,4 @@
-export type DiscoveryFilter = "all" | "hot" | "free" | "exclusive" | "ending";
+export type DiscoveryFilter = "all" | "hot" | "free" | "exclusive" | "ending" | "drops";
 export type CustomerItem = {
   key: string;
   business_id: string;

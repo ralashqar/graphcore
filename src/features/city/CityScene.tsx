@@ -1,3 +1,5 @@
+import { useLiving } from "./CityLiving";
+import { CityStreetActivity } from "./CityStreetActivity";
 import { CityExposure } from "./CityExposure";
 import type { ViewportRect } from "../../domain/cityLanding";
 import { BUILDING_RECIPES } from "../../domain/cityLayout";
@@ -72,7 +74,10 @@ function CameraRig({
   );
   useEffect(() => {
     const control = controls.current;
-    if (!control || !("isOrthographicCamera" in camera) || control.object !== camera) return;
+    if (
+      !control || !("isOrthographicCamera" in camera) ||
+      control.object !== camera
+    ) return;
     const focusKey = `${target?.id || "central"}:${home}`;
     if (lastFocus.current !== focusKey) {
       manual.current = false;
@@ -152,7 +157,10 @@ function CameraRig({
   ]);
   useFrame((_, delta) => {
     const control = controls.current;
-    if (!control || !("isOrthographicCamera" in camera) || control.object !== camera) return;
+    if (
+      !control || !("isOrthographicCamera" in camera) ||
+      control.object !== camera
+    ) return;
     if (destination.current) {
       const diff = destination.current.clone().sub(control.target);
       if (diff.length() < 0.02) {
@@ -393,6 +401,7 @@ export default function CityScene({
   onDiscoverySelect?: (item: CustomerItem) => void;
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
+  const living=useLiving();
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
   const [center, setCenter] = useState({ x: 0, z: 0 });
@@ -439,6 +448,11 @@ export default function CityScene({
           near={0.1}
           far={5000}
         />
+        <CityStreetActivity
+          properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
+          reduced={reduced}
+          paused={!!playback}
+        />
         <ambientLight intensity={1.5} />
         <directionalLight
           position={[-120, 240, 80]}
@@ -454,7 +468,7 @@ export default function CityScene({
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
         {pavilion && <CityPavilion {...pavilion} />}
-        {!markers &&
+        {!living.storefronts && !markers &&
           zoom >= 3 &&
           visible
             .filter((p) => p.hasDeal)
@@ -474,7 +488,7 @@ export default function CityScene({
                 </button>
               </Html>
             ))}
-        {markers && (
+        {markers && !living.storefronts && (
           <DiscoveryMarkers
             items={markers}
             zoom={zoom}

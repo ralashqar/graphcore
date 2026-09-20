@@ -1,3 +1,4 @@
+import { StorefrontBadge, LivingFollow } from "./CityLiving";
 import { CityDeals } from "./CityDeals";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { CityProfile } from "../../domain/city";
@@ -260,6 +261,7 @@ export default function CityCampus({
             "Explore the people, products and ideas behind this address."}
         </p>
         <small>One city address. A whole space to discover.</small>
+        {data&&<><StorefrontBadge businessId={data.businessId}/><LivingFollow businessId={data.businessId}/></>}
       </header>
       {error && <p role="alert">{error}</p>}
       {!data && !error && <p>Loading exhibits…</p>}
