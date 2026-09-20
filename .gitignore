@@ -29,6 +29,9 @@ dist-ssr
 *.sln
 *.sw?
 .playwright-cli/
+output/playwright/
+public/city/*.blend1
+assets/city/*.blend1
 
 # Generated pitch deck workspaces and exports
 tmp/presentations/

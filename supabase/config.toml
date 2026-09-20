@@ -4,6 +4,15 @@
 # working directory name when running `supabase init`.
 project_id = "graphcore"
 
+[functions.city-api]
+verify_jwt = false
+[functions.city-command]
+verify_jwt = false
+[functions.city-stripe-webhook]
+verify_jwt = false
+[functions.city-reconcile]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.

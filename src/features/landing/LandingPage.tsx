@@ -928,6 +928,7 @@ export function LandingPage({
           </button>
 
           <div className="landing-nav-links">
+            <a href="/city">City</a>
             {navLinks.map((link) => (
               <a href={link.href} key={link.href}>
                 {link.label}

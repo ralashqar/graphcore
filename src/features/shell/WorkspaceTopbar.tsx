@@ -114,6 +114,7 @@ export function WorkspaceTopbar({
         <div className="topbar-center">
           <nav className="tabbar" aria-label="Workspace tabs">
             {onOpenAnimations ? <button className={animationsActive ? 'tab-button is-active' : 'tab-button'} onClick={onOpenAnimations} type="button">Animations</button> : null}
+            <a className="tab-button" href="/city">City</a>
             {onOpenGameBuilder && (projectType === 'game' || gameBuilderActive) ? <button className={gameBuilderActive ? 'tab-button is-active' : 'tab-button'} onClick={onOpenGameBuilder} type="button">Game</button> : null}
             {onOpenVibeDirector ? (
               <button

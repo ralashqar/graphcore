@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "test:city": "node --experimental-strip-types --test src/domain/city.test.ts && node scripts/city-db-test.mjs && npx deno test --allow-env --config supabase/functions/city-command/deno.json supabase/functions/_shared/city.test.ts",
+    "test:city:browser": "node scripts/city-browser.mjs && node scripts/city-ui-flow.mjs",
+    "test:city:sharing": "node --experimental-strip-types --test server/city-sharing.test.ts",
+    "check:city:server": "tsc -p tsconfig.city-server.json --noEmit && npx deno check --config supabase/functions/city-command/deno.json supabase/functions/city-api/index.ts supabase/functions/city-command/index.ts supabase/functions/city-stripe-webhook/index.ts supabase/functions/city-reconcile/index.ts",
     "test:game-mechanics": "node --experimental-strip-types --test src/domain/game/v3/mechanics.test.ts src/domain/game/v3/actionMechanics.test.ts src/domain/game/v3/motionPresentation.test.ts src/domain/game/v3/performance.test.ts",
     "test:game-mechanics-browser": "node --experimental-strip-types scripts/game-mechanics-browser.mjs",
     "test:game-mechanics-db": "node scripts/verify-game-mechanics-db.mjs",
@@ -69,6 +73,7 @@
     "@phosphor-icons/react": "^2.1.10",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@supabase/supabase-js": "^2.103.3",
     "@types/three": "^0.183.1",
     "@xyflow/react": "^12.10.2",
@@ -84,6 +89,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

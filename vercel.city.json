@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/city-property.ts": { "includeFiles": "dist/index.html" },
+    "api/city-share.ts": { "includeFiles": "public/fonts/Manrope.ttf" }
+  },
+  "rewrites": [
+    { "source": "/city/business/:slug", "destination": "/api/city-property?slug=:slug" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}

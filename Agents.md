@@ -4,6 +4,12 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### Synarc City marketplace (September 2026)
+
+The isolated `feature/synarc-city` branch adds a public `/city` entry with R3F/Three.js, a locally generated Blender kit, account and business management, reviewed website-based properties, offers, saves and sharing. City data and money are independent of authoring projects, generation credits and existing subscriptions. The additive city migration introduces service-only commands, RLS-protected records, immutable GBP ledger entries, revision-fenced reviews, pinned-IP website import, serialized ranking and append-only outer-ring expansion. `city-api`, `city-command`, `city-stripe-webhook` and `city-reconcile` execute only on Edge; the existing Fly world/game workers do not execute city modules.
+
+`CITY_BROWSING_ENABLED`, `CITY_ONBOARDING_ENABLED` and `CITY_PURCHASES_ENABLED` gate activation independently. Stripe city credentials, tax configuration, merchant terms, analytics salt, domain verification, administrator assignment and scheduled reconciliation are separate deployment requirements. Demo inventory is browser-local and explicitly labelled. Local implementation is not evidence of hosted payment, tax, moderation or mobile-device acceptance. See [product](docs/synarc-city-product.md), [architecture](docs/synarc-city-architecture.md) and [operations](docs/synarc-city-operations.md) for contracts, verification and activation steps.
+
 ### Studio request accounting without a cumulative setup cap (September 2026)
 
 At the user's explicit request, new animation studio generations use the service-only `animation-studio-live` ledger with `enforce_setup_cap=false`. The old experimental budget and historical holds remain intact for legacy jobs and other game/provider experiments. Studio requests retain their per-command maximum, provider checks, ownership, idempotency and uncertain-submission reconciliation. Real Runpod billing is unchanged. The additive migration changes studio command routing only; no Edge/Fly/native image changes or new inference are needed. See [docs/55-studio-request-accounting.md](docs/55-studio-request-accounting.md).
