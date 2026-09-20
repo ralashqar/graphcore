@@ -14,6 +14,7 @@ for (
     "20260920172201_city_deals",
     "20260920182940_city_deal_launch",
     "20260920185857_city_customer_discovery",
+    "20260920202005_city_market_competition",
   ]
 ) {
   await db.exec(

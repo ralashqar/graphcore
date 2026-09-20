@@ -1,3 +1,4 @@
+import { MarketMotionContext, type MarketPlayback } from "./CityMarketMotion";
 import { type CustomerItem, discoveryLabel } from "../../domain/cityCustomer";
 import { CityPavilion } from "./CityPavilion";
 import { Html } from "@react-three/drei";
@@ -17,6 +18,7 @@ import { MOUSE, TOUCH, Vector3 } from "three";
 import { type CityProperty } from "../../domain/city";
 import { logicalAxis, plotAxis as position } from "../../domain/cityLayout";
 import { CityKit } from "./CityKit";
+let establishedCentre = false;
 let savedCityCamera: {
   position: Vector3;
   target: Vector3;
@@ -44,20 +46,25 @@ function CameraRig({
   const restore = useRef(true);
   const selection = useRef(target?.id || "");
   selection.current = target?.id || "";
-  useEffect(() => () => {
-    if (controls.current) {
-      savedCityCamera = {
-        position: camera.position.clone(),
-        target: controls.current.target.clone(),
-        zoom: camera.zoom,
-        selection: selection.current,
-      };
-    }
-  }, [camera]);
+  useEffect(
+    () => () => {
+      if (controls.current) {
+        savedCityCamera = {
+          position: camera.position.clone(),
+          target: controls.current.target.clone(),
+          zoom: camera.zoom,
+          selection: selection.current,
+        };
+      }
+    },
+    [camera],
+  );
   useEffect(() => {
     if (
-      restore.current && savedCityCamera &&
-      savedCityCamera.selection === (target?.id || "") && controls.current
+      restore.current &&
+      savedCityCamera &&
+      savedCityCamera.selection === (target?.id || "") &&
+      controls.current
     ) {
       camera.position.copy(savedCityCamera.position);
       camera.zoom = savedCityCamera.zoom;
@@ -68,12 +75,31 @@ function CameraRig({
       return;
     }
     restore.current = false;
-    destination.current = new Vector3(
+    const next = new Vector3(
       target ? position(target.x) : 0,
       0,
       target ? position(target.z) : 0,
     );
-  }, [target?.id, target?.x, target?.z, home]);
+    if (!establishedCentre && !reduced) {
+      const wait = setTimeout(() => {
+        establishedCentre = true;
+        destination.current = next;
+      }, 1200);
+      const cancel = () => {
+        establishedCentre = true;
+        clearTimeout(wait);
+      };
+      window.addEventListener("pointerdown", cancel, { once: true });
+      window.addEventListener("wheel", cancel, { once: true });
+      return () => {
+        clearTimeout(wait);
+        window.removeEventListener("pointerdown", cancel);
+        window.removeEventListener("wheel", cancel);
+      };
+    }
+    establishedCentre = true;
+    destination.current = next;
+  }, [target?.id, target?.x, target?.z, home, reduced]);
   useFrame((_, delta) => {
     const control = controls.current;
     if (!control) return;
@@ -192,17 +218,22 @@ function ContextGuard({ onFailure }: { onFailure: () => void }) {
   }, [gl, onFailure]);
   return null;
 }
-function DiscoveryMarkers(
-  { items, zoom, onSelect }: {
-    items: CustomerItem[];
-    zoom: number;
-    onSelect: (item: CustomerItem) => void;
-  },
-) {
+function DiscoveryMarkers({
+  items,
+  zoom,
+  onSelect,
+}: {
+  items: CustomerItem[];
+  zoom: number;
+  onSelect: (item: CustomerItem) => void;
+}) {
   const { camera, size } = useThree();
   const [shown, setShown] = useState<CustomerItem[]>([]);
-  const elapsed = useRef(0), last = useRef("");
-  useEffect(()=>{last.current="";},[items]);
+  const elapsed = useRef(0),
+    last = useRef("");
+  useEffect(() => {
+    last.current = "";
+  }, [items]);
   useFrame((_, delta) => {
     elapsed.current += delta;
     if (elapsed.current < 0.25) return;
@@ -212,20 +243,25 @@ function DiscoveryMarkers(
       next: CustomerItem[] = [];
     if (zoom >= 3) {
       for (const item of items) {
-        if (
-          item.x === null || item.z === null || ids.has(item.business_id)
-        ) continue;
+        if (item.x === null || item.z === null || ids.has(item.business_id)) {
+          continue;
+        }
         const p = new Vector3(position(item.x), 22, position(item.z)).project(
             camera,
           ),
-          x = (p.x + 1) * size.width / 2,
-          y = (1 - p.y) * size.height / 2;
+          x = ((p.x + 1) * size.width) / 2,
+          y = ((1 - p.y) * size.height) / 2;
         if (
-          p.z < -1 || p.z > 1 || x < 60 || x > size.width - 60 || y < 30 ||
-          y > size.height - 30 || boxes.some((b) =>
-            Math.abs(b.x - x) < 115 && Math.abs(b.y - y) < 38
-          )
-        ) continue;
+          p.z < -1 ||
+          p.z > 1 ||
+          x < 60 ||
+          x > size.width - 60 ||
+          y < 30 ||
+          y > size.height - 30 ||
+          boxes.some((b) => Math.abs(b.x - x) < 115 && Math.abs(b.y - y) < 38)
+        ) {
+          continue;
+        }
         ids.add(item.business_id);
         boxes.push({ x, y });
         next.push(item);
@@ -258,6 +294,12 @@ function DiscoveryMarkers(
     </>
   );
 }
+function SceneReady({ onReady }: { onReady?: () => void }) {
+  useEffect(() => {
+    onReady?.();
+  }, [onReady]);
+  return null;
+}
 export default function CityScene({
   properties,
   selected,
@@ -271,7 +313,11 @@ export default function CityScene({
   matches,
   markers,
   onDiscoverySelect,
+  playback,
+  onReady,
 }: {
+  onReady?: () => void;
+  playback?: MarketPlayback | null;
   properties: CityProperty[];
   selected: CityProperty | null;
   capacity: number;
@@ -294,9 +340,10 @@ export default function CityScene({
       properties.filter(
         (p) =>
           (Math.abs(p.x - center.x) <= 12 && Math.abs(p.z - center.z) <= 12) ||
-          p.id === selected?.id,
+          p.id === selected?.id ||
+          !!playback?.event.moves.some(m=>m.id===p.id&&m.before&&Math.abs(m.before.x-center.x)<=12&&Math.abs(m.before.z-center.z)<=12),
       ),
-    [properties, center.x, center.z, selected?.id],
+    [properties, center.x, center.z, selected?.id, playback],
   );
   return (
     <SceneBoundary onFailure={onFailure}>
@@ -341,22 +388,26 @@ export default function CityScene({
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
         {pavilion && <CityPavilion {...pavilion} />}
-        {!markers && zoom >= 3 &&
-          visible.filter((p) => p.hasDeal).slice(0, 12).map((p) => (
-            <Html
-              key={`deal-${p.id}`}
-              center
-              position={[position(p.x), 19, position(p.z)]}
-            >
-              <button
-                className="city-deal-pin"
-                aria-label={`City deal at ${p.profile.name}`}
-                onClick={() => onSelect(p)}
+        {!markers &&
+          zoom >= 3 &&
+          visible
+            .filter((p) => p.hasDeal)
+            .slice(0, 12)
+            .map((p) => (
+              <Html
+                key={`deal-${p.id}`}
+                center
+                position={[position(p.x), 19, position(p.z)]}
               >
-                ✦ Deal
-              </button>
-            </Html>
-          ))}
+                <button
+                  className="city-deal-pin"
+                  aria-label={`City deal at ${p.profile.name}`}
+                  onClick={() => onSelect(p)}
+                >
+                  ✦ Deal
+                </button>
+              </Html>
+            ))}
         {markers && (
           <DiscoveryMarkers
             items={markers}
@@ -369,18 +420,31 @@ export default function CityScene({
             <span className="city-trail-pin">{p.number}</span>
           </Html>
         ))}
-        <CityKit
-          properties={visible}
-          matchIds={matches
-            ? new Set(matches)
-            : undefined}
-          selected={selected}
-          capacity={capacity}
-          center={center}
-          zoom={zoom}
-          onSelect={onSelect}
-          reduced={reduced}
-        />
+        {visible
+          .filter((p) => p.rank === 1)
+          .map((p) => (
+            <mesh
+              key={`leader-${p.id}`}
+              position={[position(p.x), 0.04, position(p.z)]}
+              rotation={[-Math.PI / 2, 0, 0]}
+            >
+              <ringGeometry args={[10.7, 11.2, 4, 1, Math.PI / 4]} />
+              <meshBasicMaterial color="#bfa457" />
+            </mesh>
+          ))}
+        <MarketMotionContext.Provider value={playback || null}>
+          <CityKit
+            properties={visible}
+            matchIds={matches ? new Set(matches) : undefined}
+            selected={selected}
+            capacity={capacity}
+            center={center}
+            zoom={zoom}
+            onSelect={onSelect}
+            reduced={reduced}
+          />
+        </MarketMotionContext.Provider>
+        <SceneReady onReady={onReady} />
         <CameraRig
           onZoom={setZoom}
           target={selected}

@@ -1,3 +1,4 @@
+import { useMarketMotion } from "./CityMarketMotion";
 import { Batch, type Instance, type Piece } from "./CityInstances";
 import { CityBillboards } from "./CityBillboards";
 import { useEffect, useMemo } from "react";
@@ -54,6 +55,7 @@ export function CityKit({
   labels?: boolean;
   matchIds?: Set<string>;
 }) {
+  const playback = useMarketMotion();
   const { scene } = useGLTF("/city/downtown/downtown.glb", false, true);
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
@@ -311,6 +313,9 @@ export function CityKit({
         .filter((p) => labels && (p.rank <= 3 || p.id === selected?.id))
         .map((p) => (
           <Html
+            style={playback && performance.now() - playback.started < 3000
+              ? { visibility: "hidden" }
+              : undefined}
             key={p.id}
             position={[
               plotAxis(p.x),

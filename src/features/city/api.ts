@@ -37,6 +37,7 @@ export async function downloadCityCard(
   rank: number,
   value: string,
   color: string,
+  recordedAt?: string,
 ) {
   const canvas = document.createElement("canvas");
   canvas.width = 1200;
@@ -55,9 +56,9 @@ export async function downloadCityCard(
   ctx.font = "500 42px sans-serif";
   ctx.fillText(`A new perspective. City rank #${rank}.`, 70, 300, 740);
   ctx.font = "400 25px sans-serif";
-  ctx.fillText(`${value} in sponsored Land Value`, 70, 365);
+  ctx.fillText(`${value} in sponsored City Value`, 70, 365);
   ctx.font = "400 20px sans-serif";
-  ctx.fillText(new Date().toLocaleString("en-GB"), 70, 540);
+  ctx.fillText(new Date(recordedAt || Date.now()).toLocaleString("en-GB"), 70, 540);
   ctx.fillStyle = "#fff";
   ctx.font = "600 112px sans-serif";
   ctx.fillText(`#${rank}`, 890, 350, 270);

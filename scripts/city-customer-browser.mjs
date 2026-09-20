@@ -90,7 +90,7 @@ try{
  await page.getByRole('heading',{name:'New discoveries',exact:true}).waitFor();
  await page.getByRole('button',{name:'Freebies',exact:true}).click();
  await page.getByRole('button',{name:/Free editor trial.*Campus Studio|Free.*Campus Studio.*Free editor trial/}).first().click();
- await page.waitForURL('**/city/deal/'+dealId);
+ await page.waitForURL(url=>url.pathname==='/city/deal/'+dealId);
  await page.getByRole('button',{name:'Sign in to claim',exact:true}).click();
  await page.getByLabel('Email', {exact:true}).fill('fixture@example.com');
  await page.getByLabel('Password',{exact:true}).fill('test-password');

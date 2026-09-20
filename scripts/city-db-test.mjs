@@ -27,6 +27,7 @@ await db.exec(
 );
 await db.exec(await readFile(new URL("../supabase/migrations/20260920152544_city_discovery.sql", import.meta.url), "utf8"));
 await db.exec(await readFile(new URL("../supabase/migrations/20260920160701_city_campus.sql", import.meta.url), "utf8"));
+await db.exec(await readFile(new URL("../supabase/migrations/20260920202005_city_market_competition.sql", import.meta.url), "utf8"));
 const q = async (sql, args = []) => (await db.query(sql, args)).rows;
 const scalar = async (sql, args = []) =>
   Object.values((await q(sql, args))[0])[0];
@@ -143,6 +144,7 @@ const token = await lease();
 assert.ok(token);
 assert.equal(await lease(), null);
 await apply(token, 10000);
+assert.equal(await scalar("select cause from city_market_transitions order by revision desc limit 1"),"purchase");
 assert.equal(
   Number(
     await scalar("select land_value from city_businesses where id=$1", [a.id]),
@@ -158,8 +160,10 @@ assert.equal(
   "retry does not post another entry",
 );
 await apply(await lease(), 7500, "partially_refunded");
+assert.equal(await scalar("select cause from city_market_transitions order by revision desc limit 1"),"correction");
 await apply(await lease(), 0, "disputed");
 await apply(await lease(), 7500, "partially_refunded");
+assert.equal(await scalar("select cause from city_market_transitions order by revision desc limit 1"),"correction");
 assert.equal(
   Number(
     await scalar("select land_value from city_businesses where id=$1", [a.id]),
@@ -312,6 +316,9 @@ for (const role of ["anon", "authenticated"]) {
     "select city_analytics(gen_random_uuid())",
     "select * from city_ledger",
     "select city_reallocate()",
+    "select city_market_read(null)",
+    "select * from city_market_alerts",
+    "select city_market_quote(gen_random_uuid(),1000)",
     "update city_state set revision=999",
   ]) {
     await assert.rejects(q(sql), /permission denied/);
@@ -327,4 +334,20 @@ assert.equal(
 console.log(
   "City PostgreSQL tests passed: migration, owner/admin fences, payment retries, refunds/disputes, 401 allocations, suspension, grants and RLS.",
 );
+// Full-market estimates remain independent of the currently rendered region.
+const quote=await scalar("select city_market_quote($1,1000)",[b.id]);
+assert.equal(quote.rank,1);
+assert.equal(quote.newValue,Number(await scalar("select land_value from city_businesses where id=$1",[b.id]))+1000);
+assert.equal(quote.tier,await scalar("select city_market_tier($1)",[quote.newValue]));
+await assert.rejects(q("select city_market_quote($1,999)",[b.id]),/between/);
+await assert.rejects(q("select city_market_quote($1,5000001)",[b.id]),/between/);
+await assert.rejects(q("select city_market_quote($1,1000)",[a.id]),/eligible/);
+const market=await scalar("select city_market_read(null)");
+assert.equal(market.top.length,10);
+assert.ok(market.events.every(e=>e.moves.every(m=>m.id!==a.id)),"suspended profiles omitted from public history");
+const transitions=await q("select * from city_market_transitions");
+assert.ok(transitions.some(e=>e.cause==='purchase'));
+assert.ok(transitions.some(e=>e.cause==='correction'));
+assert.ok(transitions.every(e=>e.version===1));
+console.log("City market tests passed: authoritative quotes, payment causes, privacy, bounds and permissions.");
 await db.close();

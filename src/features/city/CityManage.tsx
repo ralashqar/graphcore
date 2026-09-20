@@ -1,21 +1,23 @@
+import { marketQuote, MerchantPosition, QuotePreview } from "./CityMarket";
+import type { CityQuote } from "../../domain/cityMarket";
 import { CustomerMetrics } from "./CityCustomer";
 import { CityDealStudio } from "./CityDealStudio";
 import { CityCampusEditor } from "./CityCampusEditor";
 import { CitySampleEditor } from "./CitySample";
 import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
-import { useEffect, useState, type FormEvent } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { ArrowUpRight, CheckCircle, UploadSimple } from "@phosphor-icons/react";
 import {
-  emptyCityProfile,
-  formatGBP,
-  parsePurchase,
   buildingTier,
   type CityProfile,
   type CitySnapshot,
   type CityWorkspace,
+  emptyCityProfile,
+  formatGBP,
+  parsePurchase,
 } from "../../domain/city";
 import { cityCommand } from "./api";
-import { CityBrandPreview, CityBillboardArtwork } from "./CityBrandPreview";
+import { CityBillboardArtwork, CityBrandPreview } from "./CityBrandPreview";
 import { defaultBillboardCrop } from "../../domain/cityBranding";
 
 export function CityManage({
@@ -59,10 +61,11 @@ export function CityManage({
           terminal = !["checkout", "pending", "created"].includes(
             result.status,
           );
-          if (terminal && business)
+          if (terminal && business) {
             sessionStorage.removeItem(
               `city-checkout:${business.id}:${result.amount}`,
             );
+          }
           await onRefresh();
         }
       } catch (error) {
@@ -120,9 +123,31 @@ export function CityManage({
     /* displayed at checkout */
   }
   const nextValue = Number(business?.land_value || 0) + pennies;
-  const estimate = snapshot?.properties.filter(
-    (p) => p.id !== business?.id && p.landValue >= nextValue,
-  ).length;
+  const [quote, setQuote] = useState<CityQuote | null>(null);
+  useEffect(() => {
+    setQuote(null);
+    if (!snapshot?.marketEnabled || !business?.published || !pennies) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void marketQuote(business.id, pennies)
+        .then((q) => {
+          if (active) setQuote(q);
+        })
+        .catch((e) => {
+          if (active) setMessage(e.message);
+        });
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    business?.id,
+    business?.land_value,
+    pennies,
+    snapshot?.revision,
+    snapshot?.marketEnabled,
+  ]);
   const dirty = JSON.stringify(profile) !== JSON.stringify(business?.draft);
   const previewProfile: CityProfile = {
     ...profile,
@@ -158,11 +183,18 @@ export function CityManage({
       )}
       {orderStatus && (
         <p className="city-message" role="status">
-          Payment status: <strong>{orderStatus.replaceAll("_", " ")}</strong>.{" "}
+          Payment status: <strong>{orderStatus.replaceAll("_", " ")}</strong>.
+          {" "}
           {["checkout", "pending", "created"].includes(orderStatus)
             ? "Your position updates after payment confirmation."
             : ""}
         </p>
+      )}
+      {business && snapshot?.marketEnabled && (
+        <MerchantPosition
+          businessId={business.id}
+          revision={snapshot.revision}
+        />
       )}
       <div className="city-management-grid">
         <form onSubmit={save} className="city-editor">
@@ -196,8 +228,7 @@ export function CityManage({
                     setMessage(
                       "Website details imported. Review them before saving.",
                     );
-                  })
-                }
+                  })}
               >
                 {busy === "import" ? "Importing…" : "Import details"}
               </button>
@@ -212,7 +243,7 @@ export function CityManage({
                 value={profile.name}
                 onChange={(e) => {
                   field("name", e.target.value);
-                  if (!business)
+                  if (!business) {
                     setSlug(
                       e.target.value
                         .toLowerCase()
@@ -220,6 +251,7 @@ export function CityManage({
                         .replace(/^-|-$/g, "")
                         .slice(0, 48),
                     );
+                  }
                 }}
               />
             </label>
@@ -241,9 +273,7 @@ export function CityManage({
                   "Entertainment",
                   "Finance",
                   "Local",
-                ].map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
+                ].map((c) => <option key={c}>{c}</option>)}
               </select>
             </label>
           </div>
@@ -297,20 +327,19 @@ export function CityManage({
                 <input
                   aria-label={`Upload ${key}`}
                   type="file"
-                  accept={
-                    key === "video"
-                      ? "video/mp4"
-                      : "image/png,image/jpeg,image/webp"
-                  }
+                  accept={key === "video"
+                    ? "video/mp4"
+                    : "image/png,image/jpeg,image/webp"}
                   disabled={!!busy || !snapshot?.onboardingEnabled}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file)
+                    if (file) {
                       void run("upload", async () => {
                         if (
                           file.size > (key === "video" ? 20_000_000 : 5_000_000)
-                        )
+                        ) {
                           throw new Error("File exceeds the upload limit.");
+                        }
                         const base64 = await new Promise<string>(
                           (resolve, reject) => {
                             const reader = new FileReader();
@@ -326,19 +355,21 @@ export function CityManage({
                           url: string;
                         }>("upload", { base64 });
                         field(key, uploaded.path);
-                        if (key === "billboard")
+                        if (key === "billboard") {
                           field("billboardCrop", defaultBillboardCrop);
+                        }
                         setPreviews((p) => ({ ...p, [key]: uploaded.url }));
                       });
+                    }
                   }}
                 />
                 {(previews[key] || business?.preview?.[key]) &&
                   key !== "video" && (
-                    <img
-                      src={previews[key] || business?.preview?.[key]}
-                      alt={`${key} preview`}
-                    />
-                  )}
+                  <img
+                    src={previews[key] || business?.preview?.[key]}
+                    alt={`${key} preview`}
+                  />
+                )}
               </label>
             ))}
           </div>
@@ -369,8 +400,7 @@ export function CityManage({
                     field("billboardCrop", {
                       ...(profile.billboardCrop || defaultBillboardCrop),
                       [key]: Number(e.target.value),
-                    })
-                  }
+                    })}
                 />
                 <output>
                   {(profile.billboardCrop || defaultBillboardCrop)[key]}
@@ -415,8 +445,7 @@ export function CityManage({
               placeholder="Your city-exclusive welcome offer"
               value={profile.offer.title}
               onChange={(e) =>
-                field("offer", { ...profile.offer, title: e.target.value })
-              }
+                field("offer", { ...profile.offer, title: e.target.value })}
             />
           </label>
           <label>
@@ -428,8 +457,7 @@ export function CityManage({
                 field("offer", {
                   ...profile.offer,
                   description: e.target.value,
-                })
-              }
+                })}
             />
           </label>
           <div className="city-field-pair">
@@ -439,8 +467,7 @@ export function CityManage({
                 maxLength={80}
                 value={profile.offer.code}
                 onChange={(e) =>
-                  field("offer", { ...profile.offer, code: e.target.value })
-                }
+                  field("offer", { ...profile.offer, code: e.target.value })}
               />
             </label>
             <label>
@@ -454,8 +481,7 @@ export function CityManage({
                     expiresAt: e.target.value
                       ? new Date(`${e.target.value}Z`).toISOString()
                       : null,
-                  })
-                }
+                  })}
               />
             </label>
           </div>
@@ -465,8 +491,7 @@ export function CityManage({
               type="url"
               value={profile.offer.url}
               onChange={(e) =>
-                field("offer", { ...profile.offer, url: e.target.value })
-              }
+                field("offer", { ...profile.offer, url: e.target.value })}
             />
           </label>
           <button
@@ -488,47 +513,48 @@ export function CityManage({
           {business && (
             <section className="city-business-section">
               <h2>Verify & publish</h2>
-              {business.verified_at ? (
-                <p>
-                  <CheckCircle size={18} /> Website verified
-                </p>
-              ) : (
-                <>
+              {business.verified_at
+                ? (
                   <p>
-                    Add this TXT record to{" "}
-                    <strong>
-                      _synarc-city.
-                      {(() => {
-                        try {
-                          return new URL(profile.website).hostname;
-                        } catch {
-                          return "your-domain";
-                        }
-                      })()}
-                    </strong>
-                    , or place the value at{" "}
-                    <code>/.well-known/synarc-city.txt</code>.
+                    <CheckCircle size={18} /> Website verified
                   </p>
-                  <code className="city-token">
-                    synarc-city={business.verification_token}
-                  </code>
-                  <button
-                    disabled={!!busy || dirty}
-                    onClick={() =>
-                      run("verify", async () => {
-                        await cityCommand("verify", {
-                          businessId: business.id,
-                        });
-                        await onRefresh();
-                      })
-                    }
-                  >
-                    {busy === "verify"
-                      ? "Checking…"
-                      : "Check website verification"}
-                  </button>
-                </>
-              )}
+                )
+                : (
+                  <>
+                    <p>
+                      Add this TXT record to{" "}
+                      <strong>
+                        _synarc-city.
+                        {(() => {
+                          try {
+                            return new URL(profile.website).hostname;
+                          } catch {
+                            return "your-domain";
+                          }
+                        })()}
+                      </strong>
+                      , or place the value at{" "}
+                      <code>/.well-known/synarc-city.txt</code>.
+                    </p>
+                    <code className="city-token">
+                      synarc-city={business.verification_token}
+                    </code>
+                    <button
+                      disabled={!!busy || dirty}
+                      onClick={() =>
+                        run("verify", async () => {
+                          await cityCommand("verify", {
+                            businessId: business.id,
+                          });
+                          await onRefresh();
+                        })}
+                    >
+                      {busy === "verify"
+                        ? "Checking…"
+                        : "Check website verification"}
+                    </button>
+                  </>
+                )}
               {dirty && (
                 <p>Save your changes before verification or submission.</p>
               )}
@@ -536,13 +562,11 @@ export function CityManage({
                 <p>Review note: {business.review_note}</p>
               )}
               <button
-                disabled={
-                  !!busy ||
+                disabled={!!busy ||
                   dirty ||
                   !business.verified_at ||
                   business.status === "pending" ||
-                  business.status === "suspended"
-                }
+                  business.status === "suspended"}
                 onClick={() =>
                   run("submit", async () => {
                     await cityCommand("submit", {
@@ -550,8 +574,7 @@ export function CityManage({
                       version: business.draft_version,
                     });
                     await onRefresh();
-                  })
-                }
+                  })}
               >
                 {business.status === "pending"
                   ? "Waiting for review"
@@ -559,15 +582,15 @@ export function CityManage({
               </button>
             </section>
           )}
-          <section className="city-business-section">
+          <section id="city-next-move" className="city-business-section">
             <span className="city-eyebrow">YOUR NEXT MOVE</span>
             <h2>Move closer to the centre.</h2>
             <p>
-              Your current Land Value{" "}
+              Your current City Value{" "}
               <strong>{formatGBP(Number(business?.land_value || 0))}</strong>
             </p>
             <label>
-              Add Land Value (£)
+              Add City Value (£)
               <input
                 inputMode="decimal"
                 value={amount}
@@ -577,12 +600,9 @@ export function CityManage({
             <p>
               New total <strong>{formatGBP(nextValue)}</strong>
             </p>
-            {estimate !== undefined &&
-              snapshot?.total === snapshot?.properties.length && (
-                <p>
-                  Estimated city rank <strong>#{estimate + 1}</strong>
-                </p>
-              )}
+            {snapshot?.marketEnabled && (
+              <QuotePreview quote={quote} onAmount={setAmount} />
+            )}
             <small>
               Positions are estimates. Other businesses may purchase before your
               payment completes. Tax, where applicable, is added at checkout.
@@ -607,17 +627,32 @@ export function CityManage({
             )}
             <button
               className="city-primary"
-              disabled={
-                !!busy ||
+              disabled={!!busy ||
                 !terms ||
                 !business?.published ||
                 business.status === "suspended" ||
-                !snapshot?.purchasesEnabled
-              }
+                !snapshot?.purchasesEnabled ||
+                (!!snapshot?.marketEnabled &&
+                  (!quote || quote.amount !== pennies))}
               onClick={() =>
                 run("checkout", async () => {
                   const purchase = parsePurchase(amount);
-                  const storageKey = `city-checkout:${business!.id}:${purchase}`;
+                  if (snapshot?.marketEnabled) {
+                    const fresh = await marketQuote(business!.id, purchase);
+                    const changed = !quote ||
+                      fresh.rank !== quote.rank ||
+                      fresh.tier !== quote.tier ||
+                      fresh.currentValue !== quote.currentValue;
+                    setQuote(fresh);
+                    if (changed) {
+                      throw new Error(
+                        "The market changed. Review the updated position estimate, then continue.",
+                      );
+                    }
+                  }
+                  const storageKey = `city-checkout:${
+                    business!.id
+                  }:${purchase}`;
                   let requestKey = sessionStorage.getItem(storageKey);
                   if (!requestKey) {
                     requestKey = crypto.randomUUID();
@@ -633,8 +668,7 @@ export function CityManage({
                     },
                   );
                   window.location.assign(checkout.url);
-                })
-              }
+                })}
             >
               Continue to secure checkout <ArrowUpRight size={18} />
             </button>
@@ -642,9 +676,15 @@ export function CityManage({
           </section>
         </aside>
       </div>
-      {business && snapshot?.customerDiscoveryEnabled && <CustomerMetrics businessId={business.id}/>}
-      {business && snapshot?.dealsEnabled && <CityDealStudio businessId={business.id}/>}
-      {business && snapshot?.campusEnabled && <CityCampusEditor business={business} onRefresh={onRefresh}/>}
+      {business && snapshot?.customerDiscoveryEnabled && (
+        <CustomerMetrics businessId={business.id} />
+      )}
+      {business && snapshot?.dealsEnabled && (
+        <CityDealStudio businessId={business.id} />
+      )}
+      {business && snapshot?.campusEnabled && (
+        <CityCampusEditor business={business} onRefresh={onRefresh} />
+      )}
       {business?.published && snapshot?.discoveryEnabled && (
         <CityDiscoveryStudio businessId={business.id} />
       )}
@@ -685,32 +725,34 @@ export function CityManage({
             excluded. Offer claims do not confirm sales.
           </p>
           <h2>Payment history</h2>
-          {workspace.orders.length ? (
-            <div className="city-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Land Value purchase</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workspace.orders.map((order) => (
-                    <tr key={order.id}>
-                      <td>
-                        {new Date(order.created_at).toLocaleDateString("en-GB")}
-                      </td>
-                      <td>{formatGBP(Number(order.amount))}</td>
-                      <td>{order.status.replaceAll("_", " ")}</td>
+          {workspace.orders.length
+            ? (
+              <div className="city-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>City Value purchase</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p>Your confirmed purchases will appear here.</p>
-          )}
+                  </thead>
+                  <tbody>
+                    {workspace.orders.map((order) => (
+                      <tr key={order.id}>
+                        <td>
+                          {new Date(order.created_at).toLocaleDateString(
+                            "en-GB",
+                          )}
+                        </td>
+                        <td>{formatGBP(Number(order.amount))}</td>
+                        <td>{order.status.replaceAll("_", " ")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+            : <p>Your confirmed purchases will appear here.</p>}
           <h2>Rank history</h2>
           {workspace.history.map((item) => (
             <p key={item.id}>

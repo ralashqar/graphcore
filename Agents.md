@@ -4,6 +4,11 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City permanent market competition (September 2026)
+
+The default-off `CITY_MARKET_ENABLED` surface adds a Central Plaza leader, paid Top 10, global server quotes, versioned allocation replay and merchant rank controls. The additive market migration wraps the serialized allocator, retains the existing net-principal payment ledger and records immutable before/after movement facts. First fulfilled payments are purchase events; refunds, disputes, reinstatements and moderation remain neutral corrections. Owner-only preference/read actions provide revision-deduplicated in-app displacement alerts. Separate source observations do not enter organic trending. Deploy the four City Edge entries after the migration; world/game Fly workers do not execute these modules. Local verification is distinct from pending hosted staging/Stripe and physical-device acceptance. No inference, real payment or production activation was performed. See [docs/synarc-city-market.md](docs/synarc-city-market.md).
+
+
 ### City customer discovery (September 2026)
 
 The default-off `CITY_CUSTOMER_DISCOVERY_ENABLED` surface unifies approved free/paid businesses, campus exhibits, launches and deals in a public search projection. Recent deduplicated organic activity drives discovery independently of Land Value; committed claims and saves are recorded transactionally, while merchant-reported redemptions do not affect trending. New service-only customer API/command actions provide bounded search, saves, wallet summaries, in-app reminders and owner funnel metrics. A public revision-only table invalidates sanitized reads without exposing claims or codes. Optional free-offer classification follows existing exact-terms review. New deal deep links and social cards reuse City routes. Anonymous saves merge after sign-in; claims still require explicit authenticated admission. No worker generation, provider, payment or GPU admission behavior changes. Deploy the migration, city-api, city-command and frontend to the designated isolated staging environment; no Fly execution module changes. Hosted activation remains pending staging designation. See [customer discovery](docs/synarc-city-customer-discovery.md) for contracts, verification and limits.

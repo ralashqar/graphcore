@@ -67,6 +67,7 @@ export type CitySnapshot = {
   dealsEnabled?: boolean;
   customerDiscoveryEnabled?: boolean;
   setupEnabled?: boolean;
+  marketEnabled?: boolean;
   termsUrl?: string | null;
   demo?: boolean;
 };

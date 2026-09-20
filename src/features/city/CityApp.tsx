@@ -1,3 +1,6 @@
+import { CityMarketBoard } from "./CityMarket";
+import type { MarketPlayback } from "./CityMarketMotion";
+import { marketHeadline } from "../../domain/cityMarket";
 import {
   CustomerDiscovery,
   CustomerProvider,
@@ -37,6 +40,7 @@ import {
   type CityProperty,
   type CitySnapshot,
   type CityWorkspace,
+  emptyCityProfile,
   formatGBP,
 } from "../../domain/city";
 import { getCurrentSession, subscribeToAuthChanges } from "../../data/auth";
@@ -66,6 +70,25 @@ const blankWorkspace: CityWorkspace = {
 };
 
 export function CityApp() {
+  const [sceneReady, setSceneReady] = useState(false);
+  const [queuedPlayback, setQueuedPlayback] = useState<MarketPlayback | null>(
+    null,
+  );
+  const markSceneReady = useCallback(() => setSceneReady(true), []);
+  useEffect(() => {
+    if (sceneReady && queuedPlayback) {
+      setMarketPlayback({ ...queuedPlayback, started: performance.now() });
+      setQueuedPlayback(null);
+    }
+  }, [sceneReady, queuedPlayback]);
+  const [marketPlayback, setMarketPlayback] = useState<MarketPlayback | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!marketPlayback) return;
+    const timer = setTimeout(() => setMarketPlayback(null), 3300);
+    return () => clearTimeout(timer);
+  }, [marketPlayback]);
   const [path, setPath] = useState(location.pathname),
     [snapshot, setSnapshot] = useState<CitySnapshot | null>(null),
     [selected, setSelected] = useState<CityProperty | null>(null),
@@ -100,16 +123,16 @@ export function CityApp() {
       sessionStorage.setItem("city-discovery-query", query);
     } catch {}
   }, [query]);
-  const [customerMatches, setCustomerMatches] = useState<string[] | null>(
-    null,
-  );
+  const [customerMatches, setCustomerMatches] = useState<string[] | null>(null);
   const [sheetCollapsed, setSheetCollapsed] = useState(false);
   useEffect(() => setSheetCollapsed(false), [path]);
   const [customerMarkers, setCustomerMarkers] = useState<CustomerItem[]>([]);
   const updateCustomerResults = useCallback(
-    (items: CustomerItem[], filtered: boolean, matches?:string[]) => {
+    (items: CustomerItem[], filtered: boolean, matches?: string[]) => {
       setCustomerMarkers(items);
-      setCustomerMatches(filtered ? matches || items.map(i=>i.business_id) : null);
+      setCustomerMatches(
+        filtered ? matches || items.map((i) => i.business_id) : null,
+      );
     },
     [],
   );
@@ -126,18 +149,20 @@ export function CityApp() {
     void cityCall<CustomerItem>("city-api", {
       action: "customer_resolve",
       id: path.split("/")[3],
-    }).then(async (item) => {
-      const city = await citySnapshot({ ...region.current, slug: item.slug });
-      if (live) {
-        setLinkedDeal(item);
-        setSnapshot(city);
-        setSelected(
-          city.properties.find((p) => p.id === item.business_id) || null,
-        );
-      }
-    }).catch((e) => {
-      if (live) setNotice(e.message);
-    });
+    })
+      .then(async (item) => {
+        const city = await citySnapshot({ ...region.current, slug: item.slug });
+        if (live) {
+          setLinkedDeal(item);
+          setSnapshot(city);
+          setSelected(
+            city.properties.find((p) => p.id === item.business_id) || null,
+          );
+        }
+      })
+      .catch((e) => {
+        if (live) setNotice(e.message);
+      });
     return () => {
       live = false;
     };
@@ -377,6 +402,7 @@ export function CityApp() {
       void cityCommand("track", {
         businessId: selected.id,
         kind: "view",
+        source: new URLSearchParams(location.search).get("source") || "city",
       }).catch(() => {});
     }, 2000);
     return () => clearTimeout(timer);
@@ -388,12 +414,12 @@ export function CityApp() {
     },
     [refresh],
   );
-  function select(p: CityProperty) {
+  function select(p: CityProperty, source = "city") {
     setSelected(p);
     setQuery("");
     setClaim(null);
     setNotice("");
-    navigate(`/city/business/${p.slug}`);
+    navigate(`/city/business/${p.slug}?source=${source}`);
   }
   async function interaction(action: "save_business" | "claim") {
     if (!selected) return;
@@ -556,27 +582,29 @@ export function CityApp() {
           </div>
         )}
         {campusRoute
-          ? (campusEnabled
-            ? (
-              <Suspense
-                fallback={
-                  <main className="city-page">Opening business space…</main>
-                }
-              >
-                <CityCampus
-                  dealsEnabled={snapshot?.dealsEnabled}
-                  path={path}
-                  demo={demo.current}
-                  userId={session?.user.id}
-                  onAuth={() => setAuth(true)}
-                />
-              </Suspense>
-            )
-            : (
-              <main className="city-page">
-                Business spaces are not open yet.
-              </main>
-            ))
+          ? (
+            campusEnabled
+              ? (
+                <Suspense
+                  fallback={
+                    <main className="city-page">Opening business space…</main>
+                  }
+                >
+                  <CityCampus
+                    dealsEnabled={snapshot?.dealsEnabled}
+                    path={path}
+                    demo={demo.current}
+                    userId={session?.user.id}
+                    onAuth={() => setAuth(true)}
+                  />
+                </Suspense>
+              )
+              : (
+                <main className="city-page">
+                  Business spaces are not open yet.
+                </main>
+              )
+          )
           : discoveryRoute
           ? (
             discoveryEnabled
@@ -625,10 +653,46 @@ export function CityApp() {
                       }
                     >
                       <CityScene
+                        onReady={markSceneReady}
+                        playback={marketPlayback}
                         pavilion={snapshot.discoveryEnabled || demo.current
                           ? {}
                           : undefined}
-                        properties={snapshot.properties}
+                        properties={marketPlayback
+                          ? [
+                            ...snapshot.properties.filter(
+                              (p) =>
+                                !marketPlayback.event.moves.some(
+                                  (m) => m.id === p.id,
+                                ),
+                            ),
+                            ...marketPlayback.event.moves.flatMap((m) =>
+                              m.after
+                                ? [
+                                  {
+                                    id: m.id,
+                                    slug: m.after.slug,
+                                    profile: {
+                                      ...emptyCityProfile(),
+                                      name: m.after.name,
+                                      color: m.after.color,
+                                      logo: m.after.logo || "",
+                                      billboard: m.after.billboard || "",
+                                      billboardCrop: m.after.billboardCrop,
+                                    },
+                                    rank: m.after.rank,
+                                    landValue: m.after.value,
+                                    x: m.after.x,
+                                    z: m.after.z,
+                                    tier: m.after.tier,
+                                    saves: 0,
+                                    claims: 0,
+                                  },
+                                ]
+                                : []
+                            ),
+                          ]
+                          : snapshot.properties}
                         matches={customerMatches}
                         markers={customerEnabled ? customerMarkers : undefined}
                         onDiscoverySelect={(item) => navigate(item.destination)}
@@ -648,6 +712,35 @@ export function CityApp() {
                   )
                   : null}
               </div>
+              {(snapshot?.marketEnabled || demo.current) && snapshot && (
+                <CityMarketBoard
+                  demoProperties={demo.current
+                    ? snapshot.properties
+                    : undefined}
+                  revision={snapshot.revision}
+                  onSelect={(p) => select(p, "paid_top_spots")}
+                  onChallenge={() => navigate("/city/manage")}
+                  onTransition={(event, replay) => {
+                    if (replay) {
+                      setSelected(null);
+                      setHome((h) => h + 1);
+                    }
+                    (sceneReady ? setMarketPlayback : setQueuedPlayback)({
+                      event,
+                      started: performance.now(),
+                      replay,
+                    });
+                  }}
+                />
+              )}
+              {marketPlayback && (
+                <div className="city-market-replay" role="status">
+                  {marketPlayback.replay
+                    ? "Historical movement replay"
+                    : "Live city movement"} ·{" "}
+                  {marketHeadline(marketPlayback.event)}
+                </div>
+              )}
               <aside className="city-discovery">
                 {customerEnabled
                   ? (
@@ -655,7 +748,12 @@ export function CityApp() {
                       query={query}
                       onQuery={setQuery}
                       onResults={updateCustomerResults}
-                      onChoose={(item) => navigate(item.destination)}
+                      onChoose={(item) =>
+                        navigate(
+                          item.destination +
+                            "?source=" +
+                            (item.kind === "deal" ? "deal" : "organic"),
+                        )}
                     />
                   )
                   : (
@@ -707,7 +805,7 @@ export function CityApp() {
                           value={sort}
                           onChange={(e) => setSort(e.target.value)}
                         >
-                          <option value="rank">Land Value</option>
+                          <option value="rank">City Value</option>
                           <option value="saves">Most saved</option>
                           <option value="claims">Most claimed</option>
                         </select>
@@ -925,7 +1023,7 @@ export function CityApp() {
                     <div className="city-property-stats">
                       <div>
                         <strong>{formatGBP(selected.landValue)}</strong>
-                        <small>Land Value</small>
+                        <small>City Value</small>
                       </div>
                       <div>
                         <strong>{CITY_TIERS[selected.tier].name}</strong>
@@ -1054,6 +1152,9 @@ export function CityApp() {
                           void cityCommand("track", {
                             businessId: selected.id,
                             kind: "click",
+                            source: new URLSearchParams(location.search).get(
+                              "source",
+                            ) || "city",
                           }).catch(() => {});
                         }
                       }}
@@ -1224,8 +1325,8 @@ export function CityApp() {
                               className="city-account-place"
                               key={id}
                               onClick={async () => {
-                                const free = savedStorefronts.find((s) =>
-                                  s.id === id
+                                const free = savedStorefronts.find(
+                                  (s) => s.id === id,
                                 );
                                 if (free) {
                                   navigate(`/city/business/${free.slug}`);

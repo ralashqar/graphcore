@@ -1,3 +1,4 @@
+import { market } from "../_shared/city-market.ts";
 import { customer } from "../_shared/city-customer.ts";
 import { deals } from "../_shared/city-deals.ts";
 import { campus } from "../_shared/city-campus.ts";
@@ -69,6 +70,7 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if (action.startsWith("market_")) return json(await market(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("customer_")) return json(await customer(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("deal_")) return json(await deals(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("campus_")) return json(await campus(request,data,true));
@@ -112,6 +114,10 @@ Deno.serve(async (request) => {
         } catch {
           /* anonymous browser */
         }
+      }
+      if(flag("CITY_MARKET_ENABLED")) {
+        const source=z.enum(["paid_top_spots","organic","deal","share","city"]).catch("city").parse(data.source);
+        result(await db.from("city_market_attribution").upsert({business_id:id,actor:visitorId?`u:${visitorId}`:`n:${hash}`,source,kind},{onConflict:"business_id,actor,day,source,kind",ignoreDuplicates:true}));
       }
       if(flag("CITY_CUSTOMER_DISCOVERY_ENABLED") && kind === "view") result(await db.rpc("city_customer_record",{p_business:id,p_actor:visitorId?`u:${visitorId}`:`n:${hash}`,p_kind:"property_open"}));
       if (visitorId && kind === "view")

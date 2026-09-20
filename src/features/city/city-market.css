@@ -1,0 +1,134 @@
+.city-market-leader {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: 310px;
+  background: #f8f7efed;
+  border: 1px solid #b3baa9;
+  padding: 14px 18px;
+  display: grid;
+  gap: 7px;
+  box-shadow: 0 4px 18px #20392c12;
+}
+.city-market-title {
+  font-size: 21px;
+  font-weight: 650;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #263c30;
+}
+.city-market-leader > div {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.city-market-leader button,
+.city-market-event button,
+.city-market-quote button {
+  cursor: pointer;
+}
+.city-market-top {
+  list-style: none;
+  padding: 0;
+}
+.city-market-top button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+  gap: 16px;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid #d5d9ce;
+  background: none;
+}
+.city-market-event {
+  padding: 16px 0;
+  border-bottom: 1px solid #d5d9ce;
+  display: grid;
+  gap: 7px;
+}
+.city-market-event button {
+  justify-self: start;
+}
+.city-market-ranks {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 16px 0;
+}
+.city-market-ranks span {
+  display: grid;
+  font-size: 11px;
+  gap: 5px;
+}
+.city-market-ranks strong {
+  font-size: 30px;
+}
+.city-market-quote svg {
+  width: 100%;
+  height: 120px;
+  background: #e7ebe2;
+}
+.city-market-quote button {
+  display: block;
+  margin: 8px 0;
+  padding: 7px;
+}
+.city-market-replay {
+  position: absolute;
+  bottom: 55px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  background: #263c30;
+  color: white;
+  padding: 10px 18px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+@media (max-width: 1100px) {
+  .city-market-leader {
+    left: auto;
+    right: 18px;
+    transform: none;
+    top: 70px;
+    width: 250px;
+  }
+}
+@media (max-width: 700px) {
+  .city-market-leader {
+    top: auto;
+    bottom: 72px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    padding: 9px 12px;
+  }
+  .city-market-leader .city-eyebrow {
+    font-size: 8px;
+  }
+  .city-market-title {
+    font-size: 16px;
+  }
+  .city-market-leader > div {
+    justify-content: space-between;
+  }
+  .city-market-leader small {
+    font-size: 10px;
+  }
+  .city-market-replay {
+    bottom: 200px;
+    width: 85%;
+    font-size: 12px;
+  }
+  .city-map-shell:has(.city-property-panel) .city-market-leader {
+    display: none;
+  }
+}
+
+.city-merchant-position .city-checkbox{display:flex;gap:10px;align-items:center;max-width:360px}.city-merchant-position .city-checkbox input{width:auto;margin:0}.city-merchant-position>label:not(.city-checkbox){max-width:360px}.city-merchant-position>button{width:auto;padding:10px 20px}.city-merchant-position{padding:24px;background:#eef1e8;border:1px solid #d5d9ce;margin-bottom:24px}
