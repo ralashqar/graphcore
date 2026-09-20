@@ -1,3 +1,4 @@
+import { BusinessLaunchHistory } from "./CityLaunches";
 import { LaunchReminder, StorefrontBadge } from "./CityLiving";
 import { CityDeals } from "./CityDeals";
 import { enterCampus } from "./CityCampus";
@@ -296,6 +297,7 @@ export function CityDiscovery({
       <h2>{b.profile.name}</h2>
       <p>{b.profile.tagline}</p>
       <p>{b.profile.description}</p>
+      {data?.launchesEnabled && <BusinessLaunchHistory key={b.id} businessId={b.id}/>}
       {b.profile.sample && (
         <CitySample
           key={b.id}

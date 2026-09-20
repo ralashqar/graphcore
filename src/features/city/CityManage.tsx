@@ -189,6 +189,7 @@ export function CityManage({
         <p className="city-eyebrow">BUSINESS STUDIO</p>
         <h1>Your place in the city.</h1>
         <p>Bring your brand to life. Build a home people want to discover.</p>
+        {business && <div className="city-actions"><button onClick={()=>document.getElementById('city-next-move')?.scrollIntoView()}>Increase City Value</button>{snapshot?.dealsEnabled&&<button onClick={()=>document.getElementById('city-create-deal')?.scrollIntoView()}>Create Deal</button>}{snapshot?.discoveryEnabled&&<button onClick={()=>document.getElementById('city-create-launch')?.scrollIntoView()}>Create Launch</button>}</div>}
       </header>
       {message && (
         <p className="city-message" role="status">
@@ -719,7 +720,7 @@ export function CityManage({
       )}
       {business && snapshot?.dealsEnabled && (
         <div id="city-deal-studio">
-          <CityDealStudio businessId={business.id} />
+          <div id="city-create-deal"><CityDealStudio businessId={business.id} /></div>
         </div>
       )}
       {business && snapshot?.campusEnabled && (
@@ -727,7 +728,7 @@ export function CityManage({
       )}
       {business?.published && snapshot?.discoveryEnabled && (
         <div id="city-launch-studio">
-          <CityDiscoveryStudio businessId={business.id} />
+          <div id="city-create-launch"><CityDiscoveryStudio businessId={business.id} /></div>
         </div>
       )}
       {business && (

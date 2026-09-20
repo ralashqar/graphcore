@@ -286,7 +286,7 @@ export function LaunchReminder({ launchId }: { launchId: string }) {
   const l = useLiving(),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  if (!l.enabled || !l.storefronts || !l.launches) return null;
+  if (!l.enabled || !l.launches) return null;
   const enabled = l.inbox.reminders.includes(launchId);
   return (
     <>

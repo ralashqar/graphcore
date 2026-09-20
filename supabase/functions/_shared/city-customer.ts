@@ -103,7 +103,7 @@ export async function customer(
   if (!command && action === "search") {
     const p = z.object({
       query: z.string().max(160).default(""),
-      filter: z.enum(["all", "hot", "free", "exclusive", "ending", "drops"])
+      filter: z.enum(["all", "hot", "free", "exclusive", "ending", "drops", "deals"])
         .default(
           "all",
         ),

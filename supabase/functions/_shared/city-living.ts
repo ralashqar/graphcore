@@ -16,8 +16,8 @@ export async function living(
   const storefronts = flag("CITY_STOREFRONTS_ENABLED"),
     activity = flag("CITY_ACTIVITY_ENABLED"),
     deals = flag("CITY_DEALS_ENABLED"),
-    launches = flag("CITY_CAMPUS_ENABLED");
-  if (!storefronts && !activity) {
+    launches = flag("CITY_CAMPUS_ENABLED") || flag("CITY_LAUNCHES_ENABLED");
+  if (!storefronts && !activity && !flag("CITY_LAUNCHES_ENABLED")) {
     throw new HttpError(503, "Living city is not enabled.");
   }
   if (!command && action === "city_state") {
@@ -85,7 +85,7 @@ export async function living(
     };
   }
   if (!command && action === "resolve_launch") {
-    if (!storefronts || !launches) {
+    if ((!storefronts && !flag("CITY_LAUNCHES_ENABLED")) || !launches) {
       throw new HttpError(404, "Launch unavailable.");
     }
     const slug = z.string().regex(/^[a-z0-9][a-z0-9-]{2,47}$/).parse(raw.id);
@@ -113,7 +113,7 @@ export async function living(
     if (
       !event || (event.kind === "organic_milestone" && !activity) ||
       (["sold_out", "deal_published"].includes(event.kind) && !deals) ||
-      (event.kind === "launch_published" && !launches)
+      (["launch_published", "launch_milestone"].includes(event.kind) && !launches)
     ) throw new HttpError(404, "Moment unavailable.");
     const b = result(
       await db.from("city_businesses").select("id").eq("id", event.business_id)
@@ -128,7 +128,7 @@ export async function living(
       await db.rpc("city_living_inbox", {
         p_user: user.id,
         p_deals: deals && storefronts,
-        p_launches: launches && storefronts,
+        p_launches: launches && (storefronts || flag("CITY_LAUNCHES_ENABLED")),
         p_activity: activity,
         p_offset: z.number().int().min(0).max(10000).default(0).parse(
           raw.offset,
@@ -149,7 +149,7 @@ export async function living(
     return { ok: true };
   }
   if (command && action === "reminder") {
-    if (!storefronts || !launches) {
+    if ((!storefronts && !flag("CITY_LAUNCHES_ENABLED")) || !launches) {
       throw new HttpError(503, "Launch reminders are not enabled.");
     }
     result(

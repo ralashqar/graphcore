@@ -1,3 +1,5 @@
+import { LAUNCH_TYPES } from "../../../src/domain/cityLaunches.ts";
+import { importURL } from "./city-network.ts";
 import { z } from "npm:zod@4";
 import { requireUserClient } from "./auth.ts";
 import { HttpError } from "./http.ts";
@@ -41,6 +43,17 @@ const launch = z
   .object({
     title,
     description,
+    schemaVersion: z.literal(2).optional(),
+    launchType: z.enum(LAUNCH_TYPES).optional(),
+    productKey: z.string().trim().max(80).optional(),
+    tagline: z.string().trim().max(160).optional(),
+    category: z.string().trim().max(60).optional(),
+    secondaryCategories: z.array(z.string().trim().max(60)).max(2).optional(),
+    cover: z.string().max(300).optional(),
+    screenshots: z.array(z.string().max(300)).max(5).optional(),
+    trailer: z.string().max(300).optional(),
+    destination: z.string().max(2048).refine(v=>{try{return !v || !!importURL(v);}catch{return false;}}, "Use a public HTTPS destination").optional(),
+    rewardDealId: uuid.nullable().optional(),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
   })
@@ -272,6 +285,7 @@ export async function discovery(
       }
     }
     return {
+      launchesEnabled: flag('CITY_LAUNCHES_ENABLED'),
       now: new Date().toISOString(),
       storefronts,
       entries: publicEntries,
@@ -412,7 +426,15 @@ export async function discovery(
       )
     )
       throw new HttpError(403, "Cover must be an owned image upload.");
+    if(kind === "launch") {
+      const c=content as z.infer<typeof launch>;
+      for(const path of c.screenshots||[]) {
+        if(!new RegExp(`^${userId}/[a-f\\d-]{36}\\.(png|jpg|webp)$`).test(path)) throw new HttpError(403,"Screenshots must be owned image uploads.");
+      }
+      if(c.trailer && !new RegExp(`^${userId}/[a-f\\d-]{36}\\.mp4$`).test(c.trailer)) throw new HttpError(403,"Trailer must be an owned MP4 upload.");
+    }
     data = {
+      saveDraft: z.boolean().parse(input.saveDraft ?? false),
       kind,
       content,
       slug: z
@@ -436,8 +458,11 @@ export async function discovery(
         version: z.number().int().positive(),
         decision: z.enum(["publish", "reject", "archive"]),
         featured: z.boolean().default(false),
+        overrideReason: z.string().trim().min(15).max(500).optional(),
       })
       .parse(input);
+  else if(action === "launch_pause")
+    data=z.object({id:uuid,paused:z.boolean()}).parse(input);
   else if (action === "follow")
     data = z.object({ businessId: uuid, enabled: z.boolean() }).parse(input);
   else if (action === "save_launch")

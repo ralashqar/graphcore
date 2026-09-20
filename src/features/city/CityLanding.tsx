@@ -80,7 +80,7 @@ export function useClearCityViewport(key: string) {
       const c = canvas.getBoundingClientRect();
       const panels = [
         ...document.querySelectorAll<HTMLElement>(
-          ".city-discovery,.city-property-panel,.city-linked-deal,.city-market-leader,.city-map-tools,.city-activity",
+          ".city-launches-browser,.city-discovery,.city-property-panel,.city-linked-deal,.city-market-leader,.city-map-tools,.city-activity",
         ),
       ].filter((p) => p.offsetWidth && p.offsetHeight).map((p) => {
         const r = p.getBoundingClientRect();
@@ -99,7 +99,7 @@ export function useClearCityViewport(key: string) {
     const observer = new ResizeObserver(update);
     observer.observe(canvas);
     document.querySelectorAll(
-      ".city-discovery,.city-property-panel,.city-linked-deal,.city-market-leader",
+      ".city-launches-browser,.city-discovery,.city-property-panel,.city-linked-deal,.city-market-leader",
     ).forEach((p) => observer.observe(p));
     update();
     window.addEventListener("resize", update);

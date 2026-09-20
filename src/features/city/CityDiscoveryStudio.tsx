@@ -1,3 +1,4 @@
+import { CityLaunchStudio } from './CityLaunchStudio';
 import { useEffect, useState } from "react";
 import type {
   DiscoveryData,
@@ -68,6 +69,7 @@ export function CityDiscoveryStudio({
     }
   }
   const kind = admin ? "trail" : "launch";
+  if(!admin && businessId && data?.launchesEnabled) return <CityLaunchStudio businessId={businessId} data={data} reload={load}/>;
   return (
     <section className="city-explore-studio">
       <h2>{admin ? "Curated discovery programme" : "Schedule a launch"}</h2>
@@ -260,7 +262,7 @@ export function CityDiscoveryStudio({
           <div>
             <h3>{e.draft?.title}</h3>
             <p>
-              {e.kind} · {e.status} · revision {e.version}
+              {e.kind} · {e.review_state || e.status} · revision {e.version}
             </p>
             <p>{e.draft?.description}</p>
             <details>
@@ -298,6 +300,7 @@ export function CityDiscoveryStudio({
                         : "Archive / cancel"}
                   </button>
                 ))}
+                {e.kind === "launch" && <button disabled={busy} onClick={()=>{const overrideReason=window.prompt("Explain the substantive release that justifies overriding the launch cooldown (at least 15 characters).");if(overrideReason&&overrideReason.trim().length>=15)void run(()=>cityCommand("discovery_entry_review",{id:e.id,version:e.version,decision:"publish",featured:false,overrideReason}));}}>Publish with audited cooldown exception</button>}
                 {e.kind === "launch" && (
                   <button
                     disabled={busy}

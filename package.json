@@ -82,7 +82,9 @@
     "test:city:living": "node --experimental-strip-types --test src/domain/cityLiving.test.ts && node scripts/city-living-db-test.mjs",
     "test:city:landing": "node --experimental-strip-types --test src/domain/cityLanding.test.ts",
     "test:city:market": "node --experimental-strip-types --test src/domain/cityMarket.test.ts && node scripts/city-market-db-test.mjs",
-    "test:city:market:browser": "node scripts/city-market-browser.mjs"
+    "test:city:market:browser": "node scripts/city-market-browser.mjs",
+    "test:city:launches": "node --experimental-strip-types --test src/domain/cityLaunches.test.ts && node scripts/city-launches-db-test.mjs",
+    "test:city:launches:browser": "node scripts/city-launches-browser.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",

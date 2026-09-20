@@ -292,6 +292,7 @@ export function CustomerDiscovery({
   onChoose,
   demoProperties,
   onExplore,
+  onLaunches,
 }: {
   query: string;
   onQuery: (q: string) => void;
@@ -303,12 +304,13 @@ export function CustomerDiscovery({
   onChoose: (item: CustomerItem) => void;
   demoProperties?: CityProperty[];
   onExplore?: () => void;
+  onLaunches?: () => void;
 }) {
   const living = useLiving();
   const [filter, setFilter] = useState<DiscoveryFilter>(() => {
       try {
         const v = sessionStorage.getItem("city-discovery-filter");
-        return ["all", "hot", "free", "exclusive", "ending", "drops"].includes(
+        return ["all", "hot", "free", "exclusive", "ending", "drops", "deals"].includes(
             v || "",
           )
           ? v as DiscoveryFilter
@@ -511,6 +513,7 @@ export function CustomerDiscovery({
           </button>
         )}
       </label>
+      {onLaunches && <nav className="city-customer-filters" aria-label="Discovery modes"><button aria-pressed={filter==="hot"} onClick={()=>{onExplore?.();setFilter("hot");}}>Hot</button><button onClick={onLaunches}>Launches</button><button aria-pressed={filter==="deals"} onClick={()=>{onExplore?.();setFilter("deals");}}>Deals</button></nav>}
       <div className="city-customer-filters" aria-label="Discovery filters">
         {([
           ["all", "Discover"],

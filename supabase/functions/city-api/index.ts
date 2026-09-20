@@ -1,3 +1,4 @@
+import { launches } from "../_shared/city-launches.ts";
 import { market } from "../_shared/city-market.ts";
 import { customer } from "../_shared/city-customer.ts";
 import { deals } from "../_shared/city-deals.ts";
@@ -31,6 +32,7 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== "POST") throw new HttpError(405, "Use POST.");
     const raw = await request.json();
+    if (String(raw.action).startsWith('launch_')) return json(await launches(request,raw),{headers:{'Cache-Control':'private, no-store'}});
     if (String(raw.action).startsWith("market_")) return json(await market(request,raw,false), {headers:{"Cache-Control":"private, no-store"}});
     if (String(raw.action).startsWith("customer_")) return json(await customer(request,raw), {headers:{"Cache-Control":"private, no-store"}});
     if (String(raw.action).startsWith("deal_")) return json(await deals(request,raw), {headers:{"Cache-Control":"private, no-store"}});
@@ -162,6 +164,8 @@ Deno.serve(async (request) => {
         exposureEnabled: flag("CITY_MARKET_ENABLED") && flag("CITY_EXPOSURE_ENABLED"),
         storefrontsEnabled: flag("CITY_STOREFRONTS_ENABLED"),
         activityEnabled: flag("CITY_ACTIVITY_ENABLED"),
+        launchesEnabled: flag("CITY_LAUNCHES_ENABLED"),
+        launchPlazaEnabled: flag("CITY_LAUNCH_PLAZA_ENABLED"),
         customerDiscoveryEnabled: flag("CITY_CUSTOMER_DISCOVERY_ENABLED") && flag("CITY_DISCOVERY_ENABLED"),
         setupEnabled: flag("CITY_SETUP_ENABLED"),
         termsUrl: Deno.env.get("CITY_TERMS_URL") || null,

@@ -1,3 +1,4 @@
+import { launches } from "../_shared/city-launches.ts";
 import { market } from "../_shared/city-market.ts";
 import { customer } from "../_shared/city-customer.ts";
 import { deals } from "../_shared/city-deals.ts";
@@ -70,6 +71,7 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if(action.startsWith('launch_')) return json(await launches(request,data,true),{headers:{'Cache-Control':'private, no-store'}});
     if (action.startsWith("market_")) return json(await market(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("customer_")) return json(await customer(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("deal_")) return json(await deals(request,data,true), {headers:{"Cache-Control":"private, no-store"}});

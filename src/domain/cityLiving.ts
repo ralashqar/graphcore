@@ -1,3 +1,4 @@
+import { launchPhase } from "./cityLaunches.ts";
 export type ActivityBand = "quiet" | "active" | "busy" | "very_busy";
 export type StorefrontKind =
   | "quiet"
@@ -65,7 +66,7 @@ export function resolveStorefront(
         kind = "deal";
         order = 4;
       }
-    } else if (item.kind === "launch" && item.available && end > now) {
+    } else if (item.kind === "launch" && item.available && end > now && launchPhase({title:item.title,description:"",startsAt:item.starts_at||"",endsAt:item.ends_at||""},now)!=="archived") {
       kind = start <= now ? "live_launch" : "upcoming";
       order = start <= now ? 1 : 5;
       deadline = start <= now ? end : start;

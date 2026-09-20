@@ -1,3 +1,4 @@
+import { launchPhase } from "./cityLaunches.ts";
 import type { CityProfile, CityProperty } from "./city.ts";
 export type CitySample = {
   kind: "comparison" | "gallery" | "guided";
@@ -18,6 +19,17 @@ export type TrailContent = {
   stops: { businessId: string; reason: string }[];
 };
 export type LaunchContent = {
+  schemaVersion?: 2;
+  launchType?: string;
+  productKey?: string;
+  tagline?: string;
+  category?: string;
+  secondaryCategories?: string[];
+  cover?: string;
+  screenshots?: string[];
+  trailer?: string;
+  destination?: string;
+  rewardDealId?: string | null;
   title: string;
   description: string;
   startsAt: string;
@@ -32,9 +44,11 @@ export type DiscoveryEntry = {
   featured: boolean;
   version?: number;
   status?: string;
+  review_state?: string;
   draft?: TrailContent | LaunchContent;
 };
 export type DiscoveryData = {
+  launchesEnabled?: boolean;
   now: string;
   storefronts: CityStorefront[];
   entries: DiscoveryEntry[];
@@ -46,11 +60,8 @@ export type DiscoveryData = {
   hasMore?: boolean;
 };
 export function launchState(content: LaunchContent, now: number) {
-  return now < Date.parse(content.startsAt)
-    ? "Upcoming"
-    : now < Date.parse(content.endsAt)
-      ? "Live"
-      : "Past";
+  const phase=launchPhase(content,now);
+  return phase==='coming_soon'?'Upcoming':phase==='archived'?'Past':'Live';
 }
 export function eligibleStorefront(b: { published: unknown; status: string }) {
   return !!b.published && b.status !== "suspended";

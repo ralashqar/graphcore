@@ -102,6 +102,7 @@ export function CityDeals(
     onAuth,
     dealId,
     sourceExhibitId,
+    sourceLaunchId,
     demo = false,
     autoOpen = false,
   }: {
@@ -110,6 +111,7 @@ export function CityDeals(
     onAuth: () => void;
     dealId?: string;
     sourceExhibitId?: string;
+    sourceLaunchId?: string;
     demo?: boolean;
     autoOpen?: boolean;
   },
@@ -216,6 +218,7 @@ export function CityDeals(
                   id: d.id,
                   kind: "open",
                   sourceExhibitId,
+                  sourceLaunchId,
                 })
                   .catch(() => {});
               }
@@ -291,6 +294,7 @@ export function CityDeals(
                     const c = await cityCommand<DealClaim>("deal_claim", {
                       id: d.id,
                       sourceExhibitId,
+                      sourceLaunchId,
                     });
                     if (currentUser.current !== userId) return;
                     setReceipt(c);

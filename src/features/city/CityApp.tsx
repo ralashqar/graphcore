@@ -1,3 +1,4 @@
+import { BusinessLaunchHistory, LaunchBrowser, useLaunchPlaza } from "./CityLaunches";
 import {
   LaunchReminder,
   LivingInbox,
@@ -205,7 +206,11 @@ export function CityApp() {
       clearTimeout(timer);
     };
   }, [customerEnabled, nearbyCenter.x, nearbyCenter.z, snapshot?.revision]);
-  const launchRoute = !!snapshot?.storefrontsEnabled &&
+  const richLaunches = !!snapshot?.launchesEnabled;
+  const launchBrowse = richLaunches && path === "/city/launches";
+  const richLaunchRoute = richLaunches && path.startsWith("/city/launches/");
+  const plazaItems = useLaunchPlaza(richLaunches && !!snapshot?.launchPlazaEnabled, snapshot?.revision || 0);
+  const launchRoute = (!!snapshot?.storefrontsEnabled || richLaunches) &&
     path.startsWith("/city/launches/");
   const dealRoute = path.startsWith("/city/deal/");
   useEffect(() => {
@@ -568,7 +573,7 @@ export function CityApp() {
       ));
   const map = !discoveryRoute &&
       (path === "/city" || path.startsWith("/city/business/") || dealRoute ||
-        launchRoute),
+        launchRoute || launchBrowse),
     management = path === "/city/manage",
     admin = path === "/city/admin",
     account = path === "/city/account";
@@ -583,11 +588,11 @@ export function CityApp() {
     >
       <LivingProvider
         enabled={customerEnabled &&
-          !!(snapshot?.storefrontsEnabled || snapshot?.activityEnabled) &&
+          !!(snapshot?.storefrontsEnabled || snapshot?.activityEnabled || richLaunches) &&
           !demo.current}
         storefronts={!!snapshot?.storefrontsEnabled}
         deals={!!snapshot?.dealsEnabled}
-        launches={!!snapshot?.campusEnabled}
+        launches={!!snapshot?.campusEnabled || richLaunches}
         ids={[
           ...(selected ? [selected.id] : []),
           ...(workspace.business ? [workspace.business.id] : []),
@@ -793,6 +798,9 @@ export function CityApp() {
                         }
                       >
                         <CityScene
+                          launches={plazaItems}
+                          launchActivity={!!snapshot.activityEnabled}
+                          launchFocus={!!snapshot.launchPlazaEnabled && (launchBrowse || (richLaunchRoute && plazaItems.some(i=>i.slug===path.split("/")[3])))}
                           onReady={markSceneReady}
                           viewport={viewport}
                           central={centralLeader ||
@@ -841,7 +849,7 @@ export function CityApp() {
                               ),
                             ]
                             : snapshot.properties}
-                          matches={customerMatches}
+                          matches={launchBrowse || richLaunchRoute ? [...plazaItems.map(i=>i.business_id),...(linkedDeal?[linkedDeal.business_id]:[])] : customerMatches}
                           markers={customerEnabled
                             ? (customerMatches
                               ? customerMarkers
@@ -884,6 +892,7 @@ export function CityApp() {
                     onTransition={(event, replay) => {
                       setLastMarketEvent(event);
                       if (replay) {
+                        if (launchBrowse || richLaunchRoute) navigate("/city");
                         setSelected(null);
                         setHome((h) => h + 1);
                       }
@@ -900,6 +909,7 @@ export function CityApp() {
                     event={lastMarketEvent}
                     onClose={() => setLastMarketEvent(null)}
                     onReplay={() => {
+                      if (launchBrowse || richLaunchRoute) navigate("/city");
                       setSelected(null);
                       setHome((h) => h + 1);
                       setMarketPlayback({
@@ -931,6 +941,7 @@ export function CityApp() {
                   {(customerEnabled || demo.current)
                     ? (
                       <CustomerDiscovery
+                        onLaunches={richLaunches ? ()=>navigate("/city/launches") : undefined}
                         demoProperties={demo.current
                           ? snapshot?.properties
                           : undefined}
@@ -1095,7 +1106,8 @@ export function CityApp() {
                     {welcome && <button onClick={explore}>Explore city</button>}
                   </div>
                 </aside>
-                {launchRoute && linkedDeal && (
+                {(launchBrowse || richLaunchRoute) && <LaunchBrowser key={session?.user.id || "guest"} slug={richLaunchRoute ? path.split("/")[3] : undefined} userId={session?.user.id} onAuth={()=>setAuth(true)} onClose={()=>navigate("/city")}/>}
+                {!richLaunches && launchRoute && linkedDeal && (
                   <aside
                     className={`city-launch-panel city-property-panel ${
                       sheetCollapsed ? "is-collapsed" : ""
@@ -1309,6 +1321,7 @@ export function CityApp() {
                         />
                       )}
                       <p>{selected.profile.description}</p>
+                      {richLaunches && <BusinessLaunchHistory key={selected.id} businessId={selected.id}/>}
                       {discoveryEnabled && (
                         <button
                           aria-pressed={followingIds.includes(selected.id)}

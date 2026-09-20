@@ -4,6 +4,11 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### Organic City launches (September 2026)
+
+The City launch layer extends existing reviewed discovery entries with private drafts, owned media, categories, launch rewards, publication continuity, rolling organic interest and a temporary Launch Plaza annex. `CITY_LAUNCHES_ENABLED` and `CITY_LAUNCH_PLAZA_ENABLED` default off; queue motifs also require `CITY_ACTIVITY_ENABLED`. Ordinary visits retain central paid framing. Append-only first-action timestamps prevent toggling from refreshing score; owner signals and paid value are excluded. Claim attribution is committed inside the existing deal transaction. Reminders remain explicit and in-app, using existing preferences/receipts. New observations are private and do not influence rank. Changes execute in city-api/city-command, not generation workers; no Fly or provider deployment is required. Local verification and staging/physical-mobile limitations are documented in [docs/synarc-city-launches.md](docs/synarc-city-launches.md).
+
+
 ### Living storefronts and in-app return visits (September 2026)
 
 Default-off `CITY_STOREFRONTS_ENABLED` and `CITY_ACTIVITY_ENABLED` connect approved deals/launches and existing organic observations to a shared storefront resolver and bounded street motifs. The service-only living-state read returns aggregate bands with expiry, never actor identities or concurrent-person counts. Append-only publication, sell-out and organic milestone evidence supports owner history and revalidated share-card downloads. Private launch preferences and read receipts provide explicit in-app reminders; saving a launch does not opt into notifications. New Drops and launch links retain the city and paid allocation remains unchanged. The new domain resolver is imported only by City customer Edge code and frontend; world/game Fly workers do not execute it. Apply the additive migration before deploying City API/command and frontend to designated staging. No production activation, real checkout, provider spending or physical-device certification was performed. See [docs/synarc-city-living.md](docs/synarc-city-living.md).

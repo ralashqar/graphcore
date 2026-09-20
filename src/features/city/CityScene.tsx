@@ -1,3 +1,5 @@
+import { CityLaunchPlaza, LAUNCH_PLAZA_Z } from "./CityLaunchPlaza";
+import type { LaunchItem } from "../../domain/cityLaunches";
 import { useLiving } from "./CityLiving";
 import { CityStreetActivity } from "./CityStreetActivity";
 import { CityExposure } from "./CityExposure";
@@ -39,7 +41,9 @@ function CameraRig({
   central,
   viewport,
   onExplore,
+  launchFocus = false,
 }: {
+  launchFocus?: boolean;
   target: CityProperty | null;
   home: number;
   reduced: boolean;
@@ -78,14 +82,14 @@ function CameraRig({
       !control || !("isOrthographicCamera" in camera) ||
       control.object !== camera
     ) return;
-    const focusKey = `${target?.id || "central"}:${home}`;
+    const focusKey = `${launchFocus ? "launch-plaza" : target?.id || "central"}:${home}`;
     if (lastFocus.current !== focusKey) {
       manual.current = false;
       lastFocus.current = focusKey;
     }
     if (manual.current) return;
     if (
-      restore.current && previousCamera.current &&
+      !launchFocus && restore.current && previousCamera.current &&
       previousCamera.current.selection === (target?.id || "")
     ) {
       camera.position.copy(previousCamera.current.position);
@@ -116,7 +120,7 @@ function CameraRig({
       return p.addScaledVector(right, -(cx - size.width / 2) / camera.zoom)
         .addScaledVector(up, -(size.height / 2 - cy) / camera.zoom);
     };
-    const next = framed(target || central);
+    const next = launchFocus ? framed(null).add(new Vector3(0,0,LAUNCH_PLAZA_Z)) : framed(target || central);
     if (!establishedCentre && !reduced) {
       const initial = framed(central);
       camera.position.add(initial.clone().sub(control.target));
@@ -141,6 +145,7 @@ function CameraRig({
     establishedCentre = true;
     destination.current = next;
   }, [
+    launchFocus,
     target?.id,
     target?.x,
     target?.z,
@@ -381,7 +386,13 @@ export default function CityScene({
   viewport = null,
   onExplore,
   onExposure,
+  launches = [],
+  launchActivity = false,
+  launchFocus = false,
 }: {
+  launches?: LaunchItem[];
+  launchActivity?: boolean;
+  launchFocus?: boolean;
   onReady?: () => void;
   central?: CityProperty | null;
   viewport?: ViewportRect | null;
@@ -451,7 +462,7 @@ export default function CityScene({
         <CityStreetActivity
           properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
           reduced={reduced}
-          paused={!!playback}
+          paused={!!playback || launchFocus}
         />
         <ambientLight intensity={1.5} />
         <directionalLight
@@ -468,6 +479,7 @@ export default function CityScene({
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
         {pavilion && <CityPavilion {...pavilion} />}
+        {(launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
         {!living.storefronts && !markers &&
           zoom >= 3 &&
           visible
@@ -533,6 +545,7 @@ export default function CityScene({
           />
         )}
         <CameraRig
+          launchFocus={launchFocus}
           central={central}
           viewport={viewport}
           onExplore={onExplore}

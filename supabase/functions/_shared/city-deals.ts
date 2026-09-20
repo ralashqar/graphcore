@@ -361,6 +361,7 @@ export async function deals(
   if (action === "claim" && !flag("CITY_BROWSING_ENABLED")) {
     throw new HttpError(503, "City is closed.");
   }
+  if(action === 'claim' && data.sourceLaunchId !== undefined) payload.sourceLaunchId=uuid.parse(data.sourceLaunchId);
   const response = await db.rpc("city_deal_mutate", {
     p_user: user.id,
     p_action: action,
