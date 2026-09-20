@@ -1,3 +1,4 @@
+import { customer } from "../_shared/city-customer.ts";
 import { deals } from "../_shared/city-deals.ts";
 import { campus } from "../_shared/city-campus.ts";
 import { discovery } from "../_shared/city-discovery.ts";
@@ -29,6 +30,7 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== "POST") throw new HttpError(405, "Use POST.");
     const raw = await request.json();
+    if (String(raw.action).startsWith("customer_")) return json(await customer(request,raw), {headers:{"Cache-Control":"private, no-store"}});
     if (String(raw.action).startsWith("deal_")) return json(await deals(request,raw), {headers:{"Cache-Control":"private, no-store"}});
     if (["campus_public", "campus_workspace"].includes(raw.action)) return json(await campus(request,raw));
     if (
@@ -154,6 +156,7 @@ Deno.serve(async (request) => {
         discoveryEnabled: flag("CITY_DISCOVERY_ENABLED"),
         campusEnabled: flag("CITY_CAMPUS_ENABLED"),
         dealsEnabled: flag("CITY_DEALS_ENABLED"),
+        customerDiscoveryEnabled: flag("CITY_CUSTOMER_DISCOVERY_ENABLED") && flag("CITY_DISCOVERY_ENABLED"),
         setupEnabled: flag("CITY_SETUP_ENABLED"),
         termsUrl: Deno.env.get("CITY_TERMS_URL") || null,
       });

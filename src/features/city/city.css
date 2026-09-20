@@ -1361,3 +1361,54 @@ body:has(.city-app) {
 
 .city-launch-readiness label:has(input[type="checkbox"]) { display:flex; align-items:flex-start; gap:10px; }
 .city-launch-readiness input[type="checkbox"] { width:auto; flex:0 0 auto; margin-top:3px; }
+
+/* Customer discovery keeps the map as the largest surface. */
+.city-customer-enabled .city-discovery { padding:20px; max-height:calc(100% - 100px); overflow:auto; }
+.city-customer-enabled .city-discovery h1 { font-size:28px; margin:8px 0; }
+.city-customer-enabled .city-discovery h2 { font-size:15px; margin:18px 0 8px; }
+.city-customer-enabled .city-search { margin:14px 0; }
+.city-customer-filters { display:flex; gap:6px; flex-wrap:wrap; margin:12px 0; }
+.city-customer-filters button { border:1px solid #c7cbbd; border-radius:20px; padding:7px 10px; background:#f8f7ef; font-size:12px; }
+.city-customer-filters button[aria-pressed=true] { background:#294b3b; color:#fff; border-color:#294b3b; }
+.city-customer-result { border-bottom:1px solid #d8dbcd; padding:12px 0; }
+.city-customer-result > button:first-child { display:grid; gap:6px; text-align:left; width:100%; padding:0; }
+.city-customer-result small,.city-customer-result span { font-size:12px; line-height:1.5; }
+.city-customer-result strong { font-size:16px; }
+.city-customer-result > button:not(:first-child) { margin-top:8px; font-size:12px; text-decoration:underline; }
+.city-customer-enabled .city-property-list { max-height:none; padding:0; }
+.city-customer-hint { padding:10px; background:#e9eddf; font-size:12px; line-height:1.5; }
+.city-customer-hint button { display:block; text-decoration:underline; margin-top:6px; }
+.city-customer-activity { margin-top:16px; }
+.city-customer-activity button { display:block; text-align:left; padding:10px 0; font-size:12px; }
+.city-wallet-fab { position:fixed; right:24px; bottom:24px; z-index:30; background:#294b3b; color:white; padding:13px 20px; border-radius:30px; box-shadow:0 4px 18px #19312433; }
+.city-wallet-fab strong { background:#f5e8bd; color:#294b3b; padding:3px 8px; border-radius:15px; margin-left:8px; }
+.city-customer-wallet { max-height:70dvh; overflow:auto; }
+.city-customer-wallet article { padding:12px 0; border-bottom:1px solid #c7cbbd; display:grid; gap:8px; }
+.city-linked-deal { position:absolute; right:24px; top:24px; bottom:85px; width:340px; overflow:auto; background:#f7f6ed; padding:20px; border:1px solid #c7cbbd; border-radius:14px; z-index:5; }
+.city-customer-enabled .city-deals label:has(input[type=checkbox]) { display:flex; gap:8px; align-items:flex-start; }
+@media(max-width:700px) {
+ .city-customer-enabled .city-map-shell { min-height:0; }
+ .city-customer-enabled .city-discovery { left:10px; right:10px; top:10px; max-height:33dvh; padding:12px; }
+ .city-customer-enabled .city-discovery h1,.city-customer-enabled .city-discovery>p,.city-customer-enabled .city-discovery>label:not(.city-search) { display:none; }
+ .city-customer-filters { flex-wrap:nowrap; overflow-x:auto; margin:4px 0; }
+ .city-customer-filters button { white-space:nowrap; }
+ .city-customer-enabled .city-search { margin:0 0 8px; }
+ .city-linked-deal { top:auto; bottom:0; left:0; right:0; width:auto; max-height:48dvh; border-radius:18px 18px 0 0; padding:16px 16px 70px; }
+ .city-customer-enabled .city-property-panel { max-height:48dvh; padding-bottom:65px; }
+ .city-wallet-fab { bottom:12px; right:12px; padding:10px 15px; }
+ .city-customer-enabled .city-map-tools { top:36dvh; }
+ .city-customer-enabled .is-directory .city-discovery { max-height:calc(100% - 100px); }
+}
+
+.city-customer-enabled .city-discovery { display:block; }
+.city-customer-enabled .city-discovery > * { flex-shrink:0; }
+.city-customer-enabled .city-property-list { display:block; overflow:visible; }
+.city-customer-enabled .city-search { position:sticky; top:0; z-index:2; background:#fffef8; }
+.city-customer-filters { position:sticky; top:51px; z-index:2; background:#f7f6ef; padding:5px 0; }
+.city-app .city-sheet-toggle { display:none; }
+@media(max-width:700px) {
+ .city-app .city-sheet-toggle { display:block; margin:0 auto 12px; padding:8px 16px; border-radius:16px; background:#e8ecdf; }
+ .city-linked-deal.is-collapsed { max-height:100px; overflow:hidden; padding-bottom:12px; }
+ .city-customer-enabled .city-property-panel.is-collapsed { max-height:100px; overflow:hidden; }
+ .city-customer-enabled .city-discovery:has(+ .city-linked-deal) { max-height:22dvh; }
+}

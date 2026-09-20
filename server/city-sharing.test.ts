@@ -65,3 +65,8 @@ test("sharing endpoint generates a PNG from public city data", async () => {
     else process.env.CITY_SUPABASE_PUBLISHABLE_KEY = oldKey;
   }
 });
+
+test('deal share uses a city deep link and never advertises paid rank',async()=>{
+ const data={kind:'deal' as const,name:'Free trial',description:'Conditions apply',rank:0,value:0,color:'#547364',date:'2026-09-20T12:00:00Z',slug:'55555555-5555-4555-8555-555555555555'};
+ const html=await propertyHTML(data);assert.ok(html.includes('/city/deal/'+data.slug));assert.ok(!html.includes('rank #0'));assert.ok(!cardSVG(data).includes('Land Value'));
+});

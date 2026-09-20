@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 export type CityShare = {
-  kind?: "trail" | "launch" | "storefront";
+  kind?: "trail" | "launch" | "storefront" | "deal";
   name: string;
   description?: string;
   rank: number;
@@ -20,7 +20,7 @@ export const escapeHTML = (value: unknown) =>
   );
 export async function shareData(params: URLSearchParams): Promise<CityShare> {
   const kind = params.get("kind");
-  if (kind && !["trail", "launch", "storefront"].includes(kind))
+  if (kind && !["trail", "launch", "storefront", "deal"].includes(kind))
     throw new Error("Invalid discovery kind.");
   const slug = params.get("slug"),
     eventId = params.get("eventId");
@@ -37,7 +37,8 @@ export async function shareData(params: URLSearchParams): Promise<CityShare> {
     method: "POST",
     headers: { apikey: key, "Content-Type": "application/json" },
     body: JSON.stringify({
-      action: kind && kind !== "storefront" ? "discovery_share" : "share",
+      action: kind === "deal" ? "customer_share" : kind && kind !== "storefront" ? "discovery_share" : "share",
+      ...(kind === "deal" ? {id:slug} : {}),
       ...(kind ? { kind } : {}),
       ...(eventId ? { eventId } : { slug }),
     }),
@@ -64,7 +65,7 @@ export function cardSVG(data: CityShare) {
 export async function propertyHTML(data: CityShare) {
   const origin = new URL(process.env.CITY_PUBLIC_ORIGIN || "https://synarc.ai")
       .origin,
-    url = `${origin}/city/${data.kind === "trail" ? "trails" : data.kind === "launch" ? "launches" : "business"}/${data.slug}`,
+    url = `${origin}/city/${data.kind === "deal" ? "deal" : data.kind === "trail" ? "trails" : data.kind === "launch" ? "launches" : "business"}/${data.slug}`,
     image = `${origin}/api/city-share?slug=${encodeURIComponent(data.slug)}${data.kind ? `&kind=${data.kind}` : ""}`;
   const title = `${data.name} | Synarc City`,
     description =

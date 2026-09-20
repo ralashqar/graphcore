@@ -45,3 +45,10 @@ Deno.test("deal terms enforce monetary and merchant expiry constraints", () => {
     }).success,
   );
 });
+
+Deno.test("free classification requires zero-cost reward and trial conditions",()=>{
+ assert.equal(dealTermsSchema.safeParse({...terms,freeConfirmed:true}).success,false);
+ assert.equal(dealTermsSchema.safeParse({...terms,kind:'trial_access',freeConfirmed:true}).success,false);
+ assert.equal(dealTermsSchema.safeParse({...terms,kind:'free_product',freeConfirmed:true,minimumSpend:100}).success,false);
+ assert.ok(dealTermsSchema.safeParse({...terms,kind:'trial_access',freeConfirmed:true,renewalTerms:'Cancel before renewal',cardRequired:true}).success);
+});

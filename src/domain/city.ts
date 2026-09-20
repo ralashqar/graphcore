@@ -65,6 +65,7 @@ export type CitySnapshot = {
   discoveryEnabled?: boolean;
   campusEnabled?: boolean;
   dealsEnabled?: boolean;
+  customerDiscoveryEnabled?: boolean;
   setupEnabled?: boolean;
   termsUrl?: string | null;
   demo?: boolean;

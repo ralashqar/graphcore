@@ -1,3 +1,4 @@
+import { customer } from "../_shared/city-customer.ts";
 import { deals } from "../_shared/city-deals.ts";
 import { campus } from "../_shared/city-campus.ts";
 import { discovery } from "../_shared/city-discovery.ts";
@@ -68,6 +69,7 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if (action.startsWith("customer_")) return json(await customer(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("deal_")) return json(await deals(request,data,true), {headers:{"Cache-Control":"private, no-store"}});
     if (action.startsWith("campus_")) return json(await campus(request,data,true));
     if (action.startsWith("discovery_"))
@@ -111,6 +113,7 @@ Deno.serve(async (request) => {
           /* anonymous browser */
         }
       }
+      if(flag("CITY_CUSTOMER_DISCOVERY_ENABLED") && kind === "view") result(await db.rpc("city_customer_record",{p_business:id,p_actor:visitorId?`u:${visitorId}`:`n:${hash}`,p_kind:"property_open"}));
       if (visitorId && kind === "view")
         result(
           await db.rpc("city_record_visit", {

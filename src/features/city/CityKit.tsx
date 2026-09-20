@@ -4,12 +4,12 @@ import { useEffect, useMemo } from "react";
 import { Html, useGLTF } from "@react-three/drei";
 import {
   BoxGeometry,
-  Float32BufferAttribute,
   CylinderGeometry,
+  Float32BufferAttribute,
   IcosahedronGeometry,
+  type Material,
   Mesh,
   MeshLambertMaterial,
-  type Material,
   type MeshStandardMaterial,
 } from "three";
 import type { CityProperty } from "../../domain/city";
@@ -42,6 +42,7 @@ export function CityKit({
   onSelect,
   reduced,
   labels = true,
+  matchIds,
 }: {
   properties: CityProperty[];
   selected: CityProperty | null;
@@ -51,6 +52,7 @@ export function CityKit({
   onSelect: (p: CityProperty) => void;
   reduced: boolean;
   labels?: boolean;
+  matchIds?: Set<string>;
 }) {
   const { scene } = useGLTF("/city/downtown/downtown.glb", false, true);
   const assets = useMemo(() => {
@@ -63,8 +65,9 @@ export function CityKit({
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         const original = child.material as MeshStandardMaterial;
-        if (Array.isArray(original))
+        if (Array.isArray(original)) {
           throw new Error("Expected exported material primitives");
+        }
         let material = cache.get(original);
         if (!material) {
           // Static architectural windows, shared colour textures, no engine-specific interior shaders.
@@ -111,11 +114,12 @@ export function CityKit({
   useEffect(
     () => () => {
       const materials = new Set<Material>();
-      for (const pieces of assets.values())
+      for (const pieces of assets.values()) {
         for (const p of pieces) {
           p.geometry.dispose();
           materials.add(p.material);
         }
+      }
       for (const mat of materials) mat.dispose();
     },
     [assets],
@@ -127,8 +131,9 @@ export function CityKit({
       if (
         Math.abs(p.x - plotAxis(center.x)) > 430 ||
         Math.abs(p.z - plotAxis(center.z)) > 430
-      )
+      ) {
         continue;
+      }
       const list = groups.get(p.asset) || [];
       list.push(p);
       groups.set(p.asset, list);
@@ -144,13 +149,13 @@ export function CityKit({
       let x = Math.max(-extent, center.x - 12);
       x <= Math.min(extent, center.x + 12);
       x++
-    )
+    ) {
       for (
         let z = Math.max(-extent, center.z - 12);
         z <= Math.min(extent, center.z + 12);
         z++
-      )
-        if (x && z)
+      ) {
+        if (x && z) {
           out.push({
             key: `plot:${x}:${z}`,
             x: plotAxis(x),
@@ -158,17 +163,21 @@ export function CityKit({
             z: plotAxis(z),
             scale: [23.8, 0.14, 23.8],
           });
+        }
+      }
+    }
     return out;
   }, [capacity, center.x, center.z]);
   const buildings = useMemo(() => {
     const groups = new Map<string, Instance[]>();
     for (const p of properties) {
-      const near =
-        p.id === selected?.id ||
+      const near = p.id === selected?.id ||
         (BUILDING_RECIPES[p.tier].floors * 3 * zoom >= 38 &&
           Math.abs(p.x - center.x) <= 5 &&
           Math.abs(p.z - center.z) <= 5);
-      const asset = `Building_${p.tier}_${buildingVariant(p.id)}_${near ? "near" : "far"}`;
+      const asset = `Building_${p.tier}_${buildingVariant(p.id)}_${
+        near ? "near" : "far"
+      }`;
       const list = groups.get(asset) || [];
       list.push({
         key: p.id,
@@ -176,11 +185,14 @@ export function CityKit({
         z: plotAxis(p.z),
         rotation: frontage(p.x),
         property: p,
+        color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id
+          ? "#767d76"
+          : "#ffffff",
       });
       groups.set(asset, list);
     }
     return groups;
-  }, [properties, selected?.id, zoom, center.x, center.z]);
+  }, [properties, selected?.id, zoom, center.x, center.z, matchIds]);
   const { paths, planters } = useMemo(() => {
     const paths: Instance[] = [],
       planters: Instance[] = [];
@@ -198,8 +210,9 @@ export function CityKit({
         z: z - sign,
         scale: [length, 0.05, 2],
       });
-      if (Math.abs(p.x - center.x) <= 5 && Math.abs(p.z - center.z) <= 5)
+      if (Math.abs(p.x - center.x) <= 5 && Math.abs(p.z - center.z) <= 5) {
         planters.push({ key: p.id, x: x + sign * 9.5, z: z + 7 });
+      }
     }
     return { paths, planters };
   }, [properties, center.x, center.z]);
@@ -207,16 +220,20 @@ export function CityKit({
     const paving: Instance[] = [],
       bollards: Instance[] = [],
       planters: Instance[] = [];
-    for (let x = -7.5; x <= 7.5; x += 3)
-      for (let z = -7.5; z <= 7.5; z += 3)
+    for (let x = -7.5; x <= 7.5; x += 3) {
+      for (let z = -7.5; z <= 7.5; z += 3) {
         paving.push({ key: `${x}:${z}`, x, z });
-    for (const side of [-1, 1])
+      }
+    }
+    for (const side of [-1, 1]) {
       for (const offset of [-4, -2, 0, 2, 4]) {
         bollards.push({ key: `x${side}:${offset}`, x: side * 8, z: offset });
         bollards.push({ key: `z${side}:${offset}`, x: offset, z: side * 8 });
       }
-    for (const x of [-6, 6])
+    }
+    for (const x of [-6, 6]) {
       for (const z of [-6, 6]) planters.push({ key: `${x}:${z}`, x, z });
+    }
     return { paving, bollards, planters };
   }, []);
   const piece = (asset: string) => {
@@ -304,7 +321,9 @@ export function CityKit({
             zIndexRange={[3, 0]}
           >
             <button
-              className={`city-map-label ${selected?.id === p.id ? "is-selected" : ""}`}
+              className={`city-map-label ${
+                selected?.id === p.id ? "is-selected" : ""
+              }`}
               onClick={() => onSelect(p)}
             >
               <span>{String(p.rank).padStart(2, "0")}</span>

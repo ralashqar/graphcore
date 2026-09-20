@@ -1,22 +1,28 @@
+import { type CustomerItem, discoveryLabel } from "../../domain/cityCustomer";
 import { CityPavilion } from "./CityPavilion";
 import { Html } from "@react-three/drei";
 import type { CityProfile } from "../../domain/city";
 import {
   Component,
+  type ComponentRef,
+  type ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
-  useMemo,
-  type ReactNode,
-  type ComponentRef,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { MapControls, OrthographicCamera } from "@react-three/drei";
-import { Vector3, MOUSE, TOUCH } from "three";
+import { MOUSE, TOUCH, Vector3 } from "three";
 import { type CityProperty } from "../../domain/city";
-import { plotAxis as position, logicalAxis } from "../../domain/cityLayout";
+import { logicalAxis, plotAxis as position } from "../../domain/cityLayout";
 import { CityKit } from "./CityKit";
-let savedCityCamera: {position:Vector3;target:Vector3;zoom:number;selection:string} | null = null;
+let savedCityCamera: {
+  position: Vector3;
+  target: Vector3;
+  zoom: number;
+  selection: string;
+} | null = null;
 function CameraRig({
   target,
   home,
@@ -36,15 +42,32 @@ function CameraRig({
     timer = useRef(0);
   const { camera, size } = useThree();
   const restore = useRef(true);
-  const selection = useRef(target?.id || ""); selection.current = target?.id || "";
-  useEffect(()=>()=>{
-    if(controls.current) savedCityCamera={position:camera.position.clone(),target:controls.current.target.clone(),zoom:camera.zoom,selection:selection.current};
-  },[camera]);
-  useEffect(() => {
-    if(restore.current && savedCityCamera && savedCityCamera.selection === (target?.id || "") && controls.current) {
-      camera.position.copy(savedCityCamera.position);camera.zoom=savedCityCamera.zoom;camera.updateProjectionMatrix();controls.current.target.copy(savedCityCamera.target);controls.current.update();restore.current=false;return;
+  const selection = useRef(target?.id || "");
+  selection.current = target?.id || "";
+  useEffect(() => () => {
+    if (controls.current) {
+      savedCityCamera = {
+        position: camera.position.clone(),
+        target: controls.current.target.clone(),
+        zoom: camera.zoom,
+        selection: selection.current,
+      };
     }
-    restore.current=false;
+  }, [camera]);
+  useEffect(() => {
+    if (
+      restore.current && savedCityCamera &&
+      savedCityCamera.selection === (target?.id || "") && controls.current
+    ) {
+      camera.position.copy(savedCityCamera.position);
+      camera.zoom = savedCityCamera.zoom;
+      camera.updateProjectionMatrix();
+      controls.current.target.copy(savedCityCamera.target);
+      controls.current.update();
+      restore.current = false;
+      return;
+    }
+    restore.current = false;
     destination.current = new Vector3(
       target ? position(target.x) : 0,
       0,
@@ -65,7 +88,12 @@ function CameraRig({
         control.update();
       }
     }
-    savedCityCamera={position:camera.position.clone(),target:control.target.clone(),zoom:camera.zoom,selection:selection.current};
+    savedCityCamera = {
+      position: camera.position.clone(),
+      target: control.target.clone(),
+      zoom: camera.zoom,
+      selection: selection.current,
+    };
     timer.current += delta;
     if (timer.current > 1) {
       timer.current = 0;
@@ -85,8 +113,9 @@ function CameraRig({
         !controls.current ||
         !(e.target instanceof HTMLElement) ||
         ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)
-      )
+      ) {
         return;
+      }
       const movement: Record<string, [number, number]> = {
         ArrowUp: [-12, -12],
         ArrowDown: [12, 12],
@@ -163,6 +192,72 @@ function ContextGuard({ onFailure }: { onFailure: () => void }) {
   }, [gl, onFailure]);
   return null;
 }
+function DiscoveryMarkers(
+  { items, zoom, onSelect }: {
+    items: CustomerItem[];
+    zoom: number;
+    onSelect: (item: CustomerItem) => void;
+  },
+) {
+  const { camera, size } = useThree();
+  const [shown, setShown] = useState<CustomerItem[]>([]);
+  const elapsed = useRef(0), last = useRef("");
+  useEffect(()=>{last.current="";},[items]);
+  useFrame((_, delta) => {
+    elapsed.current += delta;
+    if (elapsed.current < 0.25) return;
+    elapsed.current = 0;
+    const boxes: { x: number; y: number }[] = [],
+      ids = new Set<string>(),
+      next: CustomerItem[] = [];
+    if (zoom >= 3) {
+      for (const item of items) {
+        if (
+          item.x === null || item.z === null || ids.has(item.business_id)
+        ) continue;
+        const p = new Vector3(position(item.x), 22, position(item.z)).project(
+            camera,
+          ),
+          x = (p.x + 1) * size.width / 2,
+          y = (1 - p.y) * size.height / 2;
+        if (
+          p.z < -1 || p.z > 1 || x < 60 || x > size.width - 60 || y < 30 ||
+          y > size.height - 30 || boxes.some((b) =>
+            Math.abs(b.x - x) < 115 && Math.abs(b.y - y) < 38
+          )
+        ) continue;
+        ids.add(item.business_id);
+        boxes.push({ x, y });
+        next.push(item);
+        if (next.length === 8) break;
+      }
+    }
+    const key = next.map((i) => i.key).join("|");
+    if (key !== last.current) {
+      last.current = key;
+      setShown(next);
+    }
+  });
+  return (
+    <>
+      {shown.map((m) => (
+        <Html
+          key={m.key}
+          center
+          position={[position(m.x || 0), 22, position(m.z || 0)]}
+        >
+          <button
+            className="city-deal-pin"
+            aria-label={`${discoveryLabel(m)} at ${m.business_name}`}
+            onClick={() => onSelect(m)}
+          >
+            {discoveryLabel(m)}
+          </button>
+        </Html>
+      ))}
+    </>
+  );
+}
 export default function CityScene({
   properties,
   selected,
@@ -173,6 +268,9 @@ export default function CityScene({
   onFailure,
   pavilion,
   trailMarkers,
+  matches,
+  markers,
+  onDiscoverySelect,
 }: {
   properties: CityProperty[];
   selected: CityProperty | null;
@@ -182,6 +280,9 @@ export default function CityScene({
   onRegion: (x: number, z: number) => void;
   onFailure: () => void;
   pavilion?: { profile?: CityProfile; title?: string };
+  matches?: string[] | null;
+  markers?: CustomerItem[];
+  onDiscoverySelect?: (item: CustomerItem) => void;
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -212,8 +313,9 @@ export default function CityScene({
             /SwiftShader|llvmpipe|software/i.test(
               String(context.getParameter(info.UNMASKED_RENDERER_WEBGL)),
             )
-          )
+          ) {
             setSoftwareRenderer(true);
+          }
         }}
       >
         <ContextGuard onFailure={onFailure} />
@@ -239,7 +341,29 @@ export default function CityScene({
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
         {pavilion && <CityPavilion {...pavilion} />}
-        {visible.filter(p=>p.hasDeal).slice(0,40).map(p=><Html key={`deal-${p.id}`} center position={[position(p.x), 19, position(p.z)]}><button className="city-deal-pin" aria-label={`City deal at ${p.profile.name}`} onClick={()=>onSelect(p)}>✦ Deal</button></Html>)}
+        {!markers && zoom >= 3 &&
+          visible.filter((p) => p.hasDeal).slice(0, 12).map((p) => (
+            <Html
+              key={`deal-${p.id}`}
+              center
+              position={[position(p.x), 19, position(p.z)]}
+            >
+              <button
+                className="city-deal-pin"
+                aria-label={`City deal at ${p.profile.name}`}
+                onClick={() => onSelect(p)}
+              >
+                ✦ Deal
+              </button>
+            </Html>
+          ))}
+        {markers && (
+          <DiscoveryMarkers
+            items={markers}
+            zoom={zoom}
+            onSelect={onDiscoverySelect || (() => {})}
+          />
+        )}
         {trailMarkers?.map((p) => (
           <Html key={p.id} center position={[position(p.x), 15, position(p.z)]}>
             <span className="city-trail-pin">{p.number}</span>
@@ -247,6 +371,9 @@ export default function CityScene({
         ))}
         <CityKit
           properties={visible}
+          matchIds={matches
+            ? new Set(matches)
+            : undefined}
           selected={selected}
           capacity={capacity}
           center={center}
@@ -261,7 +388,7 @@ export default function CityScene({
           reduced={reduced}
           onRegion={(x, z) => {
             setCenter((previous) =>
-              previous.x === x && previous.z === z ? previous : { x, z },
+              previous.x === x && previous.z === z ? previous : { x, z }
             );
             onRegion(x, z);
           }}

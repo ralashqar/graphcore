@@ -102,7 +102,13 @@ export function CityDealStudio(
   return (
     <section className="city-deals">
       <h2>{admin ? "Deal review queue" : "Business deals"}</h2>
-      <button type="button" disabled={busy} onClick={()=>void run(async()=>{})}>Refresh deal readiness</button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void run(async () => {})}
+      >
+        Refresh deal readiness
+      </button>
       <p>
         Unique codes issued through the city. Merchant checkout enforces
         discounts and redemption deadlines.
@@ -124,6 +130,27 @@ export function CityDealStudio(
         <form onSubmit={save}>
           <fieldset disabled={busy}>
             <legend>{edit ? "Edit unclaimed deal" : "New deal"}</legend>
+            <label>
+              <input
+                type="checkbox"
+                checked={!!terms.freeConfirmed}
+                onChange={(e) => change("freeConfirmed", e.target.checked)}
+              />I confirm this reward costs nothing and requires no purchase
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={!!terms.cardRequired}
+                onChange={(e) => change("cardRequired", e.target.checked)}
+              />Payment card required
+            </label>
+            <label>
+              Trial renewal and cancellation terms<input
+                maxLength={400}
+                value={terms.renewalTerms || ""}
+                onChange={(e) => change("renewalTerms", e.target.value)}
+              />
+            </label>
             <label>
               Title<input
                 required
@@ -338,7 +365,7 @@ export function CityDealStudio(
               {dealAvailability(d)} · revision {d.version}
             </p>
             <h3>{d.terms.title}</h3>
-            <CityDealLaunch deal={d} admin={admin} onRefresh={refresh}/>
+            <CityDealLaunch deal={d} admin={admin} onRefresh={refresh} />
             {d.imageUrl && <img src={d.imageUrl} alt="Deal artwork" />}
             <p>{d.terms.description}</p>
             <p>
@@ -544,7 +571,9 @@ export function DealExhibitPicker(
     void cityCall<{ deals: CityDeal[] }>("city-api", {
       action: "deal_workspace",
       businessId,
-    }).then((r) => setRows(Array.isArray(r.deals) ? r.deals : [])).catch(() => {});
+    }).then((r) => setRows(Array.isArray(r.deals) ? r.deals : [])).catch(
+      () => {},
+    );
   }, [businessId]);
   return (
     <label>
@@ -552,7 +581,9 @@ export function DealExhibitPicker(
         value={value || ""}
         onChange={(e) => onChange(e.target.value || undefined)}
       >
-        <option value="">No specific link (offer stands show all approved deals)</option>
+        <option value="">
+          No specific link (offer stands show all approved deals)
+        </option>
         {value && !rows.some((d) => d.id === value) && (
           <option value={value}>Previously selected deal</option>
         )}

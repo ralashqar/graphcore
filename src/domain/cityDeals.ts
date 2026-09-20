@@ -13,6 +13,9 @@ export type DealTerms = {
   redeemBy: string | null;
   exclusive: boolean;
   merchantExpiryConfirmed: boolean;
+  freeConfirmed?: boolean;
+  cardRequired?: boolean;
+  renewalTerms?: string;
 };
 export type CityDeal = {
   id: string;

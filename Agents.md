@@ -4,6 +4,11 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City customer discovery (September 2026)
+
+The default-off `CITY_CUSTOMER_DISCOVERY_ENABLED` surface unifies approved free/paid businesses, campus exhibits, launches and deals in a public search projection. Recent deduplicated organic activity drives discovery independently of Land Value; committed claims and saves are recorded transactionally, while merchant-reported redemptions do not affect trending. New service-only customer API/command actions provide bounded search, saves, wallet summaries, in-app reminders and owner funnel metrics. A public revision-only table invalidates sanitized reads without exposing claims or codes. Optional free-offer classification follows existing exact-terms review. New deal deep links and social cards reuse City routes. Anonymous saves merge after sign-in; claims still require explicit authenticated admission. No worker generation, provider, payment or GPU admission behavior changes. Deploy the migration, city-api, city-command and frontend to the designated isolated staging environment; no Fly execution module changes. Hosted activation remains pending staging designation. See [customer discovery](docs/synarc-city-customer-discovery.md) for contracts, verification and limits.
+
+
 ### City merchant launch readiness (September 2026)
 
 The City branch adds advisory merchant launch checklists, private customer previews, dedicated checkout-test records and exhibit-to-deal attribution. Test codes are isolated from customer inventory across each business’s campaigns; merchant-reported evidence becomes stale when terms change. Public claims validate optional source exhibits against published business content and freeze the original source. The URL setup planner cannot author deal references; worker assembly now preserves owner-selected links for galleries/comparisons/walkthroughs as well as offer stands. Worker version is `2026-09-20-city-launch-1`; no provider requests, budget changes or new inference gates are added.

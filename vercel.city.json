@@ -12,6 +12,10 @@
   },
   "rewrites": [
     {
+      "source": "/city/deal/:slug",
+      "destination": "/api/city-property?kind=deal&slug=:slug"
+    },
+    {
       "source": "/city/trails/:slug",
       "destination": "/api/city-property?kind=trail&slug=:slug"
     },

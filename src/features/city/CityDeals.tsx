@@ -1,3 +1,8 @@
+import {
+  customerEvent,
+  CustomerSave,
+  useCustomerEnabled,
+} from "./CityCustomer";
 import { useEffect, useRef, useState } from "react";
 import {
   type CityDeal,
@@ -19,6 +24,9 @@ export function RewardTerms({ terms: t }: { terms: DealTerms }) {
         ? "Free product"
         : "Trial / access code"}
       {t.minimumSpend > 0 ? ` · minimum spend ${amount(t.minimumSpend)}` : ""}
+      {t.freeConfirmed && " · merchant-confirmed free reward"}
+      {t.cardRequired && " · payment card required"}
+      {t.renewalTerms && ` · ${t.renewalTerms}`}
       {t.maximumDiscount
         ? ` · maximum discount ${amount(t.maximumDiscount)}`
         : ""} · one claim per account
@@ -26,6 +34,7 @@ export function RewardTerms({ terms: t }: { terms: DealTerms }) {
   );
 }
 export function DealReceipt({ claim }: { claim: DealClaim }) {
+  const customerEnabled = useCustomerEnabled();
   const [copied, setCopied] = useState(false), [error, setError] = useState("");
   return (
     <article className="city-deal-receipt">
@@ -56,12 +65,14 @@ export function DealReceipt({ claim }: { claim: DealClaim }) {
               href={claim.terms.destination}
               target="_blank"
               rel="noopener noreferrer sponsored"
-              onClick={() =>
+              onClick={() => {
+                if (customerEnabled) customerEvent("merchant_visit", undefined, claim.deal_id);
                 void cityCommand("deal_track", {
                   id: claim.deal_id,
                   sourceExhibitId: claim.source_exhibit_id || undefined,
                   kind: "click",
-                }).catch(() => {})}
+                }).catch(() => {});
+              }}
             >
               Shop now ↗
             </a>
@@ -85,15 +96,25 @@ export function DealReceipt({ claim }: { claim: DealClaim }) {
   );
 }
 export function CityDeals(
-  { businessId, userId, onAuth, dealId, sourceExhibitId, demo = false }: {
+  {
+    businessId,
+    userId,
+    onAuth,
+    dealId,
+    sourceExhibitId,
+    demo = false,
+    autoOpen = false,
+  }: {
     businessId: string;
     userId?: string;
     onAuth: () => void;
     dealId?: string;
     sourceExhibitId?: string;
     demo?: boolean;
+    autoOpen?: boolean;
   },
 ) {
+  const customerEnabled = useCustomerEnabled();
   const [rows, setRows] = useState<CityDeal[]>([]),
     [enabled, setEnabled] = useState(false),
     [error, setError] = useState(""),
@@ -106,6 +127,17 @@ export function CityDeals(
       }
     }),
     [receipt, setReceipt] = useState<DealClaim | null>(null);
+  useEffect(() => {
+    if (!selected || demo || !customerEnabled) return;
+    const timer = setTimeout(() => {
+      void cityCommand("customer_track", {
+        businessId,
+        dealId: selected,
+        kind: "deal_open",
+      }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [selected, businessId, demo, customerEnabled]);
   const currentUser = useRef(userId);
   currentUser.current = userId;
   useEffect(() => {
@@ -113,10 +145,11 @@ export function CityDeals(
     setEnabled(false);
     try {
       setSelected(
-        sessionStorage.getItem(`city-deal-choice:${businessId}`) || "",
+        (autoOpen ? dealId : "") ||
+          sessionStorage.getItem(`city-deal-choice:${businessId}`) || "",
       );
     } catch {
-      setSelected("");
+      setSelected(autoOpen ? dealId || "" : "");
     }
     setRows([]);
     setReceipt(null);
@@ -138,11 +171,15 @@ export function CityDeals(
     };
     refresh();
     const timer = setInterval(refresh, 30000);
+    window.addEventListener("city-wallet-change", refresh);
+    window.addEventListener("online", refresh);
     return () => {
       active = false;
       clearInterval(timer);
+      window.removeEventListener("city-wallet-change", refresh);
+      window.removeEventListener("online", refresh);
     };
-  }, [businessId, demo]);
+  }, [businessId, dealId, demo, autoOpen]);
   useEffect(() => {
     setReceipt(null);
   }, [userId]);
@@ -175,13 +212,51 @@ export function CityDeals(
             onClick={() => {
               setSelected(selected === d.id ? "" : d.id);
               if (selected !== d.id) {
-                void cityCommand("deal_track", { id: d.id, kind: "open", sourceExhibitId })
+                void cityCommand("deal_track", {
+                  id: d.id,
+                  kind: "open",
+                  sourceExhibitId,
+                })
                   .catch(() => {});
               }
             }}
           >
             View terms and claim
           </button>
+          {customerEnabled && <>
+          <a
+            href={`/api/city-share?kind=deal&slug=${d.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Share card ↗
+          </a>
+          <a href={`/city/deal/${d.id}`}>Deal link</a>
+          </>}
+          <CustomerSave
+            item={{
+              key: `deal:${d.id}`,
+              business_id: businessId,
+              slug: "",
+              business_name: d.business_name || "",
+              category: "",
+              kind: "deal",
+              content_id: d.id,
+              title: d.terms.title,
+              description: d.terms.description,
+              destination: `/city/deal/${d.id}`,
+              rank: null,
+              x: null,
+              z: null,
+              created_at: "",
+              starts_at: d.terms.startsAt,
+              ends_at: d.terms.endsAt,
+              remaining: d.quantity - d.issued,
+              free: !!d.terms.freeConfirmed,
+              exclusive: d.terms.exclusive,
+              available: dealAvailability(d) === "live",
+            }}
+          />
           {selected === d.id && (
             <>
               <p>{d.terms.description}</p>
@@ -219,6 +294,7 @@ export function CityDeals(
                     });
                     if (currentUser.current !== userId) return;
                     setReceipt(c);
+                    window.dispatchEvent(new Event("city-wallet-change"));
                     const r = await cityCall<{ deals: CityDeal[] }>(
                       "city-api",
                       { action: "deal_catalog", businessId },
@@ -246,6 +322,7 @@ export function CityDeals(
   );
 }
 export function CityDealWallet() {
+  const mounted=useRef(true);
   const [claims, setClaims] = useState<DealClaim[]>([]),
     [enabled, setEnabled] = useState(false),
     [more, setMore] = useState(false),
@@ -257,17 +334,21 @@ export function CityDealWallet() {
       const r = await cityCall<
         { enabled: boolean; claims: DealClaim[]; hasMore: boolean }
       >("city-api", { action: "deal_wallet", offset });
+      if(!mounted.current)return;
       setEnabled(r.enabled);
       setClaims((prev) => offset ? [...prev, ...r.claims] : r.claims);
       setMore(r.hasMore);
     } catch (e) {
-      setError((e as Error).message);
+      if(mounted.current)setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if(mounted.current)setBusy(false);
     }
   }
   useEffect(() => {
-    void load();
+    mounted.current=true;void load();
+    const refresh=()=>{if(document.visibilityState==='visible')void load();};
+    const timer=setInterval(refresh,30000);window.addEventListener('city-wallet-change',refresh);
+    return()=>{mounted.current=false;clearInterval(timer);window.removeEventListener('city-wallet-change',refresh);};
   }, []);
   if (!enabled && !error) return null;
   return (

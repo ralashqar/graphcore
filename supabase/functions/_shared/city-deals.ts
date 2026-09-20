@@ -37,7 +37,11 @@ export const dealTermsSchema = z.object({
   redeemBy: z.string().datetime().nullable(),
   exclusive: z.boolean(),
   merchantExpiryConfirmed: z.boolean(),
+  freeConfirmed: z.boolean().optional(),
+  cardRequired: z.boolean().optional(),
+  renewalTerms: z.string().trim().max(400).optional(),
 }).strict().superRefine((t, c) => {
+  if(t.freeConfirmed && (!['free_product','trial_access'].includes(t.kind) || t.minimumSpend!==0 || (t.kind==='trial_access' && !t.renewalTerms))) c.addIssue({code:'custom',message:'Free rewards must have no minimum purchase; free trials need renewal and cancellation terms.'});
   if (Date.parse(t.endsAt) <= Date.parse(t.startsAt)) {
     c.addIssue({ code: "custom", message: "End must follow start" });
   }
