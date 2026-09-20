@@ -12,8 +12,9 @@ import {
 
 test('worker wake family normalization supports all and filters unknown values', () => {
   assert.deepEqual(normalizeWorkerWakeFamilies('visual'), ['visual'])
+  assert.deepEqual(normalizeWorkerWakeFamilies('city_setup'), ['city_setup'])
   assert.deepEqual(normalizeWorkerWakeFamilies(['output_workflow', 'bogus', 'visual', 'visual']), ['output_workflow', 'visual'])
-  assert.deepEqual(normalizeWorkerWakeFamilies(['all']), ['visual', 'output_workflow', 'generation', 'app_generation'])
+  assert.deepEqual(normalizeWorkerWakeFamilies(['all']), ['visual', 'output_workflow', 'generation', 'app_generation', 'city_setup'])
 })
 
 test('worker wake signatures verify valid HMAC requests', async () => {

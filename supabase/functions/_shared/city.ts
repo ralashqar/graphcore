@@ -1,3 +1,5 @@
+import { primarySample } from "../../../src/domain/cityCampus.ts";
+import { campusSchema } from "./city-campus-schema.ts";
 import { z } from "npm:zod@4";
 import { createAdminClient } from "./auth.ts";
 import { HttpError } from "./http.ts";
@@ -26,6 +28,7 @@ const media = z
   );
 export const profileSchema = z
   .object({
+    campus: campusSchema.nullable().optional(),
     name: z.string().trim().min(2).max(80),
     tagline: z.string().trim().max(140),
     description: z.string().trim().max(1200),
@@ -110,9 +113,11 @@ export function parseProfile(value: unknown, userId: string) {
     profile.video,
     profile.billboard,
     ...(profile.sample?.items.map((i) => i.image) || []),
+    ...(profile.campus?.exhibits.flatMap(e=>e.items.map(i=>i.image)) || []),
   ])
     if (path && !path.startsWith(`${userId}/`))
       throw new HttpError(403, "Media must belong to this account.");
+  if (profile.campus) profile.sample = primarySample(profile.campus);
   return profile;
 }
 export async function limit(db: CityDB, key: string, max = 60, seconds = 60) {
@@ -185,6 +190,10 @@ export async function signProfile(
       ),
     };
   }
+  if (copy.campus) {
+    const campus = copy.campus as import("../../../src/domain/cityCampus.ts").CityCampus;
+    copy.campus = { ...campus, exhibits: await Promise.all(campus.exhibits.map(async e => ({...e, items: await Promise.all(e.items.map(async i => ({...i, image: i.image ? (await db.storage.from("city-media").createSignedUrl(i.image,3600)).data?.signedUrl || "" : ""}))) }))) };
+  }
   return copy;
 }
 export async function listing(db: CityDB, row: Record<string, unknown>) {
@@ -227,6 +236,7 @@ export async function listings(db: CityDB, rows: any[]) {
       ...row.profile,
       offer: { ...row.profile.offer, code: "" },
     };
+    delete profile.campus;
     for (const key of ["logo", "hero", "video", "billboard"])
       profile[key] = urls.get(profile[key]) || "";
     if (profile.sample)

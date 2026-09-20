@@ -9,6 +9,7 @@ for (const name of [
   "20260920130959_synarc_city",
   "20260920145000_city_pilot_analytics",
   "20260920152544_city_discovery",
+  "20260920160701_city_campus",
 ])
   await db.exec(
     await readFile(

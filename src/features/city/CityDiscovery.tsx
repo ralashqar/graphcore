@@ -1,3 +1,4 @@
+import { enterCampus } from "./CityCampus";
 import {
   lazy,
   Suspense,
@@ -368,6 +369,7 @@ export function CityDiscovery({
           Visit website
         </a>
       </div>
+      {(demo || snapshot?.campusEnabled) && <button className="city-primary" onClick={()=>enterCampus(b.slug,demo)}>Enter business space ↗</button>}
       <button
         onClick={() => {
           const reason = window.prompt(

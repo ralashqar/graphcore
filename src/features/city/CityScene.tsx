@@ -16,6 +16,7 @@ import { Vector3, MOUSE, TOUCH } from "three";
 import { type CityProperty } from "../../domain/city";
 import { plotAxis as position, logicalAxis } from "../../domain/cityLayout";
 import { CityKit } from "./CityKit";
+let savedCityCamera: {position:Vector3;target:Vector3;zoom:number;selection:string} | null = null;
 function CameraRig({
   target,
   home,
@@ -34,7 +35,16 @@ function CameraRig({
     last = useRef(""),
     timer = useRef(0);
   const { camera, size } = useThree();
+  const restore = useRef(true);
+  const selection = useRef(target?.id || ""); selection.current = target?.id || "";
+  useEffect(()=>()=>{
+    if(controls.current) savedCityCamera={position:camera.position.clone(),target:controls.current.target.clone(),zoom:camera.zoom,selection:selection.current};
+  },[camera]);
   useEffect(() => {
+    if(restore.current && savedCityCamera && savedCityCamera.selection === (target?.id || "") && controls.current) {
+      camera.position.copy(savedCityCamera.position);camera.zoom=savedCityCamera.zoom;camera.updateProjectionMatrix();controls.current.target.copy(savedCityCamera.target);controls.current.update();restore.current=false;return;
+    }
+    restore.current=false;
     destination.current = new Vector3(
       target ? position(target.x) : 0,
       0,
@@ -55,6 +65,7 @@ function CameraRig({
         control.update();
       }
     }
+    savedCityCamera={position:camera.position.clone(),target:control.target.clone(),zoom:camera.zoom,selection:selection.current};
     timer.current += delta;
     if (timer.current > 1) {
       timer.current = 0;

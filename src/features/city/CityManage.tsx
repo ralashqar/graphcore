@@ -1,3 +1,4 @@
+import { CityCampusEditor } from "./CityCampusEditor";
 import { CitySampleEditor } from "./CitySample";
 import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
 import { useEffect, useState, type FormEvent } from "react";
@@ -394,7 +395,7 @@ export function CityManage({
               </button>
             )}
           </fieldset>
-          {snapshot?.discoveryEnabled && (
+          {snapshot?.discoveryEnabled && !profile.campus && (
             <CitySampleEditor
               value={profile.sample}
               preview={business?.preview?.sample}
@@ -639,6 +640,7 @@ export function CityManage({
           </section>
         </aside>
       </div>
+      {business && snapshot?.campusEnabled && <CityCampusEditor business={business} onRefresh={onRefresh}/>}
       {business?.published && snapshot?.discoveryEnabled && (
         <CityDiscoveryStudio businessId={business.id} />
       )}

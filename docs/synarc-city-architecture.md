@@ -27,3 +27,7 @@ Draft and approved snapshots are separate. Review uses revision fencing. Website
 See operations documentation for implemented commands, deployment and verification evidence.
 
 The city renderer now uses the [Downtown MegaKit layout and asset pipeline](synarc-city-megakit.md), with 24 m plots, four-plot blocks, connected road pieces and assembled buildings. A shared reversible presentation transform preserves existing database plot coordinates and region reads.
+
+## Expanded business campuses
+
+See [URL-to-campus implementation and rollout](synarc-city-campus.md) for multi-exhibit business spaces, URL setup, revision review, the separate pilot budget and required paired City Edge/Fly deployment. Both feature gates and the provider budget default off.

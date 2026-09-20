@@ -1,3 +1,4 @@
+import { processCitySetup } from "../../supabase/functions/_shared/city-campus-worker.ts"
 import { createAdminClient } from '../../supabase/functions/_shared/auth.ts'
 import { processFlyAppGenerationJobs } from '../../supabase/functions/_shared/app-generation-worker.ts'
 import { processFlyOutputWorkflowRuns } from '../../supabase/functions/_shared/output-workflow.ts'
@@ -12,7 +13,7 @@ import { processFlyWorldGenerationJobs } from '../../supabase/functions/_shared/
 import { renderOutputPdf } from './ebook-pdf-renderer.ts'
 import { createWorkerWakeScheduler, idleDelayForEmptyPolls } from './wake-scheduler.ts'
 
-const workerCodeVersion = '2026-09-06-director-runtime-compat-v2'
+const workerCodeVersion = '2026-09-20-city-campus-1'
 const workerId = Deno.env.get('FLY_MACHINE_ID')
   ?? Deno.env.get('GRAPHCORE_WORKER_ID')
   ?? crypto.randomUUID()
@@ -92,14 +93,24 @@ function requestShutdown(signal: string) {
   console.log(`[world-generation-worker] received ${signal}; stopping after the current job.`)
   const firstSignal = !shuttingDown
   shuttingDown = true
+  if (firstSignal) void releaseCitySetupForShutdown();
   // Hand claimed output workflow runs back to the queue immediately so the
   // replacement machine resumes them in seconds instead of waiting for the
   // stale-heartbeat reclaim. In-flight executors notice the lost lease via
   // their run-status checks and stop without writing further state.
   if (firstSignal) void releaseClaimedOutputWorkflowRunsForShutdown(signal)
-  for (const family of ['visual', 'output_workflow', 'generation', 'app_generation'] as WorkerWakeFamily[]) {
+  for (const family of ['visual', 'output_workflow', 'generation', 'app_generation', 'city_setup'] as WorkerWakeFamily[]) {
     wakeScheduler.signal([family])
   }
+}
+
+async function releaseCitySetupForShutdown() {
+ try {
+  if (Deno.env.get('CITY_SETUP_ENABLED') === 'true') {
+    const jobs = await client.from('city_setup_jobs').select('id,lease,provider_pending').eq('worker', `${workerId}:city`).eq('status','running');
+    for (const job of jobs.data || []) await client.rpc('city_setup_checkpoint', {p_id:job.id,p_lease:job.lease,p_action:'finish',p_data:{status:job.provider_pending?'uncertain':'queued',error:'Worker shutting down; saved stages retained'}});
+  }
+ } catch(error) { console.warn('[city-setup] shutdown release failed',error); }
 }
 
 async function releaseClaimedOutputWorkflowRunsForShutdown(signal: string) {
@@ -476,9 +487,21 @@ async function runOutputWorkflowWorkerLoop(laneIndex: number) {
   }
 }
 
+async function runCitySetupLoop() {
+ const cityWorkerId = `${workerId}:city`;
+ while (!shuttingDown) {
+  try {
+   await waitForDatabaseCircuit('city_setup');
+   if (await processCitySetup(client, cityWorkerId)) continue;
+   await wakeScheduler.waitForWakeOrTimeout('city_setup', 15000, Date.now());
+  } catch (error) { await handleWorkerLoopError('city_setup', error); }
+ }
+}
+
 await Promise.all([
   ...Array.from({ length: visualWorkerConcurrency }, (_, index) => runVisualWorkerLoop(index)),
   runGenerationWorkerLoop(),
+  runCitySetupLoop(),
   runAppGenerationWorkerLoop(),
   ...Array.from({ length: outputWorkflowWorkerConcurrency }, (_, index) => runOutputWorkflowWorkerLoop(index)),
   runMaintenanceLoop(),

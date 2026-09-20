@@ -1,3 +1,4 @@
+import CityCampus, { enterCampus } from "./CityCampus";
 import { CityDiscovery } from "./CityDiscovery";
 import { CitySample } from "./CitySample";
 import {
@@ -136,7 +137,7 @@ export function CityApp() {
         if (property) setSelected(property);
         else {
           setSelected(null);
-          if (!next.discoveryEnabled)
+          if (!next.discoveryEnabled && !next.campusEnabled && !demo.current)
             setNotice(
               "This property is unavailable or has not been published.",
             );
@@ -349,6 +350,8 @@ export function CityApp() {
       setBusy(false);
     }
   }
+  const campusRoute = /^\/city\/business\/[^/]+\/space(?:\/|$)/.test(path);
+  const campusEnabled = demo.current || !!snapshot?.campusEnabled;
   const discoveryEnabled = demo.current || !!snapshot?.discoveryEnabled;
   const discoveryRoute =
     path === "/city/discover" ||
@@ -465,7 +468,7 @@ export function CityApp() {
           </button>
         </div>
       )}
-      {discoveryRoute ? (
+      {campusRoute ? (campusEnabled ? <Suspense fallback={<main className="city-page">Opening business space…</main>}><CityCampus path={path} demo={demo.current} userId={session?.user.id} onAuth={()=>setAuth(true)}/></Suspense> : <main className="city-page">Business spaces are not open yet.</main>) : discoveryRoute ? (
         discoveryEnabled ? (
           <CityDiscovery
             path={path}
@@ -728,6 +731,7 @@ export function CityApp() {
                   </div>
                 </div>
                 <p>{selected.profile.description}</p>
+                {campusEnabled && <button className="city-primary" onClick={()=>enterCampus(selected.slug,demo.current)}>Enter business space ↗</button>}
                 {discoveryEnabled && (
                   <button
                     aria-pressed={followingIds.includes(selected.id)}

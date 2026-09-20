@@ -89,3 +89,7 @@ Hosted Supabase migration/auth/storage/realtime acceptance, multi-session concur
 ## Branding and pilot extension
 
 Apply `20260920145000_city_pilot_analytics.sql` after the base City migration, deploy the four City functions, and install the updated scheduler before enabling the new editor. Optional `CITY_PILOT_USER_IDS` restricts new business registrations to exact Auth UUIDs. The [pilot runbook](synarc-city-pilot.md) covers billboard editing, aggregate measurement, sandbox readiness, test payment/refund acceptance and remaining hosted gates. Neither existing connected Supabase project has been selected as staging.
+
+## Expanded business campuses
+
+See [URL-to-campus implementation and rollout](synarc-city-campus.md) for multi-exhibit business spaces, URL setup, revision review, the separate pilot budget and required paired City Edge/Fly deployment. Both feature gates and the provider budget default off.

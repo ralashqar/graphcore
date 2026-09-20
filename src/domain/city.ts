@@ -11,6 +11,7 @@ export const CITY_TIERS = [
 ] as const;
 
 export type CityProfile = {
+  campus?: import("./cityCampus.ts").CityCampus | null;
   name: string;
   tagline: string;
   description: string;
@@ -21,7 +22,7 @@ export type CityProfile = {
   hero: string;
   billboard?: string;
   billboardCrop?: { x: number; y: number; zoom: number };
-  sample?: import('./cityDiscovery').CitySample | null;
+  sample?: import('./cityDiscovery.ts').CitySample | null;
   video: string;
   offer: {
     title: string;
@@ -61,6 +62,8 @@ export type CitySnapshot = {
   purchasesEnabled: boolean;
   onboardingEnabled: boolean;
   discoveryEnabled?: boolean;
+  campusEnabled?: boolean;
+  setupEnabled?: boolean;
   termsUrl?: string | null;
   demo?: boolean;
 };

@@ -1,3 +1,4 @@
+import { CampusPreviewDetails } from "./CityCampus";
 import { CityDiscoveryStudio } from "./CityDiscoveryStudio";
 import { CitySample } from "./CitySample";
 import { useEffect, useState } from "react";
@@ -195,6 +196,7 @@ export function CityAdmin({
                 alt="Submitted billboard image"
               />
             )}
+            {b.preview?.campus && <CampusPreviewDetails profile={b.preview} label={`Review submitted campus · revision ${b.draft_version}`}/>}
             {b.preview?.sample && <CitySample sample={b.preview.sample} />}
             {b.preview?.video && (
               <video

@@ -33,3 +33,7 @@ Validate onboarding completion, checkout conversion, repeat placement purchases,
 ## Creator discovery release
 
 The next implemented direction separates free creator-tool discovery from paid geography. See [creator discovery implementation and rollout](synarc-city-discovery.md) for samples, trails, launch reviews, following, verification and remaining pilot checks.
+
+## Expanded business campuses
+
+See [URL-to-campus implementation and rollout](synarc-city-campus.md) for multi-exhibit business spaces, URL setup, revision review, the separate pilot budget and required paired City Edge/Fly deployment. Both feature gates and the provider budget default off.

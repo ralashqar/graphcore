@@ -4,6 +4,12 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City URL-to-campus setup (September 2026)
+
+City profiles now support versioned multi-exhibit campuses, published atomically with the existing profile review. A dedicated `city_setup` Fly job family performs bounded protected website extraction, typed gateway planning, owned media import, deterministic assembly and candidate validation. Saved stages/responses, revision fencing, global one-job leasing, heartbeats and uncertainty reconciliation protect retries and edits. `CITY_CAMPUS_ENABLED` and `CITY_SETUP_ENABLED` default off; `CITY_SETUP_MODEL` and verified input/output USD-per-million pricing are required. A separate disabled $20 provider budget and $1 per-request ceiling cover one setup and two refinements per business; no app-credit charges, Runpod requests or live visitor inference are introduced. Migration `20260920160701_city_campus.sql` adds RLS-protected revisions/jobs/budget/metrics. Deploy City API/command and the Fly world worker together. Local tests pass; staging/provider acceptance and the existing broad-worker Deno limitations are documented in [docs/synarc-city-campus.md](docs/synarc-city-campus.md). No hosted activation was performed.
+
+
+
 ### City creator discovery (September 2026)
 
 The dedicated City API and command boundary add approved free storefronts, constrained image/text samples, curated trails, private progress/follows/saved launches, revision-reviewed launch windows and separate discovery metrics. `CITY_DISCOVERY_ENABLED` defaults off. The additive `20260920152544_city_discovery.sql` migration retains paid allocation and billing behavior while allowing approved free business claims/bookmarks. New RLS tables deny direct client access; service-only mutations enforce actor, owner/operator and revision checks. Deploy the City Edge entries with their shared helper; world/game Fly workers do not execute these modules. Local verification is documented separately from pending hosted staging, Stripe and real pilot acceptance in [docs/synarc-city-discovery.md](docs/synarc-city-discovery.md). No AI inference, emails or paid production actions are introduced.

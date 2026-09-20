@@ -1,4 +1,4 @@
-import type { CityProfile, CityProperty } from "./city";
+import type { CityProfile, CityProperty } from "./city.ts";
 export type CitySample = {
   kind: "comparison" | "gallery" | "guided";
   title: string;

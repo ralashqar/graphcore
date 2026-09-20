@@ -7,7 +7,7 @@
     "test:city": "node --experimental-strip-types --test src/domain/city.test.ts && node scripts/city-db-test.mjs && npx deno test --allow-env --config supabase/functions/city-command/deno.json supabase/functions/_shared/city.test.ts",
     "test:city:browser": "node scripts/city-browser.mjs && node scripts/city-ui-flow.mjs",
     "test:city:sharing": "node --experimental-strip-types --test server/city-sharing.test.ts",
-    "check:city:server": "tsc -p tsconfig.city-server.json --noEmit && npx deno check --config supabase/functions/city-command/deno.json supabase/functions/city-api/index.ts supabase/functions/city-command/index.ts supabase/functions/city-stripe-webhook/index.ts supabase/functions/city-reconcile/index.ts",
+    "check:city:server": "tsc -p tsconfig.city-server.json --noEmit && npx deno check --config supabase/functions/city-command/deno.json supabase/functions/city-api/index.ts supabase/functions/city-command/index.ts supabase/functions/city-stripe-webhook/index.ts supabase/functions/city-reconcile/index.ts supabase/functions/_shared/city-campus-worker.ts",
     "test:game-mechanics": "node --experimental-strip-types --test src/domain/game/v3/mechanics.test.ts src/domain/game/v3/actionMechanics.test.ts src/domain/game/v3/motionPresentation.test.ts src/domain/game/v3/performance.test.ts",
     "test:game-mechanics-browser": "node --experimental-strip-types scripts/game-mechanics-browser.mjs",
     "test:game-mechanics-db": "node scripts/verify-game-mechanics-db.mjs",
@@ -69,7 +69,9 @@
     "check:city:staging": "node scripts/city-staging-readiness.mjs",
     "test:city:staging-payments": "node scripts/city-staging-payments.mjs",
     "test:city:discovery": "node --experimental-strip-types --test src/domain/cityDiscovery.test.ts && node scripts/city-discovery-db-test.mjs",
-    "test:city:discovery:browser": "node scripts/city-discovery-browser.mjs"
+    "test:city:discovery:browser": "node scripts/city-discovery-browser.mjs",
+    "test:city:campus": "node scripts/city-campus-db-test.mjs && npx deno test --allow-env --config supabase/functions/city-command/deno.json supabase/functions/_shared/city-campus.test.ts",
+    "test:city:campus:browser": "node scripts/city-campus-browser.mjs && node scripts/city-campus-ui-flow.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",

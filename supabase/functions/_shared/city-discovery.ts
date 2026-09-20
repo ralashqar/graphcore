@@ -180,7 +180,8 @@ export async function discovery(
       : [];
     const storefronts = await Promise.all(
       businesses.map(async (b) => {
-        const profile = await signProfile(db, b.published);
+        const lightweight = { ...b.published }; delete lightweight.campus;
+        const profile = await signProfile(db, lightweight);
         profile.offer = { ...(profile.offer as object), code: "" };
         return {
           id: b.id,

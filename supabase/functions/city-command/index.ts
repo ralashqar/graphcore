@@ -1,3 +1,4 @@
+import { campus } from "../_shared/city-campus.ts";
 import { discovery } from "../_shared/city-discovery.ts";
 import { z } from "npm:zod@4";
 import { requireUserClient } from "../_shared/auth.ts";
@@ -66,6 +67,7 @@ Deno.serve(async (request) => {
     const data = JSON.parse(raw),
       action = z.string().parse(data.action),
       db = cityAdmin();
+    if (action.startsWith("campus_")) return json(await campus(request,data,true));
     if (action.startsWith("discovery_"))
       return json(await discovery(request, data, true));
     if (action === "track") {
