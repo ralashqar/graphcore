@@ -25,3 +25,5 @@ Draft and approved snapshots are separate. Review uses revision fencing. Website
 - https://docs.stripe.com/webhooks
 
 See operations documentation for implemented commands, deployment and verification evidence.
+
+The city renderer now uses the [Downtown MegaKit layout and asset pipeline](synarc-city-megakit.md), with 24 m plots, four-plot blocks, connected road pieces and assembled buildings. A shared reversible presentation transform preserves existing database plot coordinates and region reads.

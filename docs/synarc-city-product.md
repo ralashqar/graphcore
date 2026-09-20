@@ -18,7 +18,7 @@ One person may be a consumer and business owner. Launch exposes one owner and on
 
 ## Visual direction
 
-Warm pale architectural model, forest-green controls, off-white surfaces, readable branded signs, bounded tower heights, landscaped plaza. Desktop uses a right-side property drawer; mobile uses a bottom panel. The HTML directory is accessible and survives WebGL failure. Reduced motion snaps camera and rank movements.
+Refined textured downtown using the Quaternius MegaKit: brick and metal architecture, forest-green controls, off-white surfaces, branded signs, bounded tower heights and a landscaped pedestrian plaza. Four 24 m plots share each street block; buildings retain at least 4 m setback. Desktop uses a right-side property drawer; mobile uses a bottom panel. The HTML directory is accessible and survives WebGL failure. Reduced motion snaps camera and rank movements.
 
 ## MVP and later
 

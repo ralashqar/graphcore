@@ -1,0 +1,91 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  plotAxis,
+  logicalAxis,
+  frontage,
+  buildingVariant,
+  roadNetwork,
+  BUILDING_RECIPES,
+} from "./cityLayout.ts";
+
+test("logical positions round-trip across blocks and expansion rings", () => {
+  for (let coordinate = -100; coordinate <= 100; coordinate++)
+    assert.equal(logicalAxis(plotAxis(coordinate)), coordinate);
+  assert.equal(plotAxis(2) - plotAxis(1), 24);
+  assert.equal(plotAxis(3) - plotAxis(2), 42);
+  assert.equal(plotAxis(1) - plotAxis(-1), 42);
+  for (const recipe of BUILDING_RECIPES)
+    assert.ok(recipe.width <= 16 && recipe.depth <= 16);
+});
+test("all plots face an adjacent street and variants depend only on identity", () => {
+  for (let x = -20; x <= 20; x++)
+    if (x) {
+      const street = plotAxis(x) + Math.sin(frontage(x)) * 21;
+      assert.ok(Math.abs(street / 66 - Math.round(street / 66)) < 1e-9);
+    }
+  assert.equal(
+    buildingVariant("fixed-business"),
+    buildingVariant("fixed-business"),
+  );
+  assert.deepEqual(
+    new Set(
+      Array.from({ length: 100 }, (_, i) => buildingVariant(`business-${i}`)),
+    ),
+    new Set([0, 1]),
+  );
+});
+test("physical road sockets align exactly, including curves, tees and plaza", () => {
+  const network = roadNetwork(400);
+  const sockets: Record<string, number[][]> = {
+    Street_4Lane: [
+      [-3, 0],
+      [3, 0],
+    ],
+    Street_4WayIntersection: [
+      [-9, 0],
+      [9, 0],
+      [0, -9],
+      [0, 9],
+    ],
+    Street_TIntersection: [
+      [-9, 0],
+      [9, 0],
+      [0, -9],
+    ],
+    Street_Curve_4LaneShort: [
+      [0, 9],
+      [9, 0],
+    ],
+  };
+  const endpoints = new Map<string, number>();
+  function mark(x: number, z: number) {
+    const key = `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+    endpoints.set(key, (endpoints.get(key) || 0) + 1);
+  }
+  for (const p of network.placements)
+    for (const [x, z] of sockets[p.asset])
+      mark(
+        p.x + Math.cos(p.rotation) * x + Math.sin(p.rotation) * z,
+        p.z - Math.sin(p.rotation) * x + Math.cos(p.rotation) * z,
+      );
+  for (const [x, z] of [
+    [-9, 0],
+    [9, 0],
+    [0, -9],
+    [0, 9],
+  ])
+    mark(x, z);
+  for (const [key, count] of endpoints)
+    assert.equal(count, 2, `Open or overlapping connection ${key}`);
+  assert.equal(network.nodes.filter((n) => n.kind === "curve").length, 4);
+  assert.equal(network.nodes.filter((n) => n.kind === "plaza").length, 1);
+});
+test("expansion preserves interior road positions and only replaces the old perimeter junctions", () => {
+  const old = roadNetwork(400),
+    expanded = roadNetwork(484),
+    keys = new Set(expanded.placements.map((p) => p.key));
+  for (const p of old.placements)
+    if (p.asset === "Street_4Lane" || p.asset === "Street_4WayIntersection")
+      assert.ok(keys.has(p.key));
+});

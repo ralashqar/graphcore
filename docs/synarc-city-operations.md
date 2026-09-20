@@ -59,7 +59,7 @@ Optional Vercel sharing adapter: use `vercel.city.json` as the deployment config
 - `npm run test:city:sharing`: run after a build; validates escaping and real PNG rasterisation.
 - `npm run test:city:browser`: run against a dev or preview server; set `CITY_TEST_ORIGIN` to its origin. Includes public navigation and a mocked business API flow. It does not certify hosted authentication or real Stripe Checkout.
 - `CITY_NETWORK_SMOKE=true` enables the optional Deno public HTTPS import probe with `--allow-net`.
-- `blender --background --python scripts/build-city-kit.py` regenerates `assets/city/city-kit.blend` and `public/city/city-kit.glb` without external assets or inference.
+- `npm run build:city:kit` regenerates the Downtown MegaKit assemblies from vendored CC0 source dependencies. See the [asset pipeline](synarc-city-megakit.md) for Blender/Python requirements and validation commands. The old procedural kit is no longer loaded.
 - `/city?demo=1` is explicitly fictional. `/city?demo=1&stress=1` loads 2,000 demonstration businesses for performance inspection.
 
 ## Data operations
@@ -70,7 +70,7 @@ Inspect `city_orders.last_error`, old `updated_at`, `city_payment_events.status`
 
 Public popularity is an approximate, rate-limited signal: anonymous visits are deduplicated by daily IP pseudonym, so shared networks can undercount. It is not a verified-identity, purchase-attribution or fraud-proof metric. Browser views require two seconds with the property open. Authenticated owner traffic is excluded from visit/click counts.
 
-## Local acceptance evidence — 20 September 2026
+## Initial marketplace acceptance — 20 September 2026
 
 `npx tsc --noEmit`, the Node/Deno server checks and `npm run build` passed. The dev server started and browser checks reported no runtime errors. The full repository build retains its existing missing landing-atlas reference and large-chunk warnings.
 
@@ -79,5 +79,7 @@ Domain rules, the actual migration in embedded PostgreSQL (PGlite), RLS/grants, 
 Browser checks cover desktop/mobile layouts, search, deep links, selection, directory pagination, saves/auth entry, PNG download and WebGL failure recovery without console errors. A separate fixture-backed flow covers business import, creation, verification, review and checkout handoff. This mocks authentication and business APIs; it is not evidence of a hosted payment.
 
 The 2,000-property desktop scene measured 60.17 FPS over 2.51 seconds on Intel UHD Direct3D11 in headless Chromium. This is a short local rendering sample, not sustained load or physical mobile certification. Software rendering was materially slower; the renderer lowers quality for detected software devices, and a searchable directory is available.
+
+That rendering measurement used the original procedural kit. Updated Downtown MegaKit measurements and asset checks are recorded in the [MegaKit documentation](synarc-city-megakit.md).
 
 Hosted Supabase migration/auth/storage/realtime acceptance, multi-session concurrency, real Stripe test payments/refunds/disputes, live merchant configuration and physical mobile testing remain rollout gates. Nothing has been deployed or charged by this implementation. The Blender kit is generated locally; the bundled Manrope font includes its OFL licence.

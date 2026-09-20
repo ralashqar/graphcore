@@ -30,6 +30,7 @@ dist-ssr
 *.sw?
 .playwright-cli/
 output/playwright/
+output/city-kit/
 public/city/*.blend1
 assets/city/*.blend1
 

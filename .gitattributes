@@ -1,0 +1,2 @@
+# Keep vendored source bytes stable for provenance hashes on every checkout.
+assets/city/megakit/source/* -text

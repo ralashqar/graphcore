@@ -161,6 +161,9 @@ try {
     errors,
     performance,
     renderer,
+    renderStats: await page
+      .locator("canvas")
+      .getAttribute("data-city-render-stats"),
     note: "Headless desktop measurement; not a physical mobile-device certification.",
   };
   await writeFile(

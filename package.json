@@ -62,7 +62,9 @@
     "test:game-unified-db": "node scripts/verify-game-db.mjs --existing --unified",
     "test:game-unified-db:existing": "node scripts/verify-game-db.mjs --existing --unified-existing",
     "game:migrate:unified": "node scripts/apply-game-migration.mjs --unified",
-    "test:game-unified-live": "node scripts/game-unified-live.mjs"
+    "test:game-unified-live": "node scripts/game-unified-live.mjs",
+    "test:city:kit": "node --experimental-strip-types --test src/domain/cityLayout.test.ts && node scripts/city-kit-test.mjs",
+    "build:city:kit": "node scripts/build-city-megakit.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.25.0",
@@ -90,11 +92,15 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
     "gltf-validator": "2.0.0-dev.3.10",
+    "meshoptimizer": "^1.2.0",
     "playwright": "1.63.0",
     "typescript": "~6.0.2",
     "vite": "^6.4.2"
