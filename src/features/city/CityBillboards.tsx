@@ -12,9 +12,7 @@ import {
 import type { CityProperty } from "../../domain/city";
 import { billboardImageRect } from "../../domain/cityBranding";
 import {
-  BUILDING_RECIPES,
   billboardEnvelope,
-  frontage,
   plotAxis,
 } from "../../domain/cityLayout";
 import { Batch, type Instance } from "./CityInstances";
@@ -213,56 +211,28 @@ export function CityBillboards({
       rects: number[] = [];
     const slots = new Map(featured.map((p, i) => [p.id, i]));
     for (const p of properties) {
-      const recipe = BUILDING_RECIPES[p.tier],
-        rotation = frontage(p.x),
-        sin = Math.sin(rotation),
-        cos = Math.cos(rotation);
-      const { width, height, front, depth } = billboardEnvelope(p.tier);
-      // Offset to the actual entrance bay (+1 local X); both frontage orientations match its path.
+      const { width, height, front, bottom, rotation } = billboardEnvelope(p.tier, p.id);
+      const sin = Math.sin(rotation), cos = Math.cos(rotation);
       const locate = (localX: number, localZ: number) => ({
         x: plotAxis(p.x) + cos * localX + sin * localZ,
         z: plotAxis(p.z) - sin * localX + cos * localZ,
       });
-      const base = { key: p.id, ...locate(1, front), rotation, property: p };
-      frames.push({
-        ...base,
-        y: 3.3 + height / 2,
-        scale: [width + 0.22, height + 0.22, 0.24],
-        color: p.profile.color,
+      const base = { key: p.id, ...locate(0, front), rotation, property: p };
+      frames.push({ ...base, y: bottom + height / 2,
+        scale: [width + 0.22, height + 0.22, 0.24], color: p.profile.color });
+      for (const side of [-1, 1]) posts.push({
+        ...base, ...locate(side * (width / 2 - 0.3), front - 0.3),
+        key: `${p.id}:${side}`, y: bottom - 0.2, scale: [0.18, 0.6, 0.18],
       });
-      for (const side of [-1, 1])
-        posts.push({
-          ...base,
-          ...locate(1 + side * (width / 2 - 0.12), front - 0.15),
-          key: `${p.id}:${side}`,
-          y: 1.6,
-          scale: [0.14, 3.2, 0.14],
-        });
-      roofs.push({
-        ...base,
-        ...locate(1, recipe.depth / 2 + depth / 2),
-        y: 3.15,
-        scale: [width + 0.22, 0.2, depth + 0.3],
-      });
+      roofs.push({ ...base, ...locate(0, front - 0.2), y: bottom - 0.35,
+        scale: [width + 0.22, 0.2, 0.8] });
       const slot = slots.get(p.id);
       if (slot === undefined) continue;
-      for (const side of [-1, 1]) {
-        faces.push({
-          ...base,
-          ...locate(1, front + side * 0.132),
-          key: `${p.id}:${side}`,
-          y: 3.3 + height / 2,
-          rotation: rotation + (side < 0 ? Math.PI : 0),
-          scale: [width, height, 1],
-        });
-        // Half-pixel gutters keep adjacent signs from bleeding through mip levels.
-        rects.push(
-          ((slot % COLS) + 0.004) / COLS,
-          1 - (Math.floor(slot / COLS) + 0.992) / ROWS,
-          0.992 / COLS,
-          0.984 / ROWS,
-        );
-      }
+      // One outward-facing face only: no advertising on the two rear tile edges.
+      faces.push({ ...base, ...locate(0, front + 0.132),
+        y: bottom + height / 2, scale: [width, height, 1] });
+      rects.push(((slot % COLS) + 0.004) / COLS,
+        1 - (Math.floor(slot / COLS) + 0.992) / ROWS, 0.992 / COLS, 0.984 / ROWS);
     }
     return { frames, posts, roofs, faces, rects };
   }, [properties, featured]);

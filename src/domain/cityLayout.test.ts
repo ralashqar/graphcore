@@ -8,21 +8,26 @@ import {
   roadNetwork,
   BUILDING_RECIPES,
   billboardEnvelope,
+  buildingMassing,
 } from "./cityLayout.ts";
 
-test("billboard canopy stays inside the setback envelope and clears the entrance path", () => {
+test("hero signs span connected roofs on camera-facing edges within plot setbacks", () => {
   for (let tier = 0; tier < BUILDING_RECIPES.length; tier++) {
-    const sign = billboardEnvelope(tier);
-    assert.ok(sign.front + 0.15 <= 8, "Canopy encroaches into the 4m setback");
-    assert.ok(
-      1 + (sign.width + 0.22) / 2 <= 8,
-      "Sign exceeds plot frontage envelope",
-    );
-    assert.ok(
-      sign.width / 2 - 0.12 - 0.07 > 1,
-      "Support obstructs the 2m entrance path",
-    );
-    assert.ok(sign.depth > 0 && sign.height > 0);
+    for (const id of ["business-1", "business-2"]) {
+      const sign = billboardEnvelope(tier, id), layout = buildingMassing(tier, id);
+      assert.ok(sign.width >= 11.6);
+      assert.ok(sign.width + 0.22 <= layout.width);
+      assert.ok(sign.front + 0.15 <= 8);
+      assert.ok(sign.rotation === 0 || sign.rotation === Math.PI / 2);
+      assert.ok(sign.bottom > layout.frontageHeight);
+      for (const w of layout.wings) {
+        assert.ok(Math.abs(w.x) + w.width / 2 <= 8);
+        assert.ok(Math.abs(w.z) + w.depth / 2 <= 8);
+      }
+      const [a, b] = layout.wings;
+      assert.ok(Math.abs(a.x-b.x) <= (a.width+b.width)/2);
+      assert.ok(Math.abs(a.z-b.z) <= (a.depth+b.depth)/2);
+    }
   }
 });
 

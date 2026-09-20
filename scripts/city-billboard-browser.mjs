@@ -24,6 +24,8 @@ async function ready() {
     await page.locator("canvas").getAttribute("data-city-billboards"),
   );
 }
+// Demo geometry tests are isolated from hosted API availability.
+await page.route("**/functions/v1/city-*", route => route.fulfill({ json: { error: "Demo fixture: backend unavailable" } }));
 try {
   await page.goto(`${origin}/city?demo=1`);
   const loaded = await ready();
@@ -38,7 +40,7 @@ try {
   await page.waitForTimeout(1600);
   await page.screenshot({ path: "output/playwright/city-billboards.png" });
   // Click the visible Fieldwork display itself, not its floating label.
-  await page.mouse.click(782, 372);
+  await page.mouse.click(1210, 285);
   await page
     .getByRole("complementary", { name: "Fieldwork property" })
     .waitFor();

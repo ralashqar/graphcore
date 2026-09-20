@@ -1,6 +1,6 @@
 import { useMarketMotion } from "./CityMarketMotion";
 import { marketMotion } from "../../domain/cityMarket";
-import { plotAxis, frontage } from "../../domain/cityLayout";
+import { plotAxis } from "../../domain/cityLayout";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
@@ -91,20 +91,14 @@ export function Batch({
           const z =
             plotAxis(from.z) +
             (plotAxis(to.z) - plotAxis(from.z)) * motion.turn;
-          const rotation =
-            (frontage(from.x) - frontage(to.x)) * (1 - motion.turn);
+          // Buildings and signs retain their camera-facing orientation during displacement.
           const dx = item.x - plotAxis(to.x),
             dz = item.z - plotAxis(to.z);
           dummy.position.set(
-            x +
-              (dx * Math.cos(rotation) + dz * Math.sin(rotation)) *
-                motion.scale,
+            x + dx * motion.scale,
             (item.y || 0) * motion.scale + motion.lift,
-            z +
-              (-dx * Math.sin(rotation) + dz * Math.cos(rotation)) *
-                motion.scale,
+            z + dz * motion.scale,
           );
-          dummy.rotation.y += rotation;
           dummy.scale.multiplyScalar(motion.scale);
           moving = true;
         }

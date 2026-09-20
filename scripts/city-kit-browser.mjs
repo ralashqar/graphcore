@@ -13,6 +13,8 @@ page.on("pageerror", (e) => errors.push(e.message));
 page.on("console", (m) => {
   if (m.type() === "error") errors.push(m.text());
 });
+// Demo geometry tests are isolated from hosted API availability.
+await page.route("**/functions/v1/city-*", route => route.fulfill({ json: { error: "Demo fixture: backend unavailable" } }));
 try {
   await page.goto(`${origin}/city?demo=1`);
   await page

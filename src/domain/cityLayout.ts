@@ -40,11 +40,26 @@ export function buildingVariant(id: string): number {
   for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   return (hash >>> 0) % 2;
 }
-export function billboardEnvelope(tier: number) {
+/** Joined wings share a roof frontage; both orientations face the default +X/+Z camera. */
+export function buildingMassing(tier: number, id: string) {
   const recipe = BUILDING_RECIPES[tier];
-  const width = Math.min(6, recipe.width - 0.6);
-  const front = Math.min(7.7, recipe.depth / 2 + 1.8);
-  return { width, height: width / 2, front, depth: front - recipe.depth / 2 };
+  const variant = buildingVariant(id);
+  const width = tier < 2 ? 12 : 16;
+  const height = recipe.floors * 3;
+  const frontageHeight = height * (tier >= 3 ? 0.65 : 1);
+  const wings = [
+    { x: 0, z: 4.5, width, depth: 6, height: frontageHeight },
+    { x: width / 2 - 3, z: -3, width: 6, depth: 9, height },
+  ];
+  // Transpose, rather than rotate, so neither layout puts its sign on a rear edge.
+  return { wings: wings.map(w => variant ? { ...w, x: w.z, z: w.x, width: w.depth, depth: w.width } : w),
+    width, frontageHeight, rotation: variant ? Math.PI / 2 : 0 };
+}
+export function billboardEnvelope(tier: number, id = "") {
+  const layout = buildingMassing(tier, id);
+  const width = layout.width - 0.4;
+  return { width, height: width / 2, front: 7.65, depth: 0.3,
+    bottom: layout.frontageHeight + 0.35, rotation: layout.rotation };
 }
 /** Local +Z façade faces the nearer east/west street. Stable within its plot. */
 export function frontage(x: number): number {

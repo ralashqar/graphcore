@@ -17,7 +17,8 @@ import type { CityProperty } from "../../domain/city";
 import {
   BUILDING_RECIPES,
   buildingVariant,
-  frontage,
+  buildingMassing,
+  billboardEnvelope,
   plotAxis,
   roadNetwork,
 } from "../../domain/cityLayout";
@@ -181,16 +182,16 @@ export function CityKit({
         near ? "near" : "far"
       }`;
       const list = groups.get(asset) || [];
-      list.push({
-        key: p.id,
-        x: plotAxis(p.x),
-        z: plotAxis(p.z),
-        rotation: frontage(p.x),
+      const recipe = BUILDING_RECIPES[p.tier];
+      buildingMassing(p.tier, p.id).wings.forEach((wing, index) => list.push({
+        key: `${p.id}:wing:${index}`,
+        x: plotAxis(p.x) + wing.x,
+        z: plotAxis(p.z) + wing.z,
+        scale: [wing.width / recipe.width, wing.height / (recipe.floors * 3), wing.depth / recipe.depth],
         property: p,
         color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id
-          ? "#767d76"
-          : "#ffffff",
-      });
+          ? "#767d76" : "#ffffff",
+      }));
       groups.set(asset, list);
     }
     return groups;
@@ -199,19 +200,11 @@ export function CityKit({
     const paths: Instance[] = [],
       planters: Instance[] = [];
     for (const p of properties) {
-      const recipe = BUILDING_RECIPES[p.tier],
-        rotation = frontage(p.x),
-        sign = Math.sin(rotation),
-        x = plotAxis(p.x),
-        z = plotAxis(p.z);
-      const length = 12 - recipe.depth / 2;
-      paths.push({
-        key: p.id,
-        x: x + sign * (recipe.depth / 2 + length / 2),
-        y: 0.025,
-        z: z - sign,
-        scale: [length, 0.05, 2],
-      });
+      const variant = buildingVariant(p.id),
+        x = plotAxis(p.x), z = plotAxis(p.z), sign = variant ? 1 : -1;
+      // A two-metre walk through the open courtyard, outside both joined wings.
+      paths.push({ key: p.id, x: x + (variant ? -3 : -7.5), y: 0.025,
+        z: z + (variant ? -7.5 : -3), scale: variant ? [2, 0.05, 9] : [9, 0.05, 2] });
       if (Math.abs(p.x - center.x) <= 5 && Math.abs(p.z - center.z) <= 5) {
         planters.push({ key: p.id, x: x + sign * 9.5, z: z + 7 });
       }
@@ -319,7 +312,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              BUILDING_RECIPES[p.tier].floors * 3 + 3,
+              Math.max(BUILDING_RECIPES[p.tier].floors * 3, billboardEnvelope(p.tier, p.id).bottom + billboardEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center

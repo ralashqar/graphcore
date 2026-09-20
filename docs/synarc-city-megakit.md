@@ -70,3 +70,12 @@ Original fictional logo/promotion SVG fixtures live in `public/city/demo-signs`,
 `node scripts/city-billboard-browser.mjs` checks loaded artwork, the 32-slot bound, a real 3D sign click, an undecodable-image fallback and a mobile viewport. The local test loaded 11 unique images; the failure fixture recovered with ten decoded images and one failed image, with no browser errors. Layout tests verify display bounds and unobstructed two-metre entrance paths. Screenshots and results are stored in `output/playwright/city-billboards*` and `city-billboard-results.json`.
 
 Verification: TypeScript and production build passed. Public desktop/mobile browser checks, mocked business onboarding through checkout, and the 2,000-property scene passed with no browser errors. The headless Intel UHD / D3D11 benchmark measured 60.1 fps (91 draw calls, 10 textures); physical mobile performance remains unverified. Billboard loading and broken-image fallback also passed against the production preview.
+
+
+## Hero roof signage and connected courtyards (September 2026)
+
+City properties now reuse the exported MegaKit assemblies as two joined wings, with a lower frontage and taller return on higher tiers. Stable business identity selects mirrored L layouts and the existing brick/metal style. This replaces the standalone square silhouette without regenerating or uploading assets. The wings fit within the existing four-metre plot setback; a courtyard path stays outside both wings.
+
+One single-sided, 2:1 hero sign spans almost the entire frontage roof: 11.6 metres on the two smallest tiers and 15.6 metres on higher tiers (previously capped at six). Its face always points toward +X or +Z, the two lower edges in the fixed isometric camera. It never rotates toward a rear edge on relocation. Short rooftop supports replace the old ground-level entrance canopy. The existing image/logo atlas, selection, fallback and reduced-motion behavior remain in use.
+
+Geometry checks cover roof width, plot bounds, connected wings and the allowed sign orientations. Browser fixtures isolate hosted availability and exercise loaded test images/logos, failed-image fallback, clicking the sign, pan/zoom, central reset, mobile viewport and market displacement. No backend migration, flag activation, provider spending or deployment is required. Physical mobile performance remains a separate rollout check; two joined source assemblies add triangles even though rendering stays instanced.
