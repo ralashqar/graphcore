@@ -5,7 +5,7 @@ import { Group,PerspectiveCamera as Camera,Vector3 } from "three";
 import { driveStep,type DriveInput } from "../../domain/cityDriving";
 import { useCityMapLayout } from "./CityMapLayout";
 const empty=():DriveInput=>({forward:false,reverse:false,left:false,right:false,brake:false});
-export function CityDriving({capacity,onRegion,onExit,reduced}:{capacity:number;onRegion:(x:number,z:number)=>void;onExit:()=>void;reduced:boolean}) {
+export function CityDriving({capacity,onRegion,onExit}:{capacity:number;onRegion:(x:number,z:number)=>void;onExit:()=>void;reduced:boolean}) {
  const camera=useRef<Camera>(null),car=useRef<Group>(null),input=useRef(empty());
  const state=useRef({x:0,z:33,heading:0,speed:0}),look=useRef({yaw:0,pitch:0}),timer=useRef(0);
  const {gl}=useThree(),{logicalAxis,roadCapacityMultiplier}=useCityMapLayout();
@@ -50,10 +50,8 @@ export function CityDriving({capacity,onRegion,onExit,reduced}:{capacity:number;
  });
  const hold=(key:keyof DriveInput)=>({onPointerDown:(e:React.PointerEvent<HTMLButtonElement>)=>{e.currentTarget.setPointerCapture(e.pointerId);input.current[key]=true;},onPointerUp:()=>{input.current[key]=false;},onPointerCancel:()=>{input.current[key]=false;},onLostPointerCapture:()=>{input.current[key]=false;}});
  const hud = <Html position={[0,0,-1]} fullscreen style={{pointerEvents:"none"}}><div className="city-drive-controls" role="region" aria-label="Driving controls">
-   <strong>Drive the city</strong><span>WASD / arrows · Space brake · Right-drag look · Escape exit</span>
-   <div>{([["left","Steer left"],["forward","Accelerate"],["reverse","Reverse"],["right","Steer right"],["brake","Brake"]] as const).map(([key,label])=><button key={key} type="button" {...hold(key)}>{label}</button>)}</div>
-   <button type="button" onClick={()=>{look.current={yaw:0,pitch:0};}}>Centre view</button><button type="button" onClick={onExit}>Back to map</button>
-   {reduced && <small>Steady camera · no bounce effects</small>}
+   <div className="city-drive-touch">{([["left","Steer left"],["forward","Accelerate"],["reverse","Reverse"],["right","Steer right"],["brake","Brake"]] as const).map(([key,label])=><button key={key} type="button" {...hold(key)}>{label}</button>)}</div>
+   <button type="button" onClick={onExit}>Back to map</button>
   </div></Html>;
  return <>
   <PerspectiveCamera ref={camera} makeDefault fov={60} near={.2} far={1200} position={[0,4.8,24]}>{hud}</PerspectiveCamera>

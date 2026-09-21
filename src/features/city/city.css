@@ -1523,3 +1523,16 @@ body:has(.city-app) {
 .city-drive-controls { pointer-events: auto; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); width: min(620px, calc(100vw - 24px)); box-sizing: border-box; padding: 12px; border-radius: 12px; background: #f5f5eefa; color: #243b31; box-shadow: 0 5px 24px #0002; text-align: center; }
 .city-drive-controls span {display: block; font-size: 12px; margin: 5px 0;}
 .city-drive-controls button {touch-action: none; padding: 9px; margin: 3px; background: #e0e9df; border: 1px solid #aebbac; border-radius: 6px;}
+
+/* Driving is an unobstructed street view; map UI returns on exit. */
+.city-is-driving .city-map-shell > :not(.city-canvas),
+.city-is-driving .city-pavilion-label,
+.city-is-driving .city-launch-plaza-label,
+.city-is-driving .city-deal-pin,
+.city-is-driving .city-trail-pin { display:none !important; }
+.city-drive-controls { inset:16px 16px auto auto; left:auto; bottom:auto; transform:none; width:auto; padding:0; background:none; box-shadow:none; }
+.city-drive-controls .city-drive-touch { display:none; }
+@media (pointer:coarse), (max-width:700px) {
+ .city-drive-controls .city-drive-touch { display:flex; position:fixed; bottom:16px; left:12px; right:12px; justify-content:space-between; gap:4px; }
+ .city-drive-touch button { padding:12px 7px; margin:0; font-size:11px; opacity:.8; }
+}

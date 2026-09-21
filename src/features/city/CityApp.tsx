@@ -610,7 +610,7 @@ export function CityApp() {
         revision={snapshot?.revision}
       >
         <div
-          className={`city-app ${
+          className={`city-app ${driving ? "city-is-driving" : ""} ${
             customerEnabled ? "city-customer-enabled" : ""
           } ${welcome ? "city-landing-welcome" : "city-landing-compact"}`}
         >
