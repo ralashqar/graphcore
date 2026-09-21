@@ -9,3 +9,5 @@ Branding > Surface textures provides independent wall, roof and ground selectors
 Local verification: TypeScript, build, Deno building-design schema tests, driving shader/browser checks, texture selector and mocked save/reload browser checks. Physical mobile performance and hosted publication remain unverified.
 
 Staging rollout pending designated identifiers. Pair the frontend with affected City Edge endpoints (city-api, city-command, city-building-art, city-stripe-webhook, city-reconcile and any transitive consumers of _shared/city.ts) plus world-generation worker: city-campus-worker imports parseProfile from city.ts. Worker version city-design-3.5. No production activation or paid generation authorized/included.
+
+Texture repeats are enlarged fourfold for street-level readability: brick repeats every 5 world metres, concrete every 12, and other materials every 8. Colour and roughness use the same scale on procedural and Quaternius surfaces; roads are unchanged.
