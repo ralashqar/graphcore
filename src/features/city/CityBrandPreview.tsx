@@ -68,7 +68,7 @@ export function CityBrandPreview({
       aria-label="Live building preview"
     >
       <span className="city-eyebrow">LIVE BUILDING PREVIEW</span>
-      <div className="city-brand-canvas">
+      {profile.buildingArt ? <img src={profile.buildingArt} alt={`${profile.name} building preview`} width={512} height={512} style={{width:"100%",height:"auto",background:"#e8e5da"}} /> : <div className="city-brand-canvas">
         <PreviewBoundary>
           <Canvas
             key={tier}
@@ -100,12 +100,13 @@ export function CityBrandPreview({
             />
           </Canvas>
         </PreviewBoundary>
-      </div>
+      </div>}
       <h2>{profile.name || "Your next address."}</h2>
       <p>{profile.tagline || "Add a logo and image to make it yours."}</p>
       <small>
-        {CITY_TIERS[tier].name} · Drag to rotate. Scroll to zoom. Draft preview
-        only.
+        {profile.buildingArt
+          ? "Isometric building artwork · Draft preview only."
+          : `${CITY_TIERS[tier].name} · Drag to rotate. Scroll to zoom. Draft preview only.`}
       </small>
     </section>
   );

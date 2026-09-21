@@ -80,6 +80,7 @@ try {
         termsUrl: "https://example.com/terms",
       });
     }
+    if(url.endsWith("city-building-art"))return reply({enabled:false,prices:{nano:0,gpt:0},jobs:[]});
     actions.push(input.action);
     if (input.action === "import")
       return reply({
@@ -233,7 +234,7 @@ try {
   await page
     .getByRole("button", { name: "Your business", exact: true })
     .click();
-  await page.getByLabel("Add Land Value (£)", { exact: true }).fill("123.45");
+  await page.getByLabel("Add City Value (£)", { exact: true }).fill("123.45");
   await page.getByRole("checkbox").check();
   await page
     .getByRole("button", { name: "Continue to secure checkout" })

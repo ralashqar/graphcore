@@ -635,3 +635,6 @@ verify_jwt = false
 
 [functions.get-game-release]
 verify_jwt = false
+
+[functions.city-building-art]
+verify_jwt = false

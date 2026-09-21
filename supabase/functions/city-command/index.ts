@@ -164,6 +164,10 @@ Deno.serve(async (request) => {
       );
     if (action === "create" || action === "save") {
       const profile = parseProfile(data.profile, user.id);
+      if (profile.buildingArt) {
+        const existing = action === 'save' ? await owner(db,user.id,uuid.parse(data.businessId)) : null;
+        if (existing?.draft?.buildingArt !== profile.buildingArt) throw new HttpError(400,'Apply a validated building candidate through the art editor.');
+      }
       if (action === "create")
         return json(
           await mutate(db, user.id, "create", {

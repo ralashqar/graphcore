@@ -50,6 +50,7 @@ export const profileSchema = z
       "Local",
     ]),
     color: z.string().regex(/^#[\da-fA-F]{6}$/),
+    buildingArt: media.optional(),
     logo: media,
     hero: media,
     billboard: media
@@ -108,6 +109,7 @@ export const profileSchema = z
 export function parseProfile(value: unknown, userId: string) {
   const profile = profileSchema.parse(value);
   for (const path of [
+    profile.buildingArt,
     profile.logo,
     profile.hero,
     profile.video,
@@ -165,7 +167,7 @@ export async function signProfile(
   profile: Record<string, unknown>,
 ) {
   const copy = { ...profile };
-  for (const key of ["logo", "hero", "video", "billboard"])
+  for (const key of ["logo", "hero", "video", "billboard", "buildingArt"])
     if (typeof copy[key] === "string" && copy[key]) {
       const signed = await db.storage
         .from("city-media")
@@ -219,7 +221,7 @@ export async function listings(db: CityDB, rows: any[]) {
     ...new Set(
       rows.flatMap((row) =>
         [
-          ...["logo", "hero", "video", "billboard"].map(
+          ...["logo", "hero", "video", "billboard", "buildingArt"].map(
             (key) => row.profile[key],
           ),
           ...(row.profile.sample?.items || []).map((i: any) => i.image),
@@ -239,7 +241,7 @@ export async function listings(db: CityDB, rows: any[]) {
       offer: { ...row.profile.offer, code: "" },
     };
     delete profile.campus;
-    for (const key of ["logo", "hero", "video", "billboard"])
+    for (const key of ["logo", "hero", "video", "billboard", "buildingArt"])
       profile[key] = urls.get(profile[key]) || "";
     if (profile.sample)
       profile.sample = {

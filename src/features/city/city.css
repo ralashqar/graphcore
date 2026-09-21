@@ -1412,3 +1412,13 @@ body:has(.city-app) {
  .city-customer-enabled .city-property-panel.is-collapsed { max-height:100px; overflow:hidden; }
  .city-customer-enabled .city-discovery:has(+ .city-linked-deal) { max-height:22dvh; }
 }
+
+.city-art-studio .city-art-controls {display:grid;grid-template-columns:minmax(0,2fr) minmax(180px,1fr);gap:20px;margin:24px 0;align-items:start}
+.city-art-controls label {display:flex;flex-direction:column;gap:10px;font-size:13px;font-weight:600}
+.city-art-controls textarea,.city-art-controls select {box-sizing:border-box;width:100%;padding:12px 14px;border:1px solid #bec8bb;border-radius:8px;background:#fffef8;color:#23382b;font:inherit}
+.city-art-controls textarea {min-height:108px;resize:vertical;line-height:1.6}
+.city-art-studio article {padding:12px;border:1px solid #d7ded2;border-radius:12px;background:#fafbf7}
+.city-art-studio article img {max-width:100%;border-radius:8px}
+.city-art-studio article small {display:block;margin-top:10px;line-height:1.5}
+.city-art-studio button:disabled {opacity:.5;cursor:default}
+@media(max-width:640px){.city-art-studio .city-art-controls{grid-template-columns:minmax(0,1fr);gap:16px}}

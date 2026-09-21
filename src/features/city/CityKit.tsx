@@ -1,3 +1,4 @@
+import { CityGeneratedBuilding } from './CityGeneratedBuildings';
 import { CitySpriteBuildings } from "./CitySpriteBuildings";
 import { useCityMapLayout } from "./CityMapLayout";
 import { officePreset } from "./CityOfficePresets";
@@ -192,6 +193,7 @@ export function CityKit({
   const buildings = useMemo(() => {
     const groups = new Map<string, Instance[]>();
     for (const p of properties) {
+      if(p.profile.buildingArt) continue;
       const office = estateDemo ? officePreset(p.id) : null;
       const near = p.id === selected?.id ||
         ((estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3) * zoom >= 38 &&
@@ -214,6 +216,7 @@ export function CityKit({
     const paths: Instance[] = [],
       planters: Instance[] = [];
     for (const p of properties) {
+      if(p.profile.buildingArt) continue;
       const variant = buildingVariant(p.id),
         x = plotAxis(p.x), z = plotAxis(p.z), sign = variant ? 1 : -1;
       if (estateDemo) {
@@ -320,14 +323,15 @@ export function CityKit({
       <CityBillboards
         envelope={signEnvelope}
         perimeter={estateDemo}
-        properties={properties}
+        properties={properties.filter(p=>!p.profile.buildingArt)}
         selected={selected}
         center={center}
         onSelect={onSelect}
         reduced={reduced}
       />
       </>}
-      {spriteMode && !emptyMode && <CitySpriteBuildings properties={properties} selected={selected} matchIds={matchIds} onSelect={onSelect} reduced={reduced} />}
+      {!emptyMode && properties.filter(p=>p.profile.buildingArt).map(p=><CityGeneratedBuilding key={p.id} property={p} dimmed={!!matchIds&&!matchIds.has(p.id)&&p.id!==selected?.id} reduced={reduced} onSelect={onSelect} />)}
+      {spriteMode && !emptyMode && <CitySpriteBuildings properties={properties.filter(p=>!p.profile.buildingArt)} selected={selected} matchIds={matchIds} onSelect={onSelect} reduced={reduced} />}
       {properties
         .filter((p) => !emptyMode && labels && (p.rank <= 3 || p.id === selected?.id))
         .map((p) => (
@@ -338,7 +342,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              spriteMode ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
+              spriteMode || p.profile.buildingArt ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center

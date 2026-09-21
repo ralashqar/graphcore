@@ -1,3 +1,4 @@
+import { processCityArt } from './city-art-worker.ts'
 import {
   buildIconGenerationPrompt,
   iconGenerationCandidateSchema,
@@ -32,7 +33,7 @@ type DatabaseClient = {
 }
 
 type VisualJobStatus = 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'
-type VisualJobKind = 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'entity_reference_sheet' | 'character_sheet' | 'director_frame' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
+type VisualJobKind = 'city_building_sprite' | 'world_entity_icon_grid' | 'brand_atlas' | 'screen_mockup' | 'entity_reference_sheet' | 'character_sheet' | 'director_frame' | 'wiki_visual' | 'app_screen_mockup' | 'app_screen_analysis'
 
 type VisualJob = {
   id: string
@@ -258,6 +259,10 @@ async function submitFalImageRequest(input: {
     ...(input.referenceImageUrls && input.referenceImageUrls.length > 0 ? { image_urls: input.referenceImageUrls } : {}),
     sync_mode: false,
   }
+  if (input.model === 'fal-ai/nano-banana-2/edit') {
+    delete body.image_size; delete body.quality;
+    Object.assign(body, { aspect_ratio: '1:1', resolution: '1K', limit_generations: true, enable_web_search: false });
+  }
   const url = new URL(`${falQueueBaseUrl}/${input.model}`)
   if (input.webhookUrl) {
     url.searchParams.set('fal_webhook', input.webhookUrl)
@@ -467,6 +472,9 @@ async function waitForFalImage(input: {
   const webhookUrl = resolveFalWebhookUrl()
   const webhookConfigured = Boolean(webhookUrl)
 
+  if (!requestId && input.job.kind === 'city_building_sprite' && input.job.metadata.citySubmissionIntent) {
+    throw new Error('Provider submission needs reconciliation; no second generation was submitted.');
+  }
   if (!requestId) {
     console.info('[visual-generation-job] submitting Fal image request.', {
       jobId: input.job.id,
@@ -491,6 +499,7 @@ async function waitForFalImage(input: {
       webhookConfigured,
     })
 
+    if (input.job.kind === 'city_building_sprite') await heartbeat(input.client, input.job.id, input.workerId, { citySubmissionIntent: true });
     const submit = await submitFalImageRequest({
       apiKey: input.apiKey,
       model: input.model,
@@ -888,7 +897,7 @@ async function generateVisualImage(input: {
     outputFormat: input.outputFormat,
     referenceImageUrls: input.referenceImageUrls,
   })
-  const imageBytes = await downloadImageBytes(falResult.imageUrl)
+  const imageBytes = await downloadImageBytes(falResult.imageUrl, input.job.kind === 'city_building_sprite' ? 20*1024*1024 : Infinity)
   return {
     provider: 'fal',
     model,
@@ -902,7 +911,7 @@ async function generateVisualImage(input: {
   }
 }
 
-async function downloadImageBytes(imageUrl: string) {
+async function downloadImageBytes(imageUrl: string, maxBytes = Infinity) {
   let lastError: unknown = null
   const attempts = Number.isInteger(imageDownloadAttempts) && imageDownloadAttempts > 0 ? imageDownloadAttempts : 3
   const timeoutMs = Number.isFinite(imageDownloadTimeoutMs) && imageDownloadTimeoutMs > 0 ? imageDownloadTimeoutMs : 30_000
@@ -913,6 +922,13 @@ async function downloadImageBytes(imageUrl: string) {
     try {
       const download = await fetch(imageUrl, { signal: controller.signal })
       if (!download.ok) throw new Error(`Generated image could not be downloaded (${download.status}).`)
+      if(Number.isFinite(maxBytes)) {
+        if(Number(download.headers.get('content-length')||0)>maxBytes)throw new Error('Image exceeds size limit.');
+        const reader=download.body?.getReader();if(!reader)throw new Error('Empty image response.');
+        const chunks:Uint8Array[]=[];let length=0;
+        while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>maxBytes){await reader.cancel();throw new Error('Image exceeds size limit.');}chunks.push(value);}
+        const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return bytes;
+      }
       return new Uint8Array(await download.arrayBuffer())
     } catch (error) {
       lastError = error
@@ -928,7 +944,7 @@ async function downloadImageBytes(imageUrl: string) {
 }
 
 async function uploadBytes(client: DatabaseClient, path: string, bytes: Uint8Array, contentType: string) {
-  const response = await client.storage.from('project-assets').upload(path, new Blob([bytes], { type: contentType }), {
+  const response = await client.storage.from('project-assets').upload(path, new Blob([new Uint8Array(bytes)], { type: contentType }), {
     cacheControl: '31536000',
     contentType,
     upsert: true,
@@ -1498,7 +1514,7 @@ async function loadProjectAssetRows(client: DatabaseClient, projectId: string, a
     .eq('project_id', projectId)
     .in('key', uniqueKeys)
   if (response.error) throw new Error(response.error.message)
-  return Array.isArray(response.data) ? response.data.map((row) => asRecord(row)) : []
+  return Array.isArray(response.data) ? response.data.map((row: unknown) => asRecord(row)) : []
 }
 
 async function createProjectAssetSignedUrls(client: DatabaseClient, assetRows: Record<string, unknown>[]) {
@@ -1588,7 +1604,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
   const referenceAssets = await loadProjectAssetRows(client, job.projectId, referenceImageAssetKeys)
   const referenceImageUrls = await createProjectAssetSignedUrls(client, referenceAssets)
   const referenceAssetNotes = referenceAssets.length > 0
-    ? referenceAssets.map((asset) => `${readString(asset.name) || readString(asset.key) || 'reference image'} should guide stable visual identity, proportions, layout continuity, and variant-specific grounding only; it must not override, dilute, or restyle the target project art style.`)
+    ? referenceAssets.map((asset: Record<string, unknown>) => `${readString(asset.name) || readString(asset.key) || 'reference image'} should guide stable visual identity, proportions, layout continuity, and variant-specific grounding only; it must not override, dilute, or restyle the target project art style.`)
     : []
   const regenerationGuidance = readString(job.input.regenerationGuidance) || readString(job.metadata.regenerationGuidance)
   const basePrompt = resolveEntityReferenceSheetPrompt({
@@ -1687,7 +1703,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
         visualDescription,
         visualTraits,
         visualTraitMap,
-        referenceAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+        referenceAssetKeys: referenceAssets.map((asset: Record<string, unknown>) => readString(asset.key)).filter(Boolean),
         regenerationGuidance,
         imageSize: resolvedImageSize,
         quality,
@@ -1761,7 +1777,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
       requestedQuality: quality,
       outputFormat,
       referenceImageCount: referenceImageUrls.length,
-      referenceImageAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+      referenceImageAssetKeys: referenceAssets.map((asset: Record<string, unknown>) => readString(asset.key)).filter(Boolean),
       regenerationGuidance,
     })
 
@@ -1851,7 +1867,7 @@ async function processEntityReferenceSheetJob(client: DatabaseClient, job: Visua
     requestedQuality: quality,
     outputFormat,
     referenceImageCount: referenceImageUrls.length,
-    referenceImageAssetKeys: referenceAssets.map((asset) => readString(asset.key)).filter(Boolean),
+    referenceImageAssetKeys: referenceAssets.map((asset: Record<string, unknown>) => readString(asset.key)).filter(Boolean),
     regenerationGuidance,
   })
 
@@ -2243,7 +2259,7 @@ async function processAppScreenAnalysisJob(client: DatabaseClient, job: VisualJo
             visualDescription: `${role} region in ${screenName}.`,
             style: asRecord(region.style),
             textStyle: asRecord(region.textStyle),
-            assetRequirementKey: readString(region.assetRequirementKey),
+            assetRequirementKey: readString(asRecord(region).assetRequirementKey),
             analysisJobId: job.id,
           },
         },
@@ -2332,7 +2348,28 @@ export async function processFlyVisualGenerationJobs(input: {
   let job: VisualJob | null = null
   try {
     job = await loadVisualJob(input.client, jobId)
-    if (job.kind === 'world_entity_icon_grid') {
+    if (job.kind === 'city_building_sprite') {
+      const cityJob = job;
+      const business = await input.client.from('city_businesses').select('status,owner_id').eq('id',cityJob.targetKeys.businessId).single();
+      if(business.error || !business.data || business.data.status==='suspended' || business.data.owner_id!==cityJob.requestedBy) throw new Error('Business is not available for generation.');
+      if(Deno.env.get('CITY_BUILDING_ART_ENABLED')!=='true' && !cityJob.metadata.falRequestId && !cityJob.metadata.cityRawPath) throw new Error('City building generation is not enabled.');
+      const outputs = await processCityArt(cityJob, {
+        sign: async path => {
+          const signed = await input.client.storage.from('city-media').createSignedUrl?.(path,3600);
+          if (!signed?.data?.signedUrl || signed.error) throw new Error('Could not load building reference.');
+          return signed.data.signedUrl;
+        },
+        download: url => downloadImageBytes(url,20*1024*1024),
+        generate: async (prompt, referenceImageUrls) => (await generateVisualImage({client:input.client,job:cityJob,workerId:input.workerId,prompt,referenceImageUrls,phasePrefix:'city_art',model:cityJob.model,imageSize:{width:1024,height:1024},quality:'high',outputFormat:'png'})).imageBytes,
+        checkpoint: metadata => heartbeat(input.client,cityJob.id,input.workerId,metadata),
+        upload: async (path, bytes) => {
+          await ensureVisualJobStillRunning(input.client,cityJob.id,'city_art_upload');
+          const uploaded=await input.client.storage.from('city-media').upload(path,bytes,{contentType:'image/png',upsert:true,cacheControl:'31536000'});
+          if(uploaded.error)throw new Error(uploaded.error.message);
+        },
+      });
+      await completeJob(input.client,cityJob.id,input.workerId,outputs,{phase:'completed'});
+    } else if (job.kind === 'world_entity_icon_grid') {
       await processEntityIconGridJob(input.client, job, input.workerId)
     } else if (job.kind === 'brand_atlas') {
       await processBrandAtlasJob(input.client, job, input.workerId)
@@ -2390,6 +2427,7 @@ export async function processFlyVisualGenerationJobs(input: {
         model: job?.model ?? null,
         failureMessage: message,
       })
+      if(job?.kind==='city_building_sprite') { const refund=await input.client.rpc('city_art_refund_unsubmitted',{p_job:jobId}); if(refund.error)throw new Error(refund.error.message); }
     } catch (failureError) {
       console.error('[visual-generation-job] failed to persist job failure.', {
         jobId,

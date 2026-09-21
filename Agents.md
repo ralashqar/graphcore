@@ -4,6 +4,13 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City building artwork (September 2026)
+
+The authenticated `city-building-art` endpoint reuses the character-sheet visual queue and Fly world worker. Its service-only `city_building_sprite` kind uses business ownership instead of a world draft. Policy `city-building-sprite-1.0.0` pins tile/style reference hashes, separates business/logo subject references from fixed art/camera instructions, and supports Fal Nano Banana 2 edit and GPT Image 2 edit. CPU processing removes edge-connected chroma, verifies the lower isometric footprint, applies uniform scaling and exports transparent 512px candidates. Owner/version-fenced application updates only the draft; existing publication review remains required.
+
+Generation uses the existing SynArc credit ledger with atomic request idempotency and `CITY_ART_NANO_CREDITS` / `CITY_ART_GPT_CREDITS` prices. Pre-submission failures refund once; submitted/uncertain requests retain their charge. Saved-image/provider-request recovery never submits another image. `CITY_BUILDING_ART_ENABLED` defaults off on Edge and Fly. Worker version is `2026-09-21-city-art-1`. Pair the affected City Edge functions with the existing world worker; unrelated workers are unaffected. Local verification uses saved art and mocked providers. No new paid inference, migration deployment or activation has occurred. See [docs/synarc-city-building-art.md](docs/synarc-city-building-art.md) for contracts, verification and rollout limits.
+
+
 ### Organic City launches (September 2026)
 
 The City launch layer extends existing reviewed discovery entries with private drafts, owned media, categories, launch rewards, publication continuity, rolling organic interest and a temporary Launch Plaza annex. `CITY_LAUNCHES_ENABLED` and `CITY_LAUNCH_PLAZA_ENABLED` default off; queue motifs also require `CITY_ACTIVITY_ENABLED`. Ordinary visits retain central paid framing. Append-only first-action timestamps prevent toggling from refreshing score; owner signals and paid value are excluded. Claim attribution is committed inside the existing deal transaction. Reminders remain explicit and in-app, using existing preferences/receipts. New observations are private and do not influence rank. Changes execute in city-api/city-command, not generation workers; no Fly or provider deployment is required. Local verification and staging/physical-mobile limitations are documented in [docs/synarc-city-launches.md](docs/synarc-city-launches.md).

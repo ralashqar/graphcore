@@ -1,3 +1,4 @@
+import { CityBuildingArt } from './CityBuildingArt';
 import { MerchantLiving } from "./CityLiving";
 import { marketQuote, MerchantPosition, QuotePreview } from "./CityMarket";
 import type { CityQuote } from "../../domain/cityMarket";
@@ -165,6 +166,7 @@ export function CityManage({
   const dirty = JSON.stringify(profile) !== JSON.stringify(business?.draft);
   const previewProfile: CityProfile = {
     ...profile,
+    buildingArt: profile.buildingArt === business?.draft.buildingArt ? business?.preview?.buildingArt : undefined,
     logo: profile.logo
       ? previews.logo ||
         (profile.logo === business?.draft.logo ? business.preview?.logo : "") ||
@@ -723,6 +725,7 @@ export function CityManage({
           <div id="city-create-deal"><CityDealStudio businessId={business.id} /></div>
         </div>
       )}
+      {business && <CityBuildingArt business={business} dirty={JSON.stringify(profile)!==JSON.stringify(business.draft)} onRefresh={onRefresh} />}
       {business && snapshot?.campusEnabled && (
         <CityCampusEditor business={business} onRefresh={onRefresh} />
       )}
