@@ -131,8 +131,10 @@ Deno.test("advertising choices round-trip and reject unbounded or hidden-side pl
 });
 
 Deno.test("texture choices round trip and reject arbitrary URLs",()=>{
- const d={...newDesign("textures"),textures:{wall:"brick",roof:"terracotta",ground:"pavers"}};
+ const d={...newDesign("textures"),textures:{wall:"brick",roof:"terracotta",ground:"pavers",wallBorder:"primary",groundBorder:"concrete"}};
  assert.deepEqual((buildingDesignSchema.parse(d) as typeof d).textures,d.textures);
  assert.throws(()=>buildingDesignSchema.parse({...d,textures:{wall:"https://example.com/file"}}));
  assert.throws(()=>buildingDesignSchema.parse({...d,textures:{script:"bad"}}));
+ assert.throws(()=>buildingDesignSchema.parse({...d,textures:{groundBorder:"https://example.com"}}));
+ assert.throws(()=>buildingDesignSchema.parse({...d,textures:{wall:"primary"}}));
 });

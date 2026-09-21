@@ -17,6 +17,10 @@ test("demo designs are stable, varied and bounded across a full city", () => {
   for (const role of ["wall", "roof", "ground"] as const) {
    assert.ok(d.textures?.[role] && d.textures[role] !== "none");
   }
+  assert.notEqual(d.textures?.wallBorder,d.textures?.wall);
+  assert.notEqual(d.textures?.groundBorder,d.textures?.ground);
+  assert.notEqual(d.textures?.wallBorder,"primary");
+  assert.notEqual(d.textures?.groundBorder,"primary");
   assert.ok(d.floors<=8);
   assert.ok(d.advertising!.placements.length>=1 && d.advertising!.placements.length<=2);
   const masses=buildingMasses(d);

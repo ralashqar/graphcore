@@ -1170,3 +1170,7 @@ Optional v3 advertising choices select up to two bounded camera-facing facade, r
 ### City texture presets (September 2026)
 
 Version-3 building recipes accept optional allowlisted wall/roof/ground texture IDs. City validation and the shared-profile-consuming world worker must ship together to designated staging; no production deployment is included. Local ambientCG CC0 colour/roughness assets use shared triplanar materials. No provider generation, database migration or new secrets. See docs/city-texture-presets.md.
+
+### City secondary texture contract (September 2026)
+
+Version-3 building recipes accept optional wallBorder/groundBorder texture IDs, including explicit primary inheritance. Strict public profile validation rejects arbitrary URLs and limits inheritance to secondary roles. Demo fixtures select distinct border materials. This shared profile contract is consumed by the City endpoints and Fly world worker (city-design-3.6); paired staging rollout remains pending designated identifiers. No migration, paid generation or production activation. See docs/city-texture-presets.md.

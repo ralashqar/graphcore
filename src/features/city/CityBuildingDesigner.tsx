@@ -876,6 +876,12 @@ export function CityBuildingDesigner(
                     </select>
                     {d.textures?.[role] && d.textures[role]!=="none" && <img alt={`${role} texture sample`} width={72} height={72} src={`/city/textures/${CITY_TEXTURES[d.textures[role]!].asset}-Color.webp`}/>}
                   </label>)}
+                  {(["wallBorder", "groundBorder"] as const).map(role=><label key={role}>{role === "wallBorder" ? "Façade border" : "Ground border"} texture
+                    <select aria-label={`${role} texture`} value={d.textures?.[role] || "primary"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
+                      <option value="primary">Use primary</option>
+                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{CITY_TEXTURES[id].label}</option>)}
+                    </select>
+                  </label>)}
                 </fieldset>}
                 {(["wall", "trim", "glass", "roof"] as const).map((k) => (
                   <label key={k}>

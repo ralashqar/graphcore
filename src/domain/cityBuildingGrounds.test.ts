@@ -34,3 +34,11 @@ test("detail sets and scopes change native finishes without changing structure o
     assert.ok(result.attachments.filter(a => ["facade", "cornice"].includes(a.role)).every(a => a.asset.includes(family)));
   }
 });
+
+test("enclosures and raised plot edges have explicit border materials",()=>{
+ const d={...newDesign("border"),enclosure:"open-rail" as const};
+ assert.ok(groundsParts(d,"near").every(p=>p.textureRole==="groundBorder"));
+ const resolved=resolveV3(d,"#445566");
+ assert.equal(resolved.parts.find(p=>p.position[1]===.05)?.textureRole,"groundBorder");
+ assert.equal(resolved.parts.find(p=>p.position[1]===.2)?.textureRole,undefined);
+});

@@ -155,14 +155,18 @@ try {
       await page.waitForTimeout(150);
     }
     await page.getByLabel("wall texture",{exact:true}).selectOption("brick");
+    await page.getByLabel("wallBorder texture",{exact:true}).selectOption("primary");
+    await page.getByLabel("groundBorder texture",{exact:true}).selectOption("concrete");
     await page.getByLabel("roof texture",{exact:true}).selectOption("terracotta");
     await page.getByLabel("ground texture",{exact:true}).selectOption("pavers");
     await page.getByRole("button",{name:"Save property draft",exact:true}).click();
     await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
-    assert.deepEqual(business.draft.buildingDesign.textures,{wall:"brick",roof:"terracotta",ground:"pavers"});
+    assert.deepEqual(business.draft.buildingDesign.textures,{wall:"brick",roof:"terracotta",ground:"pavers",wallBorder:"primary",groundBorder:"concrete"});
     await page.reload();
     await page.getByRole("button",{name:"Branding",exact:true}).click();
     assert.equal(await page.getByLabel("wall texture",{exact:true}).inputValue(),"brick");
+    assert.equal(await page.getByLabel("groundBorder texture",{exact:true}).inputValue(),"concrete");
+    assert.equal(await page.getByLabel("wallBorder texture",{exact:true}).inputValue(),"primary");
     await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-textures.png"});
     assert.deepEqual(errors,[]);
     console.log("Texture choices, shader compilation and mocked save/reload passed.");await browser.close();process.exit(0);

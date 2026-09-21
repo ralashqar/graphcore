@@ -1,6 +1,6 @@
 export const TEXTURE_IDS = ["none","brick","plaster","concrete","terracotta","metal","timber","pavers","checker"] as const;
 export type CityTextureId = typeof TEXTURE_IDS[number];
-export type CityTextureChoices = Partial<Record<"wall"|"roof"|"ground",CityTextureId>>;
+export type CityTextureChoices = Partial<Record<"wall"|"roof"|"ground",CityTextureId>> & Partial<Record<"wallBorder"|"groundBorder",CityTextureId|"primary">>;
 // World-space metres per repeat: deliberately oversized for readable city-scale materials.
 export const CITY_TEXTURES:Record<CityTextureId,{label:string;asset:string;meters:number}> = {
  none:{label:"Palette only",asset:"",meters:1},
@@ -13,3 +13,8 @@ export const CITY_TEXTURES:Record<CityTextureId,{label:string;asset:string;meter
  pavers:{label:"Paving stones",asset:"PavingStones036",meters:8},
  checker:{label:"Decorative checker tiles",asset:"Tiles074",meters:8},
 };
+
+export function borderTexture(choices: CityTextureChoices | undefined, primary: "wall" | "ground"): CityTextureId | undefined {
+ const secondary = choices?.[primary === "wall" ? "wallBorder" : "groundBorder"];
+ return !secondary || secondary === "primary" ? choices?.[primary] : secondary;
+}

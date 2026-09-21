@@ -558,6 +558,7 @@ export function resolveV3(
   const surface =
     { garden: "#8c9d77", limestone: "#d5ceba", slate: "#7b8587" }[d.tile];
   box(0, .05, 0, 23.5, .24, 23.5, p.trim);
+  parts[parts.length - 1].textureRole = "groundBorder";
   box(0, .2, 0, 22.8, .1, 22.8, surface);
   if (lod === "near" && d.tile !== "garden" && (!d.pavingPattern || d.pavingPattern === "classic")) {
     for (let g = -8; g <= 8; g += 4) {

@@ -29,6 +29,7 @@ export function groundsParts(d: GroundsChoices, lod: "near" | "medium" | "far"):
     }
   }
   if (!d.enclosure || d.enclosure === "none") return parts;
+  const borderStart = parts.length;
   const rail = d.enclosure === "open-rail", brick = d.enclosure === "brick-court";
   const wall = brick ? "#ac7e68" : "#d1cabc", cap = brick ? "#d7c8b3" : "#e4decd";
   // Fixed perimeter lies outside the maximum footprint and decoration envelopes.
@@ -51,5 +52,6 @@ export function groundsParts(d: GroundsChoices, lod: "near" | "medium" | "far"):
     box(x, .91, 11.05, .5, 1.32, .5, wall);
     box(x, 1.62, 11.05, .58, .1, .58, cap);
   }
+  for (const part of parts.slice(borderStart)) part.textureRole = "groundBorder";
   return parts;
 }

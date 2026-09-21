@@ -52,7 +52,7 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
-  textures: z.object({wall:z.enum(TEXTURE_IDS).optional(),roof:z.enum(TEXTURE_IDS).optional(),ground:z.enum(TEXTURE_IDS).optional()}).strict().optional(),
+  textures: z.object({wall:z.enum(TEXTURE_IDS).optional(),roof:z.enum(TEXTURE_IDS).optional(),ground:z.enum(TEXTURE_IDS).optional(),wallBorder:z.enum([...TEXTURE_IDS,"primary"]).optional(),groundBorder:z.enum([...TEXTURE_IDS,"primary"]).optional()}).strict().optional(),
   advertising: z.object({placements:z.array(z.enum(AD_PLACEMENTS)).max(2).refine(v=>new Set(v).size===v.length,"Duplicate placements"),width:z.number().min(3).max(18),height:z.number().min(2).max(24),style:z.enum(["image","text"])}).strict().optional(),
   entranceStyle: z.enum(ENTRANCE_STYLES).optional(),
   archetype: z.enum(ARCHETYPES).optional(),

@@ -35,6 +35,14 @@ export function demoBuildingDesign(index: number, color: string) {
     roof: pick(["terracotta", "metal", "concrete"] as const),
     ground: pick(["pavers", "concrete", "checker"] as const),
   };
+  // Use a separate random stream so texture choices never change advertising layout.
+  const borders = ["plaster", "concrete", "metal"] as const;
+  const chooseBorder = (primary: string | undefined, salt: string) => {
+    const choices = borders.filter(id => id !== primary);
+    return choices[identitySeed(`city-demo-border:${index}:${salt}`) % choices.length];
+  };
+  result.textures.wallBorder = chooseBorder(result.textures.wall, "wall");
+  result.textures.groundBorder = chooseBorder(result.textures.ground, "ground");
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);

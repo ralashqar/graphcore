@@ -1,3 +1,4 @@
+import { borderTexture } from "../../domain/cityTexturePresets";
 import { useThree } from "@react-three/fiber";
 import type { CityTextureId } from "../../domain/cityTexturePresets";
 import { bevelCityGeometry } from "./CityBevelGeometry";
@@ -157,7 +158,7 @@ export function CityDesignBuildings(
           const dimensions = [...part.size].sort((a, b) => b - a);
           const connector = part.kind === "box" && dimensions[0] > dimensions[1] * 10;
           let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : connector ? "joinedBox" : part.kind;
-          const texture = d.version === 3 && key !== "glassBox" ? (part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
+          const texture = d.version === 3 && key !== "glassBox" ? ("textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
           if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
             key: `${p.id}:${index}`,
@@ -183,7 +184,7 @@ export function CityDesignBuildings(
             let key = "asset|" + a.asset + "|" + partIndex;
             const role = (piece.material as MeshLambertMaterial).userData
               .cityPalette as "wall" | "trim" | "glass";
-            const texture=d.version===3 ? (a.role==="paving" ? d.textures?.ground : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
+            const texture=d.version===3 ? (a.role==="paving" ? (role==="trim" ? borderTexture(d.textures,"ground") : d.textures?.ground) : role==="trim" ? (["facade","cornice"].includes(a.role) ? borderTexture(d.textures,"wall") : undefined) : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
             if(texture && texture!=="none") key+="|"+texture;
             const tint = d.palette[a.role === "paving" ? "trim" : role];
           (out[key] ||= []).push({
