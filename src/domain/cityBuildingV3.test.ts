@@ -208,3 +208,16 @@ test("clean procedural windows do not add projecting vertical frame bars",()=>{
  const parts=resolveV3(d,"#506b58","near").parts;
  assert.equal(parts.filter(p=>p.color===d.palette.trim && ((p.size[0]===.1 && p.size[2]===.16)||(p.size[0]===.16 && p.size[2]===.1))).length,0);
 });
+
+test("native architectural details are scoped and restricted to near view",()=>{
+ for(const architecture of ["brick","creative","boutique","glass"] as const) {
+  const d={...newDesign("native-details"),architecture,finish:"facade" as const,detailScope:"all" as const,roof:"parapet" as const};
+  const near=resolveV3(d,"#445566","near");
+  assert.ok(near.attachments.some(a=>a.role==="column"));
+  assert.ok(near.attachments.some(a=>a.role==="cornice"));
+  assert.ok(!resolveV3(d,"#445566","medium").attachments.some(a=>["column","cornice"].includes(a.role)));
+  assert.ok(!resolveV3({...d,finish:"procedural"},"#445566").attachments.some(a=>["column","cornice"].includes(a.role)));
+  const entrance=resolveV3({...d,detailScope:"entrance"},"#445566");
+  assert.ok(entrance.attachments.filter(a=>a.role==="column").every(a=>a.position[1]<1));
+ }
+});

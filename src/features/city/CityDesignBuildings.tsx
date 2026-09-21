@@ -184,7 +184,7 @@ export function CityDesignBuildings(
             let key = "asset|" + a.asset + "|" + partIndex;
             const role = (piece.material as MeshLambertMaterial).userData
               .cityPalette as "wall" | "trim" | "glass";
-            const texture=d.version===3 ? (a.role==="paving" ? (role==="trim" ? borderTexture(d.textures,"ground") : d.textures?.ground) : role==="trim" ? (["facade","cornice"].includes(a.role) ? borderTexture(d.textures,"wall") : undefined) : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
+            const texture=d.version===3 ? (a.role==="paving" ? (role==="trim" ? borderTexture(d.textures,"ground") : d.textures?.ground) : role==="trim" ? (["facade","cornice","column"].includes(a.role) ? borderTexture(d.textures,"wall") : undefined) : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
             if(texture && texture!=="none") key+="|"+texture;
             const tint = d.palette[a.role === "paving" ? "trim" : role];
           (out[key] ||= []).push({

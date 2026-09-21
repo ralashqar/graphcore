@@ -27,7 +27,7 @@ test("detail sets and scopes change native finishes without changing structure o
     const result = resolveV3(d, "#445566");
     assert.deepEqual(result.masses, original.masses);
     assert.deepEqual(result.signs, original.signs);
-    assert.ok(!result.attachments.some(a => a.role === "cornice"));
+
     if (detailScope === "entrance") assert.ok(result.attachments.every(a => a.role !== "cornice"));
     if (detailScope === "crown") assert.ok(result.attachments.every(a => !["door", "entrance"].includes(a.role)));
     const family = {brick:"Brick", "white-brick":"WhiteBrick", marble:"Marble", metal:"Metal", matching:""}[detailSet];

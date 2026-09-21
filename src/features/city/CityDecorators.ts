@@ -12,7 +12,7 @@ let pending: Promise<DecoratorPack> | null = null;
 /** Lazy, shared immutable resources. Failures leave the procedural fallback in place. */
 export function loadDecorators(): Promise<DecoratorPack> {
   if (pending) return pending;
-  pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=2")
+  pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=3")
     .then((gltf) => {
       const out: DecoratorPack = new Map(),
         materials = new Map<Material, MeshStandardMaterial>();

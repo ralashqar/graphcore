@@ -631,22 +631,57 @@ export function resolveV3(
       );
     }
     if (lod === "far") continue;
+    const moduleScale = Math.min(1, (Math.min(d.groundHeight, 3) - .36) / 3);
+    const detailAllowed = d.finish !== "procedural" && (d.detailScope === "entrance" ? y === .65 : d.detailScope === "crown" ? top : true);
+    const column = ({brick:["Brick_Column_Small",.25,3,.35],creative:["WhiteBrick_Column_Half",.72,4,.25],boutique:["Marble_BevelColumn_Center",.57489,4,.20441],glass:["Metal_Column_Small_Center",.24888,3,.24911]} as const)[detailArchitecture];
+    const columnScale = (height - .36) / column[2];
+    const columnWidth = column[1] * columnScale;
+    // Only exposed walls receive details. Native pieces retain uniform XYZ scaling.
+    const addDetail = (asset:string,offset:number,bottom:number,scale:number,size:readonly number[],role:string) => {
+      const wx=x+(horizontal?offset:0)+nx*.045,wz=z+(horizontal?0:offset)+nz*.045;
+      const bounds={position:[wx+nx*size[2]*scale/2,bottom+size[1]*scale/2,wz+nz*size[2]*scale/2],size:[(horizontal?size[0]:size[2])*scale,size[1]*scale,(horizontal?size[2]:size[0])*scale]};
+      if (Math.abs(bounds.position[0])+bounds.size[0]/2>11.5 || Math.abs(bounds.position[2])+bounds.size[2]/2>11.5) return;
+      if (y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(wx)<2) return;
+      if (slots.some(slot=>slot.active && overlaps(bounds,slot))) return;
+      if (advertising.signs.some(sign=>overlaps(bounds,{position:[sign.x,sign.y,sign.z],size:[sign.rotation? .6:sign.width,sign.height,sign.rotation?sign.width:.6]}))) return;
+      attach(asset,wx,bottom,wz,angle,scale,role);
+    };
+    if (detailAllowed && lod === "near") {
+      // Paired narrow pilasters finish both faces of convex corners, not courtyard elbows.
+      for (const direction of [-1,1]) {
+        const endX=x+(horizontal?direction*length/2:0),endZ=z+(horizontal?0:direction*length/2);
+        if (corners.some(c=>c.kind==="convex" && c.y===y && Math.abs(c.x-endX)<.01 && Math.abs(c.z-endZ)<.01))
+          addDetail(column[0],direction*(length/2-columnWidth/2),y+.18,columnScale,[column[1],column[2],column[3]],"column");
+      }
+      if (top && d.roof==="parapet" && (!d.roofVariant || d.roofVariant==="standard")) {
+        // A single curated crown course, never the old cornice on every storey edge.
+        const crownScale=.4, crownWidth=.8;
+        for(const offset of fitBays(length,crownWidth,0,.45))
+          addDetail(family[2],offset,y+height-.04,crownScale,[2,1,detailArchitecture==="brick"?.62:.3],"cornice");
+      }
+    }
     if (facadeEnabled) {
       // A family uses one uniform scale on every elevation. Modules sit above the
       // slab and forward of the closed structural shell, never coplanar with it.
-      const moduleScale = Math.min(1, (Math.min(d.groundHeight, 3) - .36) / 3);
       const nativeWidth = detailArchitecture === "boutique" || detailArchitecture === "creative" ? 4 : 2;
       const width = nativeWidth * moduleScale;
-      for (const offset of fitBays(length, width, 0, .25)) {
+      const gap = detailAllowed ? columnWidth + .06 : 0;
+      const bayOffsets = fitBays(length, width, gap, Math.max(.3,columnWidth));
+      if (detailAllowed && lod === "near") {
+        for(let i=1;i<bayOffsets.length;i++) addDetail(column[0],(bayOffsets[i-1]+bayOffsets[i])/2,y+.18,columnScale,[column[1],column[2],column[3]],"column");
+      }
+      for (const offset of bayOffsets) {
         const wx = x + (horizontal ? offset : 0), wz = z + (horizontal ? 0 : offset);
         const door = y === .65 && nz === 1 && Math.abs(wz-entrance.z)<.01 && Math.abs(wx)<width/2+1.4;
         const reserved = slots.some(s => s.active && (s.selected === "brand" || s.selected === "campaign") && overlaps({position:[wx+nx*.2,y+height/2,wz+nz*.2],size:[horizontal?width:.6,height,horizontal?.6:width]},s));
         const plain = (y === .65 && d.base === "plinth") || (y > .65 && d.rhythm === "alternating" && (Math.round(offset/width)+d.facadeSeed)%2===0);
         // Keep the actual entrance unobstructed; its procedural surround fills the bay.
         if (door || reserved) continue;
-        const asset = plain ? family[1] : family[0];
+        const asset = plain ? (detailArchitecture === "brick" && y===.65 ? "Brick_BottomTrim" : family[1])
+          : detailArchitecture === "glass" && y===.65 ? "Metal_FirstFloor_Window"
+          : detailArchitecture === "brick" && d.facadeSeed%2===0 ? "Brick_Window_Trim_Single" : family[0];
         const columns = plain ? nativeWidth/2 : 1;
-        const rows = plain && detailArchitecture === "brick" ? 3 : 1;
+        const rows = plain && detailArchitecture === "brick" && asset!=="Brick_BottomTrim" ? 3 : 1;
         for(let col=0;col<columns;col++) for(let row=0;row<rows;row++) {
           const along = (col-(columns-1)/2)*2*moduleScale;
           attach(asset, wx+(horizontal?along:0)+nx*.025, y+.18+row*moduleScale, wz+(horizontal?0:along)+nz*.025, angle,moduleScale,"facade");
@@ -837,7 +872,7 @@ export function resolveV3(
       }
     }
   }
-  if (lod === "near") {
+  if (lod === "near" && d.finish === "procedural") {
     for (const corner of corners) {
       // Narrow procedural corner posts preserve clearance where 2 m native blocks cannot fit.
       if (corner.kind === "convex") {
