@@ -8,17 +8,37 @@
 		{
 			"name":"Scene",
 			"nodes":[
-				0
+				1
 			]
 		}
 	],
 	"nodes":[
 		{
 			"mesh":0,
+			"name":"Cornice_Brick_Center_1-convcolonly"
+		},
+		{
+			"children":[
+				0
+			],
+			"mesh":1,
 			"name":"Cornice_Brick_Center"
 		}
 	],
 	"materials":[
+		{
+			"doubleSided":true,
+			"name":"Collision",
+			"pbrMetallicRoughness":{
+				"baseColorFactor":[
+					0.036788325756788254,
+					0.5504099726676941,
+					0.8000074625015259,
+					1
+				],
+				"metallicFactor":0
+			}
+		},
 		{
 			"doubleSided":true,
 			"name":"MI_RedBrick",
@@ -37,19 +57,33 @@
 	],
 	"meshes":[
 		{
-			"name":"Cube.225",
+			"name":"Cube.566",
 			"primitives":[
 				{
 					"attributes":{
 						"POSITION":0,
 						"NORMAL":1,
-						"TEXCOORD_0":2,
-						"TEXCOORD_1":3,
-						"COLOR_0":4,
-						"COLOR_1":5
+						"TEXCOORD_0":2
 					},
-					"indices":6,
+					"indices":3,
 					"material":0
+				}
+			]
+		},
+		{
+			"name":"Cube.225",
+			"primitives":[
+				{
+					"attributes":{
+						"POSITION":4,
+						"NORMAL":5,
+						"TEXCOORD_0":6,
+						"TEXCOORD_1":7,
+						"COLOR_0":8,
+						"COLOR_1":9
+					},
+					"indices":10,
+					"material":1
 				}
 			]
 		}
@@ -89,6 +123,40 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
+			"count":24,
+			"max":[
+				1,
+				1,
+				0
+			],
+			"min":[
+				-1,
+				0,
+				-0.4000000059604645
+			],
+			"type":"VEC3"
+		},
+		{
+			"bufferView":1,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC3"
+		},
+		{
+			"bufferView":2,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC2"
+		},
+		{
+			"bufferView":3,
+			"componentType":5123,
+			"count":36,
+			"type":"SCALAR"
+		},
+		{
+			"bufferView":4,
+			"componentType":5126,
 			"count":12,
 			"max":[
 				1,
@@ -103,39 +171,39 @@
 			"type":"VEC3"
 		},
 		{
-			"bufferView":1,
+			"bufferView":5,
 			"componentType":5126,
 			"count":12,
 			"type":"VEC3"
 		},
 		{
-			"bufferView":2,
+			"bufferView":6,
 			"componentType":5126,
 			"count":12,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":3,
+			"bufferView":7,
 			"componentType":5126,
 			"count":12,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":4,
+			"bufferView":8,
 			"componentType":5121,
 			"count":12,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":5,
+			"bufferView":9,
 			"componentType":5123,
 			"count":12,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":6,
+			"bufferView":10,
 			"componentType":5123,
 			"count":18,
 			"type":"SCALAR"
@@ -144,44 +212,68 @@
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":144,
+			"byteLength":288,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":144,
-			"byteOffset":144,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":96,
+			"byteLength":288,
 			"byteOffset":288,
 			"target":34962
 		},
 		{
 			"buffer":0,
+			"byteLength":192,
+			"byteOffset":576,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":72,
+			"byteOffset":768,
+			"target":34963
+		},
+		{
+			"buffer":0,
+			"byteLength":144,
+			"byteOffset":840,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":144,
+			"byteOffset":984,
+			"target":34962
+		},
+		{
+			"buffer":0,
 			"byteLength":96,
-			"byteOffset":384,
+			"byteOffset":1128,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":96,
+			"byteOffset":1224,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":48,
-			"byteOffset":480,
+			"byteOffset":1320,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":96,
-			"byteOffset":528,
+			"byteOffset":1368,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":36,
-			"byteOffset":624,
+			"byteOffset":1464,
 			"target":34963
 		}
 	],
@@ -193,7 +285,7 @@
 	],
 	"buffers":[
 		{
-			"byteLength":660,
+			"byteLength":1500,
 			"uri":"Cornice_Brick_Center.bin"
 		}
 	]

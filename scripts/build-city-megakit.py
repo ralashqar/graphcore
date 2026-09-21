@@ -15,7 +15,11 @@ C = Matrix(((1,0,0,0),(0,0,-1,0),(0,1,0,0),(0,0,0,1)))
 sources, materials, images, exports, manifest = {}, {}, {}, [], {}
 for file in sorted(SOURCE.glob('*.gltf')):
     bpy.ops.import_scene.gltf(filepath=str(file))
-    objects = [o for o in bpy.context.selected_objects if o.type == 'MESH']
+    imported = list(bpy.context.selected_objects)
+    # Source Godot exports include collision hulls, which must never render.
+    objects = [o for o in imported if o.type == 'MESH' and 'convcolonly' not in o.name]
+    for obj in imported:
+        if obj not in objects: bpy.data.objects.remove(obj, do_unlink=True)
     for obj in objects:
         for slot in obj.material_slots:
             mat = slot.material
@@ -50,6 +54,7 @@ def material(name,color):
 
 stone=material('City_Stone',(.42,.40,.34)); roofmat=material('City_Roof',(.055,.06,.055))
 brick=material('City_Brick_LOD',(.34,.22,.17)); metal=material('City_Metal_LOD',(.065,.075,.07))
+whitebrick=material('City_WhiteBrick_LOD',(.65,.63,.54)); marble=material('City_Marble_LOD',(.54,.55,.5))
 glass=material('City_Window_LOD',(.04,.055,.052))
 
 def box(name,x,y,z,w,h,d,mat):
@@ -85,7 +90,22 @@ def bake(name,objects,extra=None):
 for name in ['Street_4Lane','Street_4WayIntersection','Street_TIntersection','Street_Curve_4LaneShort',
              'Street_2Lane','Street_Curve_2Lane','Sidewalk_NoCurb_3m','Prop_Planter_Single','Prop_Bollard','Prop_ACUnit']:
     # Native curve pivot is the outer square corner; retain it and declare sockets.
-    bake(name,part(name))
+    pieces=part(name)
+    markings=[]
+    if name=='Street_4Lane':
+        markings=['Decal_DoubleYellow_Straight','Decal_BrokenLine_Straight']
+        pieces+=part(markings[0],y=.025)
+        for z in [-3,3]: pieces+=part(markings[1],y=.045,z=z)
+    elif name=='Street_Curve_4LaneShort':
+        markings=['Decal_Curve_4LaneShort_DoubleYellow','Decal_Curve_4LaneShort_Stripe']
+        for decal in markings: pieces+=part(decal,y=.065)
+    bake(name,pieces,{'markings':markings})
+
+# Separate instanced arrows allow sparse placement near junction approaches.
+arrows=[]
+for z,angle in [(-4.5,-math.pi/2),(4.5,math.pi/2)]:
+    arrows+=part('Decal_ArrowStraight',y=.05,z=z,angle=angle)
+bake('Road_Arrows',arrows,{'markings':['Decal_ArrowStraight']})
 
 # Physical edge sockets exclude projecting crosswalk decals.
 manifest['Street_4Lane']['connectors']=[[-3,0,0],[3,0,0]]
@@ -104,14 +124,18 @@ for tier,(_,_,floors) in enumerate(recipes):
         wings=[(0,4.5,width,6,frontfloors),(width/2-3,-2.5,6,8,floors)]
         if variant: wings=[(z,x,d,w,f) for x,z,w,d,f in wings]
         near=[];far=[]
-        upper='Brick_Window_Trim' if variant==0 else 'Metal_Window_Half'
-        ground='Trim_FirstFloor_Window_001' if variant==0 else 'Metal_FirstFloor_Window'
-        cornice='Cornice_Brick_Center' if variant==0 else 'Cornice_Metal_Center'
+        accent=tier in [2,4]
+        upper=('WhiteBrick_Window' if variant==0 else 'Marble_Window') if accent else ('Brick_Window_Trim' if variant==0 else 'Metal_Window_Half')
+        plain='WhiteBrick_Plain_3' if variant==0 else 'Marble_Plain_3'
+        ground='Trim_FirstFloor_Window' if variant==0 else 'Metal_FirstFloor_Window'
+        cornice=('Cornice_WhiteBrick_Center' if variant==0 else 'Cornice_Marble_Center') if accent else ('Cornice_Brick_Center' if variant==0 else 'Cornice_Metal_Center')
         for index,(cx,cz,w,d,count) in enumerate(wings):
             ox,oz,ow,od,of=wings[1-index]
             for floor in range(count):
                 for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
+                    consumed=set()
                     for bay in range(int(length/2)):
+                        if bay in consumed: continue
                         local=-length/2+1+bay*2
                         x=cx+math.cos(angle)*local+math.sin(angle)*offset
                         z=cz-math.sin(angle)*local+math.cos(angle)*offset
@@ -119,7 +143,15 @@ for tier,(_,_,floors) in enumerate(recipes):
                         if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and floor<of: continue
                         frontangle=math.pi/2 if variant else 0
                         if index==0 and floor==0 and angle==frontangle and bay==int(length/4):
-                            near+=part('Door_1',x,0,z,angle)
+                            near+=part('DoorFrame_Trim' if variant==0 else 'DoorFrame_Metal_Single',x,0,z,angle)
+                            near+=part('Door_1',x+math.cos(angle)*.5,0,z-math.sin(angle)*.5,angle)
+                        elif accent and floor>0:
+                            nx=x+math.cos(angle)*2; nz=z-math.sin(angle)*2
+                            next_exposed=not(abs(nx-ox)<ow/2+.01 and abs(nz-oz)<od/2+.01 and floor<of)
+                            if bay+1<int(length/2) and next_exposed:
+                                near+=part(upper,x+math.cos(angle),floor*3,z-math.sin(angle),angle)
+                                consumed.add(bay+1)
+                            else: near+=part(plain,x,floor*3,z,angle)
                         else:
                             near+=part(ground if floor==0 else upper,x,floor*3,z,angle)
                         if floor%2==0:
@@ -127,7 +159,7 @@ for tier,(_,_,floors) in enumerate(recipes):
             # Low-poly roofs replace dense repeated roof tiles, while real kit cornices retain character.
             near+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
             near+=box('Foundation',cx,.08,cz,w,.16,d,stone)
-            far+=box('Mass',cx,count*1.5,cz,w,count*3,d,brick if variant==0 else metal)
+            far+=box('Mass',cx,count*1.5,cz,w,count*3,d,(whitebrick if variant==0 else marble) if accent else (brick if variant==0 else metal))
             far+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
             for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
                 for bay in range(int(length/2)):
@@ -135,9 +167,16 @@ for tier,(_,_,floors) in enumerate(recipes):
                     x=cx+math.cos(angle)*local+math.sin(angle)*offset
                     z=cz-math.sin(angle)*local+math.cos(angle)*offset
                     if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and count<=of: continue
-                    near+=part(cornice,x,count*3,z,angle)
+                    inset=.06 if cornice=='Cornice_Marble_Center' else 0
+                    near+=part(cornice,x-math.sin(angle)*inset,count*3,z-math.cos(angle)*inset,angle)
+            if index==0 and tier in [1,2,3]:
+                # Facing the open courtyard, not the billboard facade. Native-size awning.
+                angle=-math.pi/2 if variant else math.pi
+                ax=1.5 if variant else -width/2+2
+                az=-width/2+2 if variant else 1.5
+                near+=part('Prop_Awning',ax,0,az,angle)
         metadata={'tier':tier,'variant':variant,'floors':floors,'front':[variant,0,1-variant],
-                  'envelope':[16,36,16],'modulePitch':2,'floorHeight':3,'layoutVersion':2,'wings':wings}
+                  'envelope':[16,36,16],'modulePitch':2,'floorHeight':3,'layoutVersion':3,'wings':wings,'facade':upper,'nativeBayWidth':4 if accent else 2}
         bake(f'Building_{tier}_{variant}_near',near,metadata)
         bake(f'Building_{tier}_{variant}_far',far,metadata)
 

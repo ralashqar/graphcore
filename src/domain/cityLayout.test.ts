@@ -120,7 +120,7 @@ test("exported modular footprints and full-height bays match the runtime without
   const expected=buildingMassing(tier,id).wings.map(w=>[w.x,w.z,w.width,w.depth,w.height/3]);
   for(const lod of ["near","far"]) {
    const asset=manifest.assets[`Building_${tier}_${variant}_${lod}`];
-   assert.equal(asset.layoutVersion,2); assert.equal(asset.modulePitch,2);assert.equal(asset.floorHeight,3);
+   assert.equal(asset.layoutVersion,3); assert.equal(asset.modulePitch,2);assert.equal(asset.floorHeight,3);
    assert.deepEqual(asset.wings,expected);
   }
  }

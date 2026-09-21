@@ -56,7 +56,7 @@ export function CityKit({
   matchIds?: Set<string>;
 }) {
   const playback = useMarketMotion();
-  const { scene } = useGLTF("/city/downtown/downtown.glb?v=modular-v2", false, true);
+  const { scene } = useGLTF("/city/downtown/downtown.glb?v=source-v3", false, true);
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();
@@ -139,6 +139,15 @@ export function CityKit({
       const list = groups.get(p.asset) || [];
       list.push(p);
       groups.set(p.asset, list);
+      if (p.asset === "Street_4Lane") {
+        const along = p.rotation ? p.z : p.x;
+        const blockOffset = ((Math.round(along) % 66) + 66) % 66;
+        if (blockOffset === 18 || blockOffset === 48) {
+          const arrows = groups.get("Road_Arrows") || [];
+          arrows.push({ ...p, key: `arrows:${p.key}` });
+          groups.set("Road_Arrows", arrows);
+        }
+      }
     }
     return groups;
   }, [roads, center.x, center.z]);

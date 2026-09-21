@@ -8,17 +8,37 @@
 		{
 			"name":"Scene",
 			"nodes":[
-				0
+				1
 			]
 		}
 	],
 	"nodes":[
 		{
 			"mesh":0,
+			"name":"Brick_Plain_1_1-convcolonly"
+		},
+		{
+			"children":[
+				0
+			],
+			"mesh":1,
 			"name":"Brick_Plain_1"
 		}
 	],
 	"materials":[
+		{
+			"doubleSided":true,
+			"name":"Collision",
+			"pbrMetallicRoughness":{
+				"baseColorFactor":[
+					0.036788325756788254,
+					0.5504099726676941,
+					0.8000074625015259,
+					1
+				],
+				"metallicFactor":0
+			}
+		},
 		{
 			"doubleSided":true,
 			"name":"MI_RedBrick",
@@ -52,31 +72,45 @@
 	],
 	"meshes":[
 		{
-			"name":"Cube.091",
+			"name":"Cube.292",
 			"primitives":[
 				{
 					"attributes":{
 						"POSITION":0,
 						"NORMAL":1,
-						"TEXCOORD_0":2,
-						"TEXCOORD_1":3,
-						"COLOR_0":4,
-						"COLOR_1":5
+						"TEXCOORD_0":2
 					},
-					"indices":6,
+					"indices":3,
 					"material":0
+				}
+			]
+		},
+		{
+			"name":"Cube.091",
+			"primitives":[
+				{
+					"attributes":{
+						"POSITION":4,
+						"NORMAL":5,
+						"TEXCOORD_0":6,
+						"TEXCOORD_1":7,
+						"COLOR_0":8,
+						"COLOR_1":9
+					},
+					"indices":10,
+					"material":1
 				},
 				{
 					"attributes":{
-						"POSITION":7,
-						"NORMAL":8,
-						"TEXCOORD_0":9,
-						"TEXCOORD_1":10,
-						"COLOR_0":11,
-						"COLOR_1":12
+						"POSITION":11,
+						"NORMAL":12,
+						"TEXCOORD_0":13,
+						"TEXCOORD_1":14,
+						"COLOR_0":15,
+						"COLOR_1":16
 					},
-					"indices":13,
-					"material":1
+					"indices":17,
+					"material":2
 				}
 			]
 		}
@@ -128,6 +162,40 @@
 		{
 			"bufferView":0,
 			"componentType":5126,
+			"count":24,
+			"max":[
+				1.0000003576278687,
+				1,
+				0
+			],
+			"min":[
+				-1.0000003576278687,
+				0,
+				-0.19999998807907104
+			],
+			"type":"VEC3"
+		},
+		{
+			"bufferView":1,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC3"
+		},
+		{
+			"bufferView":2,
+			"componentType":5126,
+			"count":24,
+			"type":"VEC2"
+		},
+		{
+			"bufferView":3,
+			"componentType":5123,
+			"count":36,
+			"type":"SCALAR"
+		},
+		{
+			"bufferView":4,
+			"componentType":5126,
 			"count":4,
 			"max":[
 				1,
@@ -142,45 +210,45 @@
 			"type":"VEC3"
 		},
 		{
-			"bufferView":1,
+			"bufferView":5,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC3"
 		},
 		{
-			"bufferView":2,
+			"bufferView":6,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":3,
+			"bufferView":7,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":4,
+			"bufferView":8,
 			"componentType":5121,
 			"count":4,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":5,
+			"bufferView":9,
 			"componentType":5123,
 			"count":4,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":6,
+			"bufferView":10,
 			"componentType":5123,
 			"count":6,
 			"type":"SCALAR"
 		},
 		{
-			"bufferView":7,
+			"bufferView":11,
 			"componentType":5126,
 			"count":4,
 			"max":[
@@ -196,39 +264,39 @@
 			"type":"VEC3"
 		},
 		{
-			"bufferView":8,
+			"bufferView":12,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC3"
 		},
 		{
-			"bufferView":9,
+			"bufferView":13,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":10,
+			"bufferView":14,
 			"componentType":5126,
 			"count":4,
 			"type":"VEC2"
 		},
 		{
-			"bufferView":11,
+			"bufferView":15,
 			"componentType":5121,
 			"count":4,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":12,
+			"bufferView":16,
 			"componentType":5123,
 			"count":4,
 			"normalized":true,
 			"type":"VEC4"
 		},
 		{
-			"bufferView":13,
+			"bufferView":17,
 			"componentType":5123,
 			"count":6,
 			"type":"SCALAR"
@@ -237,86 +305,110 @@
 	"bufferViews":[
 		{
 			"buffer":0,
-			"byteLength":48,
+			"byteLength":288,
 			"byteOffset":0,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":48,
-			"byteOffset":48,
+			"byteLength":288,
+			"byteOffset":288,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":32,
-			"byteOffset":96,
+			"byteLength":192,
+			"byteOffset":576,
 			"target":34962
 		},
 		{
 			"buffer":0,
-			"byteLength":32,
-			"byteOffset":128,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":16,
-			"byteOffset":160,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":32,
-			"byteOffset":176,
-			"target":34962
-		},
-		{
-			"buffer":0,
-			"byteLength":12,
-			"byteOffset":208,
+			"byteLength":72,
+			"byteOffset":768,
 			"target":34963
 		},
 		{
 			"buffer":0,
 			"byteLength":48,
-			"byteOffset":220,
+			"byteOffset":840,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":48,
-			"byteOffset":268,
+			"byteOffset":888,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":32,
-			"byteOffset":316,
+			"byteOffset":936,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":32,
-			"byteOffset":348,
+			"byteOffset":968,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":16,
-			"byteOffset":380,
+			"byteOffset":1000,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":32,
-			"byteOffset":396,
+			"byteOffset":1016,
 			"target":34962
 		},
 		{
 			"buffer":0,
 			"byteLength":12,
-			"byteOffset":428,
+			"byteOffset":1048,
+			"target":34963
+		},
+		{
+			"buffer":0,
+			"byteLength":48,
+			"byteOffset":1060,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":48,
+			"byteOffset":1108,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":32,
+			"byteOffset":1156,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":32,
+			"byteOffset":1188,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":16,
+			"byteOffset":1220,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":32,
+			"byteOffset":1236,
+			"target":34962
+		},
+		{
+			"buffer":0,
+			"byteLength":12,
+			"byteOffset":1268,
 			"target":34963
 		}
 	],
@@ -328,7 +420,7 @@
 	],
 	"buffers":[
 		{
-			"byteLength":440,
+			"byteLength":1280,
 			"uri":"Brick_Plain_1.bin"
 		}
 	]

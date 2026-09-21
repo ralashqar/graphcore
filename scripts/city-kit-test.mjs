@@ -36,6 +36,10 @@ assert.equal(
   0,
   JSON.stringify(report.issues.messages),
 );
+assert.ok(!doc.getRoot().listMaterials().some(m => /collision/i.test(m.getName())), "Source collision hulls must not render");
+const manifest = JSON.parse(await readFile("public/city/downtown/manifest.json", "utf8"));
+assert.ok(manifest.assets.Road_Arrows.markings.includes("Decal_ArrowStraight"));
+assert.ok(manifest.assets.Street_Curve_4LaneShort.markings.includes("Decal_Curve_4LaneShort_DoubleYellow"));
 let buildings = 0;
 for (const node of doc.getRoot().listNodes()) {
   const key = node.getExtras().assetKey;

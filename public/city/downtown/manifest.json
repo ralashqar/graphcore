@@ -13,6 +13,10 @@
         2.7120113372802734e-06,
         9.0
       ],
+      "markings": [
+        "Decal_DoubleYellow_Straight",
+        "Decal_BrokenLine_Straight"
+      ],
       "connectors": [
         [
           -3,
@@ -37,6 +41,7 @@
         2.9802322387695312e-08,
         12.33313274383545
       ],
+      "markings": [],
       "connectors": [
         [
           -9,
@@ -71,6 +76,7 @@
         2.709248860810476e-07,
         9.00000286102295
       ],
+      "markings": [],
       "connectors": [
         [
           -9,
@@ -93,12 +99,16 @@
       "min": [
         -5.213461918174289e-06,
         -0.15000024437904358,
-        -1.1444091796875e-05
+        -1.5092717148945667e-05
       ],
       "max": [
         17.999988555908203,
         2.682209014892578e-07,
         18.0
+      ],
+      "markings": [
+        "Decal_Curve_4LaneShort_DoubleYellow",
+        "Decal_Curve_4LaneShort_Stripe"
       ],
       "connectors": [
         [
@@ -124,6 +134,7 @@
         2.682209014892578e-07,
         6.000000953674316
       ],
+      "markings": [],
       "connectors": [
         [
           -3,
@@ -148,6 +159,7 @@
         2.682209014892578e-07,
         12.000000953674316
       ],
+      "markings": [],
       "connectors": [
         [
           0,
@@ -171,7 +183,8 @@
         1.5,
         2.9802322387695312e-08,
         1.5
-      ]
+      ],
+      "markings": []
     },
     "Prop_Planter_Single": {
       "min": [
@@ -183,7 +196,8 @@
         1.0,
         0.6000000238418579,
         1.0
-      ]
+      ],
+      "markings": []
     },
     "Prop_Bollard": {
       "min": [
@@ -195,7 +209,8 @@
         0.10813376307487488,
         0.8917761445045471,
         0.1136985495686531
-      ]
+      ],
+      "markings": []
     },
     "Prop_ACUnit": {
       "min": [
@@ -207,6 +222,22 @@
         0.482650488615036,
         0.5997380614280701,
         0.3285083770751953
+      ],
+      "markings": []
+    },
+    "Road_Arrows": {
+      "min": [
+        -1.184844970703125,
+        -0.08000001311302185,
+        -4.971428871154785
+      ],
+      "max": [
+        1.1848450899124146,
+        -0.08000001311302185,
+        4.971428871154785
+      ],
+      "markings": [
+        "Decal_ArrowStraight"
       ]
     },
     "Building_0_0_near": {
@@ -235,7 +266,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -251,7 +282,9 @@
           8,
           1
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_0_0_far": {
       "min": [
@@ -279,7 +312,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -295,7 +328,9 @@
           8,
           1
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_0_1_near": {
       "min": [
@@ -323,7 +358,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -339,7 +374,9 @@
           6,
           1
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_0_1_far": {
       "min": [
@@ -367,7 +404,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -383,7 +420,9 @@
           6,
           1
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_1_0_near": {
       "min": [
@@ -411,7 +450,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -427,7 +466,9 @@
           8,
           1
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_1_0_far": {
       "min": [
@@ -455,7 +496,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -471,7 +512,9 @@
           8,
           1
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_1_1_near": {
       "min": [
@@ -499,7 +542,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -515,7 +558,9 @@
           6,
           1
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_1_1_far": {
       "min": [
@@ -543,7 +588,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -559,18 +604,20 @@
           6,
           1
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_2_0_near": {
       "min": [
-        -7.04713773727417,
+        -7.300000190734863,
         -0.01027514785528183,
-        -6.547137260437012
+        -6.800000190734863
       ],
       "max": [
-        7.047138214111328,
-        7.0,
-        7.630436897277832
+        7.300000190734863,
+        6.400000095367432,
+        7.800000190734863
       ],
       "tier": 2,
       "variant": 0,
@@ -587,7 +634,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -603,7 +650,9 @@
           8,
           2
         ]
-      ]
+      ],
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4
     },
     "Building_2_0_far": {
       "min": [
@@ -631,7 +680,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -647,18 +696,20 @@
           8,
           2
         ]
-      ]
+      ],
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4
     },
     "Building_2_1_near": {
       "min": [
-        -6.600000381469727,
+        -6.958461761474609,
         0.0,
-        -7.100000381469727
+        -7.458461761474609
       ],
       "max": [
-        7.630436897277832,
-        7.0000386238098145,
-        7.099999904632568
+        7.958461284637451,
+        7.0,
+        7.458461284637451
       ],
       "tier": 2,
       "variant": 1,
@@ -675,7 +726,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -691,7 +742,9 @@
           6,
           2
         ]
-      ]
+      ],
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4
     },
     "Building_2_1_far": {
       "min": [
@@ -719,7 +772,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -735,7 +788,9 @@
           6,
           2
         ]
-      ]
+      ],
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4
     },
     "Building_3_0_near": {
       "min": [
@@ -763,7 +818,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -779,7 +834,9 @@
           8,
           4
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_3_0_far": {
       "min": [
@@ -807,7 +864,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -823,7 +880,9 @@
           8,
           4
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_3_1_near": {
       "min": [
@@ -851,7 +910,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -867,7 +926,9 @@
           6,
           4
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_3_1_far": {
       "min": [
@@ -895,7 +956,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -911,18 +972,20 @@
           6,
           4
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_4_0_near": {
       "min": [
-        -7.04713773727417,
+        -7.300000190734863,
         -0.01027514785528183,
-        -6.547137260437012
+        -6.800000190734863
       ],
       "max": [
-        7.047138214111328,
-        22.0,
-        7.630436897277832
+        7.300000190734863,
+        21.399999618530273,
+        7.800000190734863
       ],
       "tier": 4,
       "variant": 0,
@@ -939,7 +1002,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -955,7 +1018,9 @@
           8,
           7
         ]
-      ]
+      ],
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4
     },
     "Building_4_0_far": {
       "min": [
@@ -983,7 +1048,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -999,18 +1064,20 @@
           8,
           7
         ]
-      ]
+      ],
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4
     },
     "Building_4_1_near": {
       "min": [
-        -6.600000381469727,
+        -6.958461761474609,
         0.0,
-        -7.100000381469727
+        -7.458461761474609
       ],
       "max": [
-        7.630436897277832,
-        22.000038146972656,
-        7.099999904632568
+        7.958461284637451,
+        22.0,
+        7.458461284637451
       ],
       "tier": 4,
       "variant": 1,
@@ -1027,7 +1094,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -1043,7 +1110,9 @@
           6,
           7
         ]
-      ]
+      ],
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4
     },
     "Building_4_1_far": {
       "min": [
@@ -1071,7 +1140,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -1087,7 +1156,9 @@
           6,
           7
         ]
-      ]
+      ],
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4
     },
     "Building_5_0_near": {
       "min": [
@@ -1115,7 +1186,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -1131,7 +1202,9 @@
           8,
           10
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_5_0_far": {
       "min": [
@@ -1159,7 +1232,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           0,
@@ -1175,7 +1248,9 @@
           8,
           10
         ]
-      ]
+      ],
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2
     },
     "Building_5_1_near": {
       "min": [
@@ -1203,7 +1278,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -1219,7 +1294,9 @@
           6,
           10
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     },
     "Building_5_1_far": {
       "min": [
@@ -1247,7 +1324,7 @@
       ],
       "modulePitch": 2,
       "floorHeight": 3,
-      "layoutVersion": 2,
+      "layoutVersion": 3,
       "wings": [
         [
           4.5,
@@ -1263,7 +1340,9 @@
           6,
           10
         ]
-      ]
+      ],
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2
     }
   }
 }

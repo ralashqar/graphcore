@@ -16,8 +16,12 @@ MODELS = [
     'Sidewalk_Corner_Round_3m', 'Prop_Planter_Single', 'Prop_Bollard',
     'Prop_ACUnit', 'Brick_Window_Trim', 'Brick_Plain_3', 'Brick_Plain_1',
     'Metal_Window_Half', 'Metal_FirstFloor_Window', 'Metal_Plain_3',
-    'Trim_FirstFloor_Window_001', 'Cornice_Brick_Center', 'Cornice_Metal_Center',
-    'Roof_2x2', 'Floor_2x2', 'Door_1',
+    'Trim_FirstFloor_Window', 'Cornice_Brick_Center', 'Cornice_Metal_Center',
+    'Roof_2x2', 'Floor_2x2', 'Door_1', 'DoorFrame_Trim', 'DoorFrame_Metal_Single',
+    'WhiteBrick_Window', 'WhiteBrick_Plain_3', 'Marble_Window', 'Marble_Plain_3',
+    'Cornice_WhiteBrick_Center', 'Cornice_Marble_Center', 'Prop_Awning',
+    'Decal_DoubleYellow_Straight', 'Decal_BrokenLine_Straight', 'Decal_ArrowStraight',
+    'Decal_Curve_4LaneShort_DoubleYellow', 'Decal_Curve_4LaneShort_Stripe',
 ]
 
 def vendor(pack):
@@ -36,9 +40,16 @@ def vendor(pack):
                 files.add(uri)
     for filename in sorted(files):
         shutil.copy2(folder / filename, SOURCE / filename)
-    license_text = (pack / 'License_Standard.txt').read_text()
+    # Remove only obsolete files previously owned by this vendor manifest.
+    previous = SOURCE.parent / 'source-manifest.json'
+    if previous.exists():
+        for filename in json.loads(previous.read_text())['files']:
+            target = (SOURCE / filename).resolve()
+            if filename not in files and target.parent == SOURCE.resolve():
+                target.unlink(missing_ok=True)
+    license_text = (pack / 'License_Source.txt').read_text()
     (SOURCE.parent / 'LICENSE.txt').write_text('\n'.join(line.rstrip() for line in license_text.splitlines()) + '\n')
-    manifest = {'source': 'Quaternius Downtown City MegaKit Standard', 'license': 'CC0-1.0',
+    manifest = {'source': 'Quaternius Downtown City MegaKit Source', 'license': 'CC0-1.0',
                 'models': MODELS, 'files': {f: hashlib.sha256((SOURCE/f).read_bytes()).hexdigest() for f in sorted(files)}}
     (SOURCE.parent / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print('Vendored', len(MODELS), 'models and', len(files), 'dependency files')

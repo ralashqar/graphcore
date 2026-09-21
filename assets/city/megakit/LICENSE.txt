@@ -1,9 +1,8 @@
-This is the standard FREE version of the Downtown City MegaKit, which only contains
-a portion of the models . You can buy the SOURCE version which has all the models and also includes Unity(URP), Unreal Engine and Godot projects
-with collisions and custom shaders for fake interior windows, wear and more already set up.
+Thanks for buying the Source version of the Downtown City MegaKit!
+All textures can be found inside the Blends folder.
 
-You can get the other versions from the website https://quaternius.com
-
+Versions used for the SOURCE version projects (these and anything above work)
+ Godot_v4.5 | Unity (URP) 2022.3.62f3 | Unreal Engine 4.27.2
 -------------------------------------------------------
 License:
 CC0 1.0 Universal (CC0 1.0)
