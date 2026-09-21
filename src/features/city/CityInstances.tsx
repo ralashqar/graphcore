@@ -33,12 +33,14 @@ export function Batch({
   onSelect,
   reduced = false,
   animate = false,
+  alphaMask,
 }: {
   pieces: Piece[];
   instances: Instance[];
   onSelect?: (p: CityProperty) => void;
   reduced?: boolean;
   animate?: boolean;
+  alphaMask?: (u: number, v: number) => boolean;
 }) {
   const { plotAxis } = useCityMapLayout();
   const refs = useRef<(InstancedMesh | null)[]>([]),
@@ -141,6 +143,11 @@ export function Batch({
           }}
           args={[piece.geometry, piece.material, instances.length]}
           userData={{cityInstances:instances}}
+          raycast={alphaMask ? function (this: InstancedMesh, raycaster, intersections) {
+            const hits: typeof intersections = [];
+            InstancedMesh.prototype.raycast.call(this, raycaster, hits);
+            intersections.push(...hits.filter(hit => hit.uv && alphaMask(hit.uv.x, hit.uv.y)));
+          } : undefined}
           castShadow={animate}
           receiveShadow
           onClick={

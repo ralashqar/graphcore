@@ -29,7 +29,7 @@ async function ready() {
 // Demo geometry tests are isolated from hosted API availability.
 await page.route("**/functions/v1/city-*", route => route.fulfill({ json: { error: "Demo fixture: backend unavailable" } }));
 try {
-  await page.goto(`${origin}/city?demo=1`);
+  await page.goto(`${origin}/city?demo=1&cityRender=offices`);
   const loaded = await ready();
   // A pan must not decode the same artwork again after the atlas set changes.
   let repeatImages = 0;
@@ -62,7 +62,7 @@ try {
   await page.route("**/fieldwork-hero.svg", (r) =>
     r.fulfill({ contentType: "image/png", body: "invalid-image-fixture" }),
   );
-  await page.goto(`${origin}/city?demo=1`);
+  await page.goto(`${origin}/city?demo=1&cityRender=offices`);
   const fallback = await ready();
   assert.ok(fallback.failedImages >= 1);
   assert.equal(fallback.ready, 32);

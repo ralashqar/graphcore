@@ -288,7 +288,11 @@ export function CityApp() {
   }, [selected?.profile.name]);
   const navigate = (url: string) => {
     const target = new URL(url, location.origin);
-    if (demo.current) target.searchParams.set("demo", "1");
+    if (demo.current) {
+      target.searchParams.set("demo", "1");
+      const rendering = new URLSearchParams(location.search).get("cityRender");
+      if (rendering) target.searchParams.set("cityRender", rendering);
+    }
     cityNavigate(target.pathname + target.search + target.hash);
   };
   const reportExposure = useCallback(
@@ -698,6 +702,12 @@ export function CityApp() {
             <div className="city-demo-banner">
               DEMONSTRATION CITY{" "}
               <span>Fictional businesses · no real purchases or offers</span>
+              <label>View <select aria-label="Demo city rendering" value={new URLSearchParams(window.location.search).get("cityRender") || "sprites"}
+                onChange={e => { const url=new URL(window.location.href);url.searchParams.set("cityRender",e.target.value);window.location.assign(url.toString()); }}>
+                <option value="sprites">Illustrated buildings</option>
+                <option value="empty">Roads &amp; plots</option>
+                <option value="offices">3D offices</option>
+              </select></label>
               <a href="/city">
                 View live city <ArrowUpRight size={14} />
               </a>

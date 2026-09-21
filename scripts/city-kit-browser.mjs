@@ -16,7 +16,7 @@ page.on("console", (m) => {
 // Demo geometry tests are isolated from hosted API availability.
 await page.route("**/functions/v1/city-*", route => route.fulfill({ json: { error: "Demo fixture: backend unavailable" } }));
 try {
-  await page.goto(`${origin}/city?demo=1`);
+  await page.goto(`${origin}/city?demo=1&cityRender=offices`);
   await page
     .getByRole("button", { name: "01 Fieldwork", exact: true })
     .waitFor();

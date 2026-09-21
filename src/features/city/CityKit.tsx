@@ -1,3 +1,4 @@
+import { CitySpriteBuildings } from "./CitySpriteBuildings";
 import { useCityMapLayout } from "./CityMapLayout";
 import { officePreset } from "./CityOfficePresets";
 import { estateBillboard } from "../../domain/cityLayout";
@@ -60,8 +61,10 @@ export function CityKit({
   matchIds?: Set<string>;
 }) {
   const { plotAxis, plotSize, roadCapacityMultiplier } = useCityMapLayout();
+  const spriteMode = estateDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
+  const emptyMode = spriteMode && new URLSearchParams(window.location.search).get("cityRender") === "empty";
   const playback = useMarketMotion();
-  const { scene } = useGLTF(estateDemo ? "/city/offices/offices.glb?v=2" : "/city/downtown/downtown.glb?v=source-v3", false, true);
+  const { scene } = useGLTF(spriteMode ? "/city/sprites/streets.glb?v=1" : estateDemo ? "/city/offices/offices.glb?v=2" : "/city/downtown/downtown.glb?v=source-v3", false, true);
   const signEnvelope = estateDemo ? estateBillboard : billboardEnvelope;
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
@@ -293,6 +296,7 @@ export function CityKit({
         <Batch key={asset} pieces={piece(asset)} instances={instances} />
       ))}
       <Batch pieces={piece("Sidewalk_NoCurb_3m")} instances={plaza.paving} />
+      {!spriteMode && <>
       <Batch pieces={piece("Prop_Bollard")} instances={plaza.bollards} />
       <Batch pieces={piece("Prop_Planter_Single")} instances={planting} />
       <Batch pieces={[trunk]} instances={trunks} />
@@ -301,6 +305,8 @@ export function CityKit({
         pieces={[{ geometry: unitBox, material: paving }]}
         instances={paths}
       />
+      </>}
+      {!spriteMode && <>
       {[...buildings].map(([asset, instances]) => (
         <Batch
           key={asset}
@@ -320,8 +326,10 @@ export function CityKit({
         onSelect={onSelect}
         reduced={reduced}
       />
+      </>}
+      {spriteMode && !emptyMode && <CitySpriteBuildings properties={properties} selected={selected} matchIds={matchIds} onSelect={onSelect} reduced={reduced} />}
       {properties
-        .filter((p) => labels && (p.rank <= 3 || p.id === selected?.id))
+        .filter((p) => !emptyMode && labels && (p.rank <= 3 || p.id === selected?.id))
         .map((p) => (
           <Html
             style={playback && performance.now() - playback.started < 3000
@@ -330,7 +338,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
+              spriteMode ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center

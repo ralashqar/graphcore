@@ -4,6 +4,13 @@ import { isLandingOnly } from './config/appProfile'
 
 const root = createRoot(document.getElementById('root')!)
 
+// Keep the human-readable demo URL equivalent to the existing query route.
+if (window.location.pathname === '/city/demo') {
+  const url = new URL(window.location.href);
+  url.pathname = '/city';
+  url.searchParams.set('demo', '1');
+  window.history.replaceState(null, '', url);
+}
 if (window.location.pathname === '/city/asset-showcase') {
   void import('./features/city/CityAssetShowcase').then(({ CityAssetShowcase }) => root.render(<CityAssetShowcase />))
 } else if (window.location.pathname === '/city' || window.location.pathname.startsWith('/city/')) {

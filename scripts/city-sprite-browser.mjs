@@ -1,0 +1,35 @@
+import { chromium } from "playwright";
+import assert from "node:assert/strict";
+const browser = await chromium.launch({headless:true,args:process.platform==='win32'?['--use-angle=d3d11']:[]});
+const page = await browser.newPage({viewport:{width:1440,height:960}});
+const errors=[], assets=new Set();
+page.on('pageerror',e=>errors.push(e.message));
+page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+page.on('request',r=>{if(/\.(glb|png)(\?|$)/.test(r.url()))assets.add(r.url())});
+await page.route('**/functions/v1/city-*',r=>r.fulfill({json:{error:'Offline demo fixture'}}));
+const origin=process.env.CITY_TEST_ORIGIN || 'http://localhost:5183';
+try {
+  await page.goto(`${origin}/city/demo`);
+  await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.citySprites);
+  await page.waitForTimeout(1600);
+  assert.ok(page.url().includes('demo=1'));
+  const stats=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.citySprites));
+  assert.equal(stats.textures,3);assert.equal(stats.size,512);assert.ok(stats.properties>20);
+  assert.ok([...assets].some(a=>a.includes('streets.glb')));
+  assert.ok(![...assets].some(a=>/offices.glb|downtown.glb|showcase.glb/.test(a)));
+  await page.screenshot({path:'output/playwright/city-sprites.png'});
+  await page.mouse.click(893,452);
+  await page.getByRole('complementary',{name:'Fieldwork property',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Close property',exact:true}).click();
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForTimeout(1200);
+  await page.screenshot({path:'output/playwright/city-sprites-mobile.png'});
+  await page.setViewportSize({width:1440,height:960});
+  await page.getByLabel('Demo city rendering').selectOption('empty');
+  await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.cityCamera);
+  assert.equal(await page.locator('canvas').getAttribute('data-city-sprites'),null);
+  await page.waitForTimeout(1200);
+  await page.screenshot({path:'output/playwright/city-empty-plots.png'});
+  assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({stats,errors,selection:'passed',emptyMode:'passed',mobileViewport:'passed'}));
+} finally {await browser.close();}

@@ -448,6 +448,7 @@ function CitySceneContent({
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
   const { plotAxis: position, plotSize } = useCityMapLayout();
+  const spriteMode = estateDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
   const living=useLiving();
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
@@ -494,11 +495,11 @@ function CitySceneContent({
           near={0.1}
           far={5000}
         />
-        <CityStreetActivity
+        {!spriteMode && <CityStreetActivity
           properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
           reduced={reduced}
           paused={!!playback || launchFocus}
-        />
+        />}
         <ambientLight intensity={1.5} />
         <directionalLight
           position={[-120, 240, 80]}
@@ -513,8 +514,8 @@ function CitySceneContent({
           shadow-bias={-0.0003}
         />
         <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
-        {pavilion && <CityPavilion {...pavilion} />}
-        {(launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
+        {!spriteMode && pavilion && <CityPavilion {...pavilion} />}
+        {!spriteMode && (launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
         {!living.storefronts && !markers &&
           zoom >= 3 &&
           visible
