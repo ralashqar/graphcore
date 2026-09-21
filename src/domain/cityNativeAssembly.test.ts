@@ -38,7 +38,7 @@ test("native assembled walls have coverage at panel joins, corners and floor bou
   fixtures.push({d:normalizeV3({...applyComposition(newDesign("preset-seams"),preset),architecture,finish:"facade",slots:{}}),lod:"near"});
  for(const choice of NATIVE_FACADES)for(const blueprint of ["office","courtyard","l-shape","terraces"] as const)
   fixtures.push({d:normalizeV3({...newDesign("catalogue-seams"),nativeFacade:choice.id,blueprint,width:12,depth:10,groundHeight:4.2,finish:"facade",slots:{}}),lod:"near"});
- for(const {d,lod} of fixtures.filter(f=>!process.env.CITY_NATIVE_CATALOGUE_ONLY || f.d.nativeFacade!=="automatic")){
+ for(const {d,lod} of fixtures.filter(f=>(!process.env.CITY_NATIVE_CATALOGUE_ONLY || f.d.nativeFacade!=="automatic") && (!process.env.CITY_NATIVE_MODULE || f.d.nativeFacade===process.env.CITY_NATIVE_MODULE))){
   const {architecture,blueprint,groundHeight}=d;
   const r=resolveV3(d,"#778899",lod);
   const meshes=r.attachments.filter(a=>["facade","door","band"].includes(a.role)).flatMap(a=>(assets.get(a.asset)||[]).map(g=>{

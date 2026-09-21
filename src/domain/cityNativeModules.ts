@@ -245,6 +245,86 @@ export const NATIVE_MODULES: Record<string,{width:number;span:number;center:numb
     "depth": 0.24438227713108063,
     "face": 0.24438227713108063
   },
+  "WhiteBrick_Window_L": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 4.0005903244018555,
+    "depth": 0.25985443592071533,
+    "face": 0.25985443592071533
+  },
+  "WhiteBrick_Window_R": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 4.0005903244018555,
+    "depth": 0.25985443592071533,
+    "face": 0.25985443592071533
+  },
+  "Trim_BayWindow": {
+    "span": 4,
+    "center": 0,
+    "width": 4.227288246154785,
+    "height": 3.000208854675293,
+    "depth": 1.393239974975586,
+    "face": 0.1991920918226242
+  },
+  "WornBrick_WindowLarge_Top": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.23469236493110657,
+    "face": 0.20000022649765015
+  },
+  "Brick_Plain_3_noWear": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "Brick_Inset": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "Metal_FirstFloor_Wall_1": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 1.0000001192092896,
+    "depth": 0.2420099973678589,
+    "face": 0.2420099973678589
+  },
+  "Trim_FirstFloor_Wall": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.000000476837158,
+    "depth": 0.24779610335826874,
+    "face": 0.24779610335826874
+  },
+  "WornBrick_Inset_Plain": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "Concrete_Plain_4": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 4.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
   "Brick_Window_CurvedDouble": {
     "span": 4,
     "center": 0,

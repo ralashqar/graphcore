@@ -586,6 +586,7 @@ export function CityBuildingDesigner(
             {tab === "Presets" && (
               <div className="city-art-controls">
                 <p className="city-studio-note">Choose a complete building, then fine-tune it below. Presets set the footprint, architecture and grounds; your business identity and colours stay intact.</p>
+                <button type="button" onClick={()=>{const library=document.getElementById("city-native-facade-library");library?.scrollIntoView({block:"center"});library?.focus({preventScroll:true});}}>Browse {NATIVE_FACADES.length} Quaternius façade blocks</button>
                 <label>Building type<select aria-label="Building type" value={category} onChange={e => setCategory(e.target.value)}>
                   {["All", "Food & Retail", "Workspaces", "Civic", "Hospitality"].map(c => <option key={c}>{c}</option>)}
                 </select></label>
@@ -771,7 +772,26 @@ export function CityBuildingDesigner(
                   </select>
                 </label>
                 <label>
-                  Quaternius detail set<select aria-label="Quaternius detail set" value={d.detailSet ?? "matching"}
+                  Façade library — {NATIVE_FACADES.length} source modules<select id="city-native-facade-library" aria-label="Quaternius facade module" value={d.nativeFacade ?? "automatic"}
+                    onChange={e=>commit({...d,nativeFacade:e.target.value as NativeFacadeId,finish:"facade"})}>
+                    <option value="automatic">Automatic - prefer framed and recessed modules</option>
+                    {(["brick","creative","boutique","glass"] as const).map(family=><optgroup key={family} label={ARCHITECTURE_LABELS[family]}>
+                      {NATIVE_FACADES.filter(p=>p.family===family).map(p=><option key={p.id} value={p.id}>{p.label} — {p.asset}</option>)}
+                    </optgroup>)}
+                  </select>
+                </label>
+                <details open>
+                  <summary>Browse all {NATIVE_FACADES.length} façade blocks</summary>
+                  <div className="city-preset-picker" role="group" aria-label="Quaternius source modules">
+                    {NATIVE_FACADES.map(module=><button type="button" key={module.id} aria-pressed={d.nativeFacade===module.id}
+                      onClick={()=>commit({...d,nativeFacade:module.id,finish:"facade"})}>
+                      <strong>{module.label}</strong><small>{module.asset}</small><small>{module.relief}</small>
+                    </button>)}
+                  </div>
+                </details>
+                <small>Choose the actual source window or wall block here. Selecting a module enables Quaternius façade mode. Recessed, arched, bay and shopfront options are independent of the building preset.</small>
+                <label>
+                  Automatic family preset<select aria-label="Quaternius detail set" value={d.detailSet ?? "matching"}
                     onChange={(e) => commit({ ...d, detailSet: e.target.value as typeof d.detailSet, nativeFacade: "automatic", finish: d.finish === "procedural" ? "accents" : d.finish })}>
                     <option value="matching">Match architectural style</option>
                     <option value="brick">Brick and framed windows</option>
@@ -780,16 +800,8 @@ export function CityBuildingDesigner(
                     <option value="metal">Metal office detailing</option>
                   </select>
                 </label>
-                <label>
-                  Quaternius facade module<select aria-label="Quaternius facade module" value={d.nativeFacade ?? "automatic"}
-                    onChange={e=>commit({...d,nativeFacade:e.target.value as NativeFacadeId,finish:"facade"})}>
-                    <option value="automatic">Automatic - prefer framed and recessed modules</option>
-                    {(["brick","creative","boutique","glass"] as const).map(family=><optgroup key={family} label={ARCHITECTURE_LABELS[family]}>
-                      {NATIVE_FACADES.filter(p=>p.family===family).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}
-                    </optgroup>)}
-                  </select>
-                </label>
-                <small>The detail set chooses a family. The facade module chooses the actual windows and wall assembly; selecting one enables full Quaternius facade mode.</small>
+
+                <small>Choosing a family preset resets the module to Automatic. Choose a source block above for a specific façade.</small>
                 {NATIVE_FACADES.filter(p=>p.id===d.nativeFacade).map(p=><small key={p.id}>
                   {p.relief}. Native module {NATIVE_MODULES[p.asset].span.toFixed(1)} x {NATIVE_MODULES[p.asset].height.toFixed(1)} m, {NATIVE_MODULES[p.asset].depth.toFixed(2)} m model depth. Frames keep their proportions; exposed panel edges receive inward returns.
                 </small>)}

@@ -1,5 +1,18 @@
 export type NativeFacadeFamily = "brick" | "creative" | "boutique" | "glass";
 export const NATIVE_FACADES = [
+ {id:"white-left",label:"White brick · left window section",family:"creative",asset:"WhiteBrick_Window_L",relief:"Left masonry return and framed glazing"},
+ {id:"white-right",label:"White brick · right window section",family:"creative",asset:"WhiteBrick_Window_R",relief:"Right masonry return and framed glazing"},
+ {id:"trim-bay",label:"Stone trim · projecting bay",family:"creative",asset:"Trim_BayWindow",wall:"Trim_Plain_3",relief:"Deep projecting stone bay"},
+ {id:"worn-top",label:"Weathered brick · upper window section",family:"brick",asset:"WornBrick_WindowLarge_Top",wall:"WornBrick_Plain_3",entry:"DoorFrame_WornBrick",cornice:"Cornice_WornBrick_Center",relief:"Upper window and masonry module"},
+ {id:"brick-clean",label:"Brick · clean solid masonry",family:"brick",asset:"Brick_Plain_3_noWear",wall:"Brick_Plain_3_noWear",relief:"Continuous brick wall without weathering"},
+ {id:"brick-inset-wall",label:"Brick · recessed solid wall",family:"brick",asset:"Brick_Inset",relief:"Inset masonry panel"},
+ {id:"metal-retail-wall",label:"Metal · retail wall panel",family:"glass",asset:"Metal_FirstFloor_Wall_1",relief:"Solid retail-base wall module"},
+ {id:"trim-retail-wall",label:"Stone trim · retail wall panel",family:"creative",asset:"Trim_FirstFloor_Wall",wall:"Trim_Plain_3",relief:"Solid framed retail wall"},
+ {id:"worn-inset-wall",label:"Weathered brick · recessed solid wall",family:"brick",asset:"WornBrick_Inset_Plain",wall:"WornBrick_Plain_3",relief:"Recessed weathered wall module"},
+ {id:"concrete-solid",label:"Concrete · tall solid panel",family:"glass",asset:"Concrete_Plain_4",wall:"Concrete_Plain_3",relief:"Tall concrete structural panel"},
+ {id:"white-solid",label:"White brick · solid masonry",family:"creative",asset:"WhiteBrick_Plain_3",relief:"Continuous light brick wall"},
+ {id:"marble-solid",label:"Marble · solid stone",family:"boutique",asset:"Marble_Plain_3",relief:"Continuous stone wall"},
+
  {id:"brick-inset",label:"Brick · recessed window",family:"brick",asset:"Brick_Inset_Window",relief:"Recessed masonry surround"},
  {id:"brick-inset-arch",label:"Brick · recessed arch",family:"brick",asset:"Brick_Inset_Window_Curved",relief:"Curved recessed surround"},
  {id:"brick-inset-small",label:"Brick · small recessed arch",family:"brick",asset:"Brick_Inset_Window_Curved_Small",relief:"Small arch in deep masonry"},

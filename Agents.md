@@ -1183,3 +1183,7 @@ Optional v3 solidSideWalls and stairExtension (none/concrete/marble) are strict 
 ### Curated native facade catalogue (September 2026)
 
 Optional v3 nativeFacade selects a curated measured Quaternius module, independently of the four material families. The strict City profile parser preserves only catalogue IDs; arbitrary paths are rejected. Omitted legacy choices retain their prior automatic selection, while new recipes prefer dimensional framed or recessed modules. Whole modules fit uniformly with native wall infill, shared sealed perimeter geometry and original vertex colours/UVs. No migration or provider call is required. The profile-consuming City endpoints (city-api, city-command, city-building-art, city-reconcile, city-stripe-webhook), frontend and Fly world worker city-design-3.8 require paired designated-staging rollout. Staging remains undesignated; no production activation or paid generation. See docs/city-texture-presets.md for catalogue and verification details.
+
+### Expanded City native source catalogue (September 2026)
+
+The facade recipe allowlist now contains 39 source module choices, including asymmetric white-brick sections, trim bays, weathered upper windows and solid/inset walls. Existing IDs remain readable. The shared profile validator imports this allowlist; deploy matching City endpoints and the shared-profile-consuming world worker city-design-3.9 together to designated staging. No migration or provider change is required; staging remains pending. Source inventory: docs/city-native-source-catalogue.md.

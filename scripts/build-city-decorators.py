@@ -13,7 +13,7 @@ NAMES={
 'windowExtra':['Brick_Window_Trim_Single','Metal_FirstFloor_Window','Trim_FirstFloor_Window'],
 'band':['Brick_BottomTrim','Brick_TopTrim','Marble_Plain_1','WhiteBrick_Plain_1','Metal_Plain_1'],
 'shell':['Brick_Window_Square_Single','Brick_RedWhite_DoubleWindow','WhiteBrick_Window_Center','Marble_Window_Single','Marble_ShopWindow','Metal_Window','Metal_FirstFloor_Wall','DoorFrame_Marble','DoorFrame_WhiteBrick','Prop_EntranceArch','Prop_ColumnArch','Roof_2x2','Floor_4x4','WhiteBrick_Corner_Plain','Marble_Corner_Plain'],
-'facadeChoices':['Brick_Window_CurvedDouble','Brick_Inset_Window','Brick_Inset_Window_Curved','Brick_Inset_Window_Curved_Small','Brick_BayWindow','Marble_WindowTriple','Metal_FullWindow','Metal_Panel_4','Metal_Panel_Window_4','Metal_BayWindow_Bottom','Trim_Window','Trim_Plain_3','Trim_FirstFloor_Window_Columns','WornBrick_WindowLarge','WornBrick_WindowTriple','WornBrick_Plain_3','DoorFrame_WornBrick','Cornice_WornBrick_Center','Floor_BayWindow','Floor_Inset','Trim_BayWindow_Top','Trim_BayWindow_Corner_L','Trim_BayWindow_Corner_R'],
+'facadeChoices':['WhiteBrick_Window_L','WhiteBrick_Window_R','Trim_BayWindow','WornBrick_WindowLarge_Top','Brick_Plain_3_noWear','Brick_Inset','Metal_FirstFloor_Wall_1','Trim_FirstFloor_Wall','WornBrick_Inset_Plain','Concrete_Plain_4','Brick_Window_CurvedDouble','Brick_Inset_Window','Brick_Inset_Window_Curved','Brick_Inset_Window_Curved_Small','Brick_BayWindow','Marble_WindowTriple','Metal_FullWindow','Metal_Panel_4','Metal_Panel_Window_4','Metal_BayWindow_Bottom','Trim_Window','Trim_Plain_3','Trim_FirstFloor_Window_Columns','WornBrick_WindowLarge','WornBrick_WindowTriple','WornBrick_Plain_3','DoorFrame_WornBrick','Cornice_WornBrick_Center','Floor_BayWindow','Floor_Inset','Trim_BayWindow_Top','Trim_BayWindow_Corner_L','Trim_BayWindow_Corner_R'],
 'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble'],
 'ground':['Floor_2x2','Prop_Awning','Prop_Planter_Single','Prop_Bollard'],
 }
@@ -22,7 +22,7 @@ C=Matrix(((1,0,0,0),(0,0,-1,0),(0,1,0,0),(0,0,0,1)))
 exports=[];manifest={};mats={}
 for kind,names in NAMES.items():
  for name in names:
-  file=SOURCE/'Exports/glTF (Godot)'/(name+'.gltf')
+  file=SOURCE/'Exports/glTF'/(name+'.gltf')
   bpy.ops.import_scene.gltf(filepath=str(file))
   objects=[o for o in bpy.context.selected_objects if o.type=='MESH' and 'convcolonly' not in o.name and not o.name.upper().startswith('UCX_')]
   for o in list(bpy.context.selected_objects):
@@ -62,6 +62,6 @@ for entry in manifest.values():
  entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension','shell':'shell.module','facadeChoices':'facade.bay'}[entry['kind']]
  entry['clearanceSize']=entry['size']
  entry['detailLevel']='near'
-(OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','assets':manifest},indent=2)+'\n')
+(OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','sourceDirectory':'Exports/glTF','assets':manifest},indent=2)+'\n')
 (OUT/'LICENSE.txt').write_text((SOURCE/'License_Source.txt').read_text())
 print(json.dumps({k:v['size'] for k,v in manifest.items()},indent=2))

@@ -170,11 +170,12 @@ try {
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
     const picker=page.getByLabel("Quaternius facade module",{exact:true});
     const ids=await picker.locator("option").evaluateAll(options=>options.map(o=>o.value));
-    assert.equal(ids.length,28);
+    assert.equal(ids.length,40);
+    assert.equal(await page.getByRole("group",{name:"Quaternius source modules"}).getByRole("button").count(),39);
     for(const id of ids){
       await picker.selectOption(id);
       await page.waitForTimeout(240);
-      if(["brick-classic","brick-inset","brick-bay","metal-bay","marble-triple","worn-triple"].includes(id))
+      if(["white-left","white-right","trim-bay","worn-top","brick-clean","worn-inset-wall","brick-classic","brick-inset","brick-bay","metal-bay","marble-triple","worn-triple"].includes(id))
         await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-module-${id}.png`});
     }
     await picker.selectOption("brick-classic");
@@ -192,7 +193,7 @@ try {
     await page.setViewportSize({width:390,height:844});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     assert.deepEqual(errors,[]);
-    console.log("All 27 native modules, mocked save/reload, undo/redo and mobile layout passed.");
+    console.log("All 39 native modules, mocked save/reload, undo/redo and mobile layout passed.");
     await browser.close();process.exit(0);
   }
   if (process.env.CITY_TEXTURE_AUDIT === "1") {
