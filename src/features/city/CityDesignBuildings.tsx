@@ -2,6 +2,7 @@ import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
 import { useEffect, useMemo, useState } from "react";
 import {
   BoxGeometry,
+  CylinderGeometry,
   BufferGeometry,
   Color,
   Float32BufferAttribute,
@@ -74,6 +75,14 @@ export function CityDesignBuildings(
     () => ({
       box: new BoxGeometry(1, 1, 1),
       tree: new IcosahedronGeometry(1, 1),
+      column: new CylinderGeometry(.5, .5, 1, 12),
+      pediment: (() => {
+        const g = new BufferGeometry();
+        g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions(), 3));
+        g.rotateY(Math.PI / 2);
+        g.computeVertexNormals();
+        return g;
+      })(),
       roof: (() => {
         const g = new BufferGeometry();
         g.setAttribute(
@@ -89,12 +98,14 @@ export function CityDesignBuildings(
   );
   useEffect(() => () => {
     resources.box.dispose();
+    resources.column.dispose();
+    resources.pediment.dispose();
     resources.tree.dispose();
     resources.roof.dispose();
     resources.material.dispose();
   }, [resources]);
   const batches = useMemo(() => {
-    const out: Record<string, Instance[]> = { box: [], tree: [], roof: [] };
+    const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [] };
     for (const p of properties) {
       const d = p.profile.buildingDesign;
       if (!d || p.profile.buildingArt) continue;
@@ -181,7 +192,7 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])]]
             : [{
-              geometry: resources[kind as "box" | "tree" | "roof"],
+              geometry: resources[kind as "box" | "tree" | "roof" | "column" | "pediment"],
               material: resources.material,
             }]}
           instances={items}

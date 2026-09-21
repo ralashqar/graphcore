@@ -1,3 +1,4 @@
+import { frontStructure } from "../../domain/cityBuildingEntrances";
 import type { OrbitControls as OrbitControlsHandle } from "three-stdlib";
 import {
   Component,
@@ -274,6 +275,10 @@ export function CityBuildingDesigner(
     setShowSlots(true);
   };
   const slots = useMemo(() => buildingSlots(d), [d]);
+  const entranceReason = useMemo(() => {
+    const base = buildingMasses(d)[0];
+    return frontStructure(d.entranceStyle, d.blueprint, base.z + base.depth / 2, base.width, d.groundHeight, d.palette.wall, d.palette.trim).reason;
+  }, [d]);
   const selected = slots.find((s) => s.id === selectedSlot)!;
   const setSlot = (id: SlotId, component: ComponentId | null) => {
     const slots = { ...d.slots };
@@ -585,14 +590,14 @@ export function CityBuildingDesigner(
                   {ranges(
                     "Footprint width",
                     "width",
-                    12,
+                    d.blueprint === "office" ? 8 : 12,
                     18,
                     d.finish === "procedural" ? 1 : 2,
                   )}
                   {ranges(
                     "Footprint depth",
                     "depth",
-                    10,
+                    d.blueprint === "office" ? 8 : 10,
                     18,
                     d.finish === "procedural" ? 1 : 2,
                   )}
@@ -784,6 +789,16 @@ export function CityBuildingDesigner(
                     </option>
                   </select>
                 </label>
+                <label>
+                  Entrance structure<select aria-label="Entrance structure" value={d.entranceStyle ?? "standard"}
+                    onChange={(e) => update("entranceStyle", e.target.value as typeof d.entranceStyle)}>
+                    <option value="standard">Standard entrance</option>
+                    <option value="wide-canopy">Wide storefront canopy</option>
+                    <option value="portico">Columned portico</option>
+                    <option value="pediment">Columned portico with gable</option>
+                  </select>
+                </label>
+                {entranceReason && <p role="status">Inactive: {entranceReason}</p>}
                 <label className="city-checkbox">
                   <input
                     type="checkbox"

@@ -1511,3 +1511,5 @@ body:has(.city-app) {
 
 /* A soft sky behind the transparent, demand-rendered building preview. */
 .city-design-canvas { background:linear-gradient(180deg,#8dbce0 0%,#c8deeb 55%,#e8efeb 100%); border-radius:12px; overflow:hidden; }
+
+.city-design-studio .city-preset-picker { max-height:460px; overflow-y:auto; overscroll-behavior:contain; padding:2px 6px 2px 2px; scrollbar-width:thin; }

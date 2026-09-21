@@ -370,6 +370,18 @@ try {
   for (const style of ["terracotta", "basalt", "ribbon"]) await page.getByLabel("Tile styling", { exact: true }).selectOption(style);
   for (const boundary of ["brick-court", "open-rail"]) await page.getByLabel("Boundary and entrance", { exact: true }).selectOption(boundary);
   await page.screenshot({ path: "output/playwright/city-design-grounds-presets.png" });
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
+  if (await page.getByRole("button", {name:"Attachment slots", exact:true}).getAttribute("aria-pressed") === "true") await page.getByRole("button", {name:"Attachment slots", exact:true}).click();
+  for (const name of ["Terrace cafe", "Gabled cafe", "Village shop", "Canopy kiosk", "Gabled kiosk", "City museum", "Boutique hotel", "Civic bank"]) {
+    await page.getByRole("button", { name: new RegExp(`^${name} `) }).click();
+    await page.waitForTimeout(80);
+    if (["Gabled cafe", "Canopy kiosk", "City museum"].includes(name)) await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-preset-${name.toLowerCase().replaceAll(" ", "-")}.png`});
+  }
+  await page.getByLabel("Footprint depth", { exact: true }).fill("18");
+  await page.getByText(/Inactive: This entrance needs/).waitFor();
+  await page.getByLabel("Footprint depth", { exact: true }).fill("12");
+  assert.equal(await page.getByText(/Inactive: This entrance needs/).count(), 0);
+  await page.screenshot({ path: "output/playwright/city-design-bank.png" });
   assert.deepEqual(errors, []);
   console.log(
     "3D designer: live presets, geometry changes, blueprint, save/reload, mobile and city rendering passed (mock API).",

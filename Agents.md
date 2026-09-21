@@ -2,6 +2,10 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## City small-business and civic presets (September 2026)
+
+Eight additional complete presets add cafes, shops, 8 m rectangular kiosks, museum/bank porticos and a hotel. Optional v3 `entranceStyle` selects standard, wide canopy, columns or pediment. Shared validation permits 8 m dimensions only on rectangular v3 buildings; legacy bounds remain unchanged. Porticos keep the entrance clear and become inactive when their forecourt cannot fit; branding uses their front beam and conflicting slots retain inactive selections. The City profile boundary is shared with the world worker, requiring paired isolated-staging rollout of the five City endpoints, frontend and world worker `2026-09-21-city-design-3.2`. No migration, production activation or provider generation is included. Staging remains pending.
+
 ## City grounds and curated detail presets (September 2026)
 
 Optional v3 recipe fields `enclosure`, `pavingPattern`, `detailSet` and `detailScope` add bounded open entrances, low perimeter walls/rails, procedural paving and selected Quaternius families at entrance, crown or facade locations. Missing choices preserve existing rendering. The shared strict profile schema accepts only curated enum values; owner/revision/publication checks are unchanged. No migration or provider call is introduced. Matching City endpoints, frontend and the profile-consuming Fly world worker (`2026-09-21-city-design-3.1`) require paired isolated-staging deployment. Staging identifiers remain unavailable; no production deployment is included. See docs/synarc-city-building-composition.md.

@@ -1,3 +1,4 @@
+import { frontStructure, ENTRANCE_STYLES } from "./cityBuildingEntrances.ts";
 import { groundsParts, type GroundsChoices } from "./cityBuildingGrounds.ts";
 import type {
   BuildingMass,
@@ -39,6 +40,7 @@ export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & {
   version: 3;
   generatorRevision: "city-grammar-1";
+  entranceStyle?: typeof ENTRANCE_STYLES[number];
   base: "storefront" | "lobby" | "plinth";
   middleFloors: number;
   rhythm: "vertical" | "ribbon" | "alternating";
@@ -137,6 +139,8 @@ export function normalizeV3(d: CityBuildingDesignV3): CityBuildingDesignV3 {
     ...d,
     ...normalizeDesign({ ...d, version: 2 }),
     version: 3,
+    width: Math.max(d.blueprint === "office" ? 8 : 12, d.finish === "procedural" ? d.width : Math.round(d.width / 2) * 2),
+    depth: Math.max(d.blueprint === "office" ? 8 : 10, d.finish === "procedural" ? d.depth : Math.round(d.depth / 2) * 2),
     floors: 1 + d.middleFloors + (d.crown === "none" ? 0 : 1),
     canopy: d.slots["canopy.entrance"] === "canopy",
   };
@@ -218,6 +222,14 @@ export const COMPOSITIONS: {
       roof: "parapet",
     },
   },
+  { name: "Terrace cafe", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "flat", entranceStyle: "wide-canopy", pavingPattern: "terracotta", grounds: "planted" } },
+  { name: "Gabled cafe", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "brick", roof: "pitched", entranceStyle: "wide-canopy", pavingPattern: "ribbon" } },
+  { name: "Village shop", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 1, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "checker" } },
+  { name: "Canopy kiosk", patch: { blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "creative", roof: "flat", entranceStyle: "wide-canopy", grounds: "urban" } },
+  { name: "Gabled kiosk", patch: { blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "brick", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "terracotta" } },
+  { name: "City museum", patch: { blueprint: "office", width: 16, depth: 12, middleFloors: 1, crown: "recessed", podium: true, base: "lobby", architecture: "creative", roof: "flat", entranceStyle: "portico", slots: { "canopy.entrance": null }, pavingPattern: "ribbon", grounds: "minimal" } },
+  { name: "Civic bank", patch: { blueprint: "office", width: 18, depth: 12, middleFloors: 1, crown: "none", podium: false, base: "plinth", architecture: "boutique", roof: "parapet", entranceStyle: "pediment", slots: { "canopy.entrance": null }, pavingPattern: "checker", grounds: "urban" } },
+  { name: "Boutique hotel", patch: { blueprint: "terraces", width: 14, depth: 12, middleFloors: 3, crown: "terrace", podium: true, base: "lobby", architecture: "boutique", roof: "planted", grounds: "planted", pavingPattern: "basalt" } },
 ];
 export function applyComposition(d: CityBuildingDesignV3, index: number) {
   const p = COMPOSITIONS[index];
@@ -231,8 +243,9 @@ export function applyComposition(d: CityBuildingDesignV3, index: number) {
     finish: d.finish,
     slots: {
       ...newDesign(String(d.seed)).slots,
-      "ground.left": p.patch.grounds === "urban" ? "bollards" : "planter",
-      "ground.right": p.patch.grounds === "urban" ? "bollards" : "planter",
+      "ground.left": p.patch.grounds === "minimal" ? null : p.patch.grounds === "urban" ? "bollards" : "planter",
+      "ground.right": p.patch.grounds === "minimal" ? null : p.patch.grounds === "urban" ? "bollards" : "planter",
+      ...p.patch.slots,
     },
   });
 }
@@ -324,6 +337,7 @@ export function buildingSlots(
     top = masses.find((m) => m.y === masses.at(-1)!.y)!,
     front = ground.z + ground.depth / 2,
     slots: Slot[] = [];
+  const structure = frontStructure(d.entranceStyle, d.blueprint, front, ground.width, d.groundHeight, d.palette.wall, d.palette.trim);
   const put = (
     id: SlotId,
     label: string,
@@ -347,8 +361,8 @@ export function buildingSlots(
   put(
     "brand.entrance",
     "Entrance sign",
-    [0, d.groundHeight + .35, front + .32],
-    [3.2, .55, .3],
+    [0, d.groundHeight + (structure.depth ? .55 : .35), front + (structure.depth || 0) + .32],
+    [3.2, structure.depth ? .45 : .55, .3],
     ["brand"],
   );
   put(
@@ -385,8 +399,10 @@ export function buildingSlots(
     "canopy.entrance",
     "Entrance canopy",
     [0, d.groundHeight - .2, front + 1],
-    [3.4, .4, 1.8],
+    [d.entranceStyle === "wide-canopy" && d.blueprint === "office" ? Math.min(10, ground.width - 1) : 3.4, .4, 1.8],
     ["canopy"],
+    0,
+    structure.depth ? "The portico replaces this canopy. Your selection is retained." : null,
   );
   for (const [i, side] of ["left", "right"].entries()) {
     const sign = i ? 1 : -1,
@@ -439,6 +455,7 @@ export function buildingSlots(
       !slot.reason && slot.selected &&
       occupied.some((other) => overlaps(slot, other))
     ) slot.reason = "Another selected attachment occupies this space.";
+    if (!slot.reason && structure.envelope && slot.id !== "brand.entrance" && overlaps(slot, structure.envelope)) slot.reason = "The entrance structure needs this clearance.";
     slot.active = !!slot.selected && !slot.reason;
     if (slot.active) occupied.push(slot);
   }
@@ -707,6 +724,7 @@ export function resolveV3(
     }
   }
   box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);
+  parts.push(...frontStructure(d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim).parts);
   const canopy = slots.find((s) => s.id === "canopy.entrance")!;
   if (canopy.active) box(...canopy.position, ...canopy.size, brand);
   if (d.finish !== "procedural" && lod === "near") {

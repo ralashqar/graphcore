@@ -1,3 +1,4 @@
+import { ENTRANCE_STYLES } from "../../../src/domain/cityBuildingEntrances.ts";
 import { ENCLOSURES, PAVING_PATTERNS, DETAIL_SETS, DETAIL_SCOPES } from "../../../src/domain/cityBuildingGrounds.ts";
 import { z } from "npm:zod@4";
 import {
@@ -48,6 +49,9 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
+  entranceStyle: z.enum(ENTRANCE_STYLES).optional(),
+  width: z.number().int().min(8).max(18),
+  depth: z.number().int().min(8).max(18),
   enclosure: z.enum(ENCLOSURES).optional(),
   pavingPattern: z.enum(PAVING_PATTERNS).optional(),
   detailSet: z.enum(DETAIL_SETS).optional(),
@@ -62,6 +66,7 @@ const v3 = z.object({
   density: z.enum(["restrained", "full"]),
   slots: z.partialRecord(z.enum(SLOT_IDS), z.enum(COMPONENTS).nullable()),
 }).strict().superRefine((d, ctx) => {
+  if (d.blueprint !== "office" && (d.width < 12 || d.depth < 10)) ctx.addIssue({code:"custom", message:"Compact dimensions require a rectangular building."});
   if (d.roof === "pitched" && d.blueprint !== "office") {
     ctx.addIssue({ code: "custom", message: "Pitched roofs require office." });
   }

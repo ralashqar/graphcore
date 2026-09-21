@@ -109,3 +109,11 @@ Deno.test("grounds and detail presets are bounded optional recipe choices", () =
     assert.throws(() => buildingDesignSchema.parse({...recipe, [key]: "custom-script"}));
   }
 });
+
+Deno.test("compact rectangular designs and bounded entrances round-trip", () => {
+  const d = {...newDesign("kiosk"), blueprint: "office", width:8, depth:8, entranceStyle:"pediment"};
+  assert.deepEqual(buildingDesignSchema.parse(d), d);
+  assert.throws(() => buildingDesignSchema.parse({...d, blueprint:"courtyard"}));
+  assert.throws(() => buildingDesignSchema.parse({...d, entranceStyle:"upload"}));
+  assert.throws(() => buildingDesignSchema.parse({...d, width:7}));
+});
