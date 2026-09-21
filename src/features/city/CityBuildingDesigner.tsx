@@ -869,17 +869,17 @@ export function CityBuildingDesigner(
                   or change it in Business details below.
                 </p>
                 {d.version === 3 && <fieldset><legend>Surface textures</legend>
-                  <p>Tileable CC0 materials. Textures use their natural colours; choose Palette only to use your colour below.</p>
+                  <p>Tileable CC0 materials. Textures use their natural colours; choose Original / palette to keep Quaternius materials or procedural palette colours.</p>
                   {(["wall","roof","ground"] as const).map(role=><label key={role}>{role} texture
                     <select aria-label={`${role} texture`} value={d.textures?.[role] || "none"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
-                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{CITY_TEXTURES[id].label}</option>)}
+                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
                     </select>
                     {d.textures?.[role] && d.textures[role]!=="none" && <img alt={`${role} texture sample`} width={72} height={72} src={`/city/textures/${CITY_TEXTURES[d.textures[role]!].asset}-Color.webp`}/>}
                   </label>)}
                   {(["wallBorder", "groundBorder"] as const).map(role=><label key={role}>{role === "wallBorder" ? "Façade border" : "Ground border"} texture
                     <select aria-label={`${role} texture`} value={d.textures?.[role] || "primary"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
                       <option value="primary">Use primary</option>
-                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{CITY_TEXTURES[id].label}</option>)}
+                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
                     </select>
                   </label>)}
                 </fieldset>}

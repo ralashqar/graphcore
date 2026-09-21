@@ -43,6 +43,11 @@ export function demoBuildingDesign(index: number, color: string) {
   };
   result.textures.wallBorder = chooseBorder(result.textures.wall, "wall");
   result.textures.groundBorder = chooseBorder(result.textures.ground, "ground");
+  // Modular facades showcase their own authored UV/PBR materials by default.
+  if (result.finish === "facade") {
+    result.textures.wall = "none";
+    result.textures.wallBorder = "none";
+  }
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);

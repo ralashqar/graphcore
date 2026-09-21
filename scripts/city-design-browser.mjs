@@ -168,6 +168,10 @@ try {
     assert.equal(await page.getByLabel("groundBorder texture",{exact:true}).inputValue(),"concrete");
     assert.equal(await page.getByLabel("wallBorder texture",{exact:true}).inputValue(),"primary");
     await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-textures.png"});
+    await page.getByLabel("wall texture",{exact:true}).selectOption("none");
+    await page.getByLabel("wallBorder texture",{exact:true}).selectOption("none");
+    await page.waitForTimeout(1000);
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-native-textures.png"});
     assert.deepEqual(errors,[]);
     console.log("Texture choices, shader compilation and mocked save/reload passed.");await browser.close();process.exit(0);
   }

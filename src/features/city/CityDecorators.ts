@@ -12,7 +12,7 @@ let pending: Promise<DecoratorPack> | null = null;
 /** Lazy, shared immutable resources. Failures leave the procedural fallback in place. */
 export function loadDecorators(): Promise<DecoratorPack> {
   if (pending) return pending;
-  pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=1")
+  pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=2")
     .then((gltf) => {
       const out: DecoratorPack = new Map(),
         materials = new Map<Material, MeshStandardMaterial>();
@@ -26,7 +26,13 @@ export function loadDecorators(): Promise<DecoratorPack> {
           let material = materials.get(original);
           if (!material) {
             const name = original.name.toLowerCase();
-            material = citySurfaceMaterial(name.includes("glass") || name.includes("interior"));
+            const glass = name.includes("glass") || name.includes("interior");
+            material = !glass && original instanceof MeshStandardMaterial ? original.clone() : citySurfaceMaterial(glass);
+            if (!glass) {
+              material.normalScale.multiplyScalar(.35);
+              for (const texture of [material.map, material.normalMap, material.roughnessMap, material.metalnessMap]) if (texture) texture.anisotropy = 4;
+              material.userData.cityNativeTexture = !!material.map;
+            }
             material.userData.cityPalette =
               name.includes("glass") || name.includes("interior")
                 ? "glass"

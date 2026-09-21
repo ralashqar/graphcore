@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { NodeIO } from "@gltf-transform/core";
 import { dedup, prune, simplify, weld } from "@gltf-transform/functions";
 import { MeshoptSimplifier } from "meshoptimizer";
@@ -19,3 +20,5 @@ await doc.transform(
 );
 await io.write(path, doc);
 console.log("Decorator GLB bytes:", (await stat(path)).size);
+
+execFileSync("python", ["scripts/resize-city-decorator-textures.py"], {stdio:"inherit"});

@@ -28,15 +28,16 @@ for kind,names in NAMES.items():
    for slot in o.material_slots:
     old=slot.material;key=old.name.split('.')[0]
     if key not in mats:
-     # Single low-frequency colour per original material; no interior shaders/maps.
-     color=old.diffuse_color[:]
-     if old.use_nodes:
-      bsdf=next((n for n in old.node_tree.nodes if n.type=='BSDF_PRINCIPLED'),None)
-      if bsdf:color=bsdf.inputs['Base Color'].default_value[:]
-     if 'glass' in key.lower() or 'window' in key.lower() or 'interior' in key.lower():color=(.18,.35,.39,1)
-     elif 'brick' in key.lower():color=(.44,.25,.18,1) if 'white' not in key.lower() else (.72,.70,.62,1)
-     mat=bpy.data.materials.new('Decor_'+key);mat.diffuse_color=color;mat.use_nodes=True
-     bs=mat.node_tree.nodes.get('Principled BSDF');bs.inputs['Base Color'].default_value=color;bs.inputs['Roughness'].default_value=.85
+     if any(word in key.lower() for word in ['glass','window','interior']):
+      mat=bpy.data.materials.new('Decor_'+key);mat.use_nodes=True
+      bs=mat.node_tree.nodes.get('Principled BSDF');bs.inputs['Base Color'].default_value=(.18,.35,.39,1);bs.inputs['Roughness'].default_value=.08
+     else:
+      # Preserve the authored UV maps and PBR graph, excluding fake interiors.
+      mat=old.copy();mat.name='Decor_'+key
+      for node in mat.node_tree.nodes:
+       if node.type=='TEX_IMAGE' and node.image:
+        image=node.image
+        if max(image.size)>512:image.scale(512,512)
      mats[key]=mat
     slot.material=mats[key]
   bpy.context.view_layer.objects.active=objects[0];bpy.ops.object.join();o=bpy.context.object

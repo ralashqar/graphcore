@@ -195,7 +195,7 @@ export function CityDesignBuildings(
               z: plotAxis(p.z) + (z * c - x * s) * scale,
               rotation: angle + a.rotation,
               scale: [scale * a.scale, scale * a.scale, scale * a.scale],
-              color: texture && texture!=="none" ? (dim ? "#8c8c8c" : "#ffffff") : dim
+              color: (texture && texture!=="none") || piece.material.userData.cityNativeTexture ? (dim ? "#8c8c8c" : "#ffffff") : dim
                 ? `#${new Color(tint).multiplyScalar(.55).getHexString()}`
                 : tint,
             });
