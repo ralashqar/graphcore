@@ -140,15 +140,13 @@ try {
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
   const before = await page.locator(".city-design-canvas").screenshot();
-  await page.getByRole("button", { name: "Corner showroom", exact: true }).click();
-  await page.getByLabel("Footprint", { exact: true }).selectOption("l-shape");
+  await page.getByRole("button", { name: "Corner showroom L-shaped footprint", exact: true }).click();
   await page.getByLabel("Floors", { exact: true }).fill("5");
   assert.equal(await page.getByRole("button", { name: "Shape", exact: true }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "Architecture", exact: true }).count(), 0);
   assert.equal(await page.locator(".city-preset-picker").count(), 1);
-  await page.getByLabel("Footprint", { exact: true }).selectOption("courtyard");
+  assert.equal(await page.getByLabel("Footprint", { exact: true }).count(), 0);
   assert.equal(await page.getByLabel("Floors", { exact: true }).inputValue(), "5");
-  await page.getByLabel("Footprint", { exact: true }).selectOption("l-shape");
 
   await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByRole("button", { name: "Warm brick", exact: true }).click();
@@ -324,10 +322,10 @@ try {
       "Corner showroom",
     ]
   ) {
-    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: new RegExp(`^${name} `) }).click();
     await page.waitForTimeout(80);
   }
-  await page.getByRole("button", { name: "Brick creative studio", exact: true })
+  await page.getByRole("button", { name: "Brick creative studio Rectangular footprint", exact: true })
     .click();
   await page.getByRole("button", { name: "Branding", exact: true }).click();
   await page.getByLabel("Attachment slot", { exact: true }).selectOption(

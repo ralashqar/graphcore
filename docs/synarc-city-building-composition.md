@@ -69,3 +69,7 @@ The editor now has Presets, Branding and Grounds sections. Presets contains the 
 The live editor frames the plot with a procedural street loop, lane markings, kerbs and grass fading into atmospheric haze. A CSS sky gradient sits behind the transparent canvas. Warm directional sunlight, cool hemisphere/fill light and one bounded 1024px shadow map replace flat ambient lighting. Four merged environment meshes require no texture downloads. Demand rendering and capped DPR remain enabled; the full city renderer and saved building recipes are unchanged. Desktop/mobile browser fixtures, TypeScript and the production build verify the preview change.
 
 One repeat browser run reported an intermittent R3F null event-target/addEventListener error during canvas lifecycle changes; the initial and final repeat runs passed with no page errors. The race is not claimed fixed by this visual change.
+
+## Presets own footprint - 21 September 2026
+
+The independent fine-tuning footprint selector is removed. All four supported shapes already exist in the complete preset gallery, whose cards now label their footprint. Shape changes require choosing a complete preset; fine-tuning retains dimensions, floor stack, finishes and details. This supersedes the earlier independent footprint control described above. No saved recipes are modified.

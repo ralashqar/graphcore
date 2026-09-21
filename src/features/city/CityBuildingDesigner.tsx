@@ -574,23 +574,12 @@ export function CityBuildingDesigner(
                     >
                       <Blueprint design={applyComposition(d, i)} mini />
                       <strong>{p.name}</strong>
+                      <small>{p.patch.blueprint === "office" ? "Rectangular" : p.patch.blueprint === "terraces" ? "Stepped" : p.patch.blueprint === "courtyard" ? "Courtyard" : "L-shaped"} footprint</small>
                     </button>
                   ))}
                 </div>
                 <h3>Fine-tune building</h3>
-                <p className="city-studio-note">These controls adjust the current design without applying another preset.</p>
-                <label>
-                  Footprint<select
-                    aria-label="Footprint"
-                    value={d.blueprint}
-                    onChange={(e) => update("blueprint", e.target.value as typeof d.blueprint)}
-                  >
-                    <option value="office">Rectangular</option>
-                    <option value="terraces">Stepped</option>
-                    <option value="courtyard">Courtyard</option>
-                    <option value="l-shape">L-shaped</option>
-                  </select>
-                </label>
+                <p className="city-studio-note">Adjust dimensions and details within this building. To change its shape, choose another preset above.</p>
                 <div className="city-art-controls">
                   {ranges("Floors", "floors", 1, 8)}
                   {ranges(
