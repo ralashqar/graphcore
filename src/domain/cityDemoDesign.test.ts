@@ -12,7 +12,11 @@ test("demo designs are stable, varied and bounded across a full city", () => {
  assert.equal(new Set(designs.map(d=>d.finish)).size,3);
  assert.equal(new Set(designs.map(d=>d.archetype).filter(Boolean)).size,6);
  assert.equal(new Set(designs.map(d=>d.pavingPattern)).size,5);
+ assert.equal(new Set(designs.map(d=>d.textures?.wall)).size,5);
  for(const d of designs) {
+  for (const role of ["wall", "roof", "ground"] as const) {
+   assert.ok(d.textures?.[role] && d.textures[role] !== "none");
+  }
   assert.ok(d.floors<=8);
   assert.ok(d.advertising!.placements.length>=1 && d.advertising!.placements.length<=2);
   const masses=buildingMasses(d);
