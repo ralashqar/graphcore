@@ -145,3 +145,18 @@ Streaming residency and arrival tests cover stable detail, eviction and bounded 
 Verification: seven streaming/market tests passed. The D3D11 browser retained identical component sets and 15,837 identical instance transforms across a pan, with no page errors. The twelve-property near-detail budget is reserved by current residents, preventing detail growth during travel. Physical-mobile performance remains unverified.
 
 Production build and fresh dev-runtime checks passed with the existing landing-atlas, public-office-manifest and large-chunk warnings.
+
+
+## Advertising placement tab (2026-09-21)
+
+Optional v3 advertising recipes select up to two of six facade/roof/fence placements. Each targets a positive-X or positive-Z city-camera-facing normal, transformed back into building-local coordinates so building rotation cannot put adverts on hidden sides. Requested width (3-18 m) and height (2-24 m) fit to the available face; roof panels cap at 3 m high, fence panels at 8.4 by 5 m. Fence panels leave the central gate opening clear.
+
+Exposed wall groups supply large facade rectangles above podiums; intervening building masses reject occluded faces. Front-door floors are reserved. Existing attachment collisions, unsuitable roofs and insufficient space return visible inactive reasons while authored selections persist. Framed solid backing, raised border edges and inset single-sided artwork share editor/city rendering and whole-property movement. Blueprints show selected active panels. Existing designs without the optional field remain unchanged, and preset changes retain advertising choices.
+
+Placeholder image/text layouts deliberately do not load business images or imply real campaign activity. Sign atlas capacity expands only when needed to accommodate up to four signs per property in a 400-property city. Business-media integration remains deferred.
+
+Verification: all presets and rotations are checked for visible normals and plot bounds; podium and unavailable-state regressions are covered. Eleven focused geometry tests and eight Deno schema tests passed. Five City Edge entries and campus worker Deno checks passed. Browser checks cover active facade/fence placement, fitted dimensions, mocked save/reload, undo and mobile layout. Physical-mobile/GPU performance has not been benchmarked.
+
+The shared profile schema and world worker version city-design-3.4 must ship with matching City endpoints and frontend to designated staging. Staging identifiers are still unspecified, so hosted saving of the new field is not activated. No database migration, production activation or provider spending.
+
+TypeScript, production build and fresh dev-runtime checks passed. Existing large-chunk, landing-atlas and public-office-manifest warnings remain. Final schema checks include entrance-structure collision envelopes.

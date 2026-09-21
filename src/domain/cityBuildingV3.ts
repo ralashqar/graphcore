@@ -1,3 +1,4 @@
+import { advertisingLayout, type Advertising, type AdPlacement } from "./cityAdvertising.ts";
 import { archetypeParts, roofVariants, type ArchetypeChoices } from "./cityBuildingArchetypes.ts";
 import { frontStructure, ENTRANCE_STYLES } from "./cityBuildingEntrances.ts";
 import { groundsParts, type GroundsChoices } from "./cityBuildingGrounds.ts";
@@ -39,6 +40,7 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  advertising?: Advertising;
   version: 3;
   generatorRevision: "city-grammar-1";
   entranceStyle?: typeof ENTRANCE_STYLES[number];
@@ -66,6 +68,8 @@ export type Slot = {
 export type DesignSign = ResolvedDesign["sign"] & {
   rotation: number;
   campaign: boolean;
+  advertisement?: AdPlacement;
+  placeholder?: "image" | "text";
 };
 export type Corner = {
   x: number;
@@ -245,6 +249,7 @@ export function applyComposition(d: CityBuildingDesignV3, index: number) {
     facadeSeed: d.facadeSeed,
     groundsSeed: d.groundsSeed,
     palette: d.palette,
+    advertising: d.advertising,
     finish: d.finish,
     slots: {
       ...newDesign(String(d.seed)).slots,
@@ -538,6 +543,8 @@ export function resolveV3(
     if (d.detailScope === "crown" && (role === "door" || role === "entrance")) return;
     attachments.push({ asset, position: [x, y, z], rotation, scale, role });
   };
+  const advertising = advertisingLayout(d, masses, slots);
+  signs.push(...advertising.signs);
   const entrance = { x: 0, z: masses[0].z + masses[0].depth / 2 };
   const sign = {
     x: 0,
@@ -833,6 +840,7 @@ export function resolveV3(
       }
     }
   }
+  parts.push(...advertising.parts);
   return {
     parts,
     attachments,

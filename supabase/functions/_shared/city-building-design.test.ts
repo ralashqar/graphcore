@@ -123,3 +123,9 @@ Deno.test("archetypes validate massing and roof compatibility", () => {
   assert.deepEqual(buildingDesignSchema.parse(d), d);
   for (const patch of [{width:8}, {blueprint:"courtyard"}, {archetype:"bank"}, {roof:"pitched"}, {massing:"custom"}]) assert.throws(() => buildingDesignSchema.parse({...d,...patch}));
 });
+
+Deno.test("advertising choices round-trip and reject unbounded or hidden-side placements",()=>{
+ const d={...newDesign("ad-schema"),advertising:{placements:["facade-left","fence-right"],width:12,height:5,style:"image"}};
+ assert.deepEqual(buildingDesignSchema.parse(d),d);
+ for(const ad of [{...d.advertising,width:99},{...d.advertising,placements:["back"]},{...d.advertising,placements:["facade-left","facade-left"]},{...d.advertising,script:"x"}]) assert.equal(buildingDesignSchema.safeParse({...d,advertising:ad}).success,false);
+});

@@ -163,6 +163,33 @@ try {
     await browser.close();
     process.exit(0);
   }
+  if (process.env.CITY_AD_AUDIT === "1") {
+    await page.getByRole("button", {name:/^Glass headquarters /}).click();
+    await page.getByRole("button", {name:"Advertising",exact:true}).click();
+    await page.getByRole("button", {name:"Preview from city camera",exact:true}).click();
+    await page.getByLabel("Large façade · bottom left",{exact:true}).check();
+    await page.getByLabel("Fence / entrance edge · bottom right",{exact:true}).check();
+    await page.getByLabel("Advert width",{exact:true}).fill("14");
+    await page.getByLabel("Advert height",{exact:true}).fill("6");
+    assert.ok(!(await page.getByLabel("Large façade · bottom left",{exact:true}).evaluate(el=>el.closest("label").textContent)).includes("Unavailable"));
+    await page.waitForTimeout(400);
+    await page.getByRole("region",{name:"Live 3D building designer"}).evaluate(el=>el.scrollIntoView({block:"start"}));
+    await page.screenshot({path:"output/playwright/city-advertising.png"});
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.deepEqual(business.draft.buildingDesign.advertising.placements,["facade-left","fence-right"]);
+    await page.reload();
+    await page.getByRole("button",{name:"Advertising",exact:true}).click();
+    assert.ok(await page.getByLabel("Large façade · bottom left",{exact:true}).isChecked());
+    await page.getByLabel("Placeholder artwork",{exact:true}).selectOption("text");
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await page.getByLabel("Placeholder artwork",{exact:true}).inputValue(),"image");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    assert.deepEqual(errors,[]);
+    console.log("Advertising placements, dimensions, mocked save/reload, undo and mobile layout passed.");
+    await browser.close();process.exit(0);
+  }
   if (process.env.CITY_FACADE_AUDIT === "1") {
     await page.getByRole("button", {name:/^Glass headquarters /}).click();
     await page.getByLabel("Building finish", {exact:true}).selectOption("facade");

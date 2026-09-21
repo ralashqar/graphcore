@@ -1515,3 +1515,7 @@ body:has(.city-app) {
 .city-design-studio .city-preset-picker { max-height:460px; overflow-y:auto; overscroll-behavior:contain; padding:2px 6px 2px 2px; scrollbar-width:thin; }
 
 .city-preset-render { display:block; width:100%; height:auto; aspect-ratio:9/7; object-fit:cover; border-radius:6px; margin-bottom:8px; background:#d5e2df; }
+
+.city-ad-choice { padding: 10px 12px; border: 1px solid #d4d9cf; border-radius: 8px; gap: 6px; }
+.city-ad-choice span { display: flex; align-items: center; gap: 8px; }
+.city-ad-choice input[type="checkbox"] { width: auto; }

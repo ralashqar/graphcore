@@ -1,3 +1,4 @@
+import { advertisingLayout, AD_PLACEMENTS, AD_LABELS, DEFAULT_ADVERTISING } from "../../domain/cityAdvertising";
 import { presetCategory, roofVariants } from "../../domain/cityBuildingArchetypes";
 import { frontStructure } from "../../domain/cityBuildingEntrances";
 import type { OrbitControls as OrbitControlsHandle } from "three-stdlib";
@@ -183,6 +184,10 @@ function Blueprint(
               fill="#907249"
             />
           ))}
+        {design.version === 3 && !mini && advertisingLayout(design, buildingMasses(design), buildingSlots(design)).fits.filter(f=>f.selected && !f.reason).map(f=>(
+          <line key={f.id} x1={f.x-Math.cos(f.rotation)*f.width/2} y1={f.z+Math.sin(f.rotation)*f.width/2}
+            x2={f.x+Math.cos(f.rotation)*f.width/2} y2={f.z-Math.sin(f.rotation)*f.width/2} stroke="#315b77" strokeWidth=".35"><title>{AD_LABELS[f.id]}</title></line>
+        ))}
         {design.version === 3 && !mini &&
           buildingSlots(design).map((slot) => (
             <rect
@@ -554,12 +559,12 @@ export function CityBuildingDesigner(
             role="group"
             aria-label="Design controls"
           >
-            {["Presets", "Branding", "Grounds"].map((t) => (
+            {["Presets", "Advertising", "Branding", "Grounds"].map((t) => (
               <button
                 key={t}
                 type="button"
                 aria-pressed={tab === t}
-                onClick={() => setTab(t)}
+                onClick={() => { setTab(t); if (t === "Advertising") setView("fixed"); }}
               >
                 {t}
               </button>
@@ -828,6 +833,32 @@ export function CityBuildingDesigner(
                   Façade variation {d.facadeSeed}{" "}
                   · Shape and brand colours stay fixed.
                 </small>
+              </div>
+            )}
+            {tab === "Advertising" && (
+              <div className="city-art-controls">
+                <h3>Advertising placements</h3>
+                <p>Choose up to two framed adverts on the faces visible from the fixed city camera. Preview artwork only; business media is not connected yet.</p>
+                <button type="button" onClick={() => setView("fixed")}>Preview from city camera</button>
+                {AD_PLACEMENTS.map(id => {
+                  const ad = d.advertising || DEFAULT_ADVERTISING;
+                  const fit = advertisingLayout(d, buildingMasses(d), slots).fits.find(f => f.id === id)!;
+                  return <label key={id} className="city-ad-choice">
+                    <span><input type="checkbox" aria-label={AD_LABELS[id]} checked={ad.placements.includes(id)}
+                      disabled={!ad.placements.includes(id) && ad.placements.length >= 2}
+                      onChange={e => commit({...d,advertising:{...ad,placements:e.target.checked?[...ad.placements,id]:ad.placements.filter(p=>p!==id)}})} /> {AD_LABELS[id]}</span>
+                    <small>{fit.reason ? `Unavailable: ${fit.reason} Selection is retained.` : `${fit.width.toFixed(1)} × ${fit.height.toFixed(1)} m fitted frame`}</small>
+                  </label>;
+                })}
+                <label>Advert width<input aria-label="Advert width" type="range" min="3" max="18" step=".5" value={(d.advertising || DEFAULT_ADVERTISING).width}
+                  onChange={e=>commit({...d,advertising:{...(d.advertising||DEFAULT_ADVERTISING),width:Number(e.target.value)}})} />{(d.advertising||DEFAULT_ADVERTISING).width} m requested</label>
+                <label>Advert height<input aria-label="Advert height" type="range" min="2" max="24" step=".5" value={(d.advertising || DEFAULT_ADVERTISING).height}
+                  onChange={e=>commit({...d,advertising:{...(d.advertising||DEFAULT_ADVERTISING),height:Number(e.target.value)}})} />{(d.advertising||DEFAULT_ADVERTISING).height} m requested</label>
+                <label>Placeholder artwork<select aria-label="Placeholder artwork" value={(d.advertising||DEFAULT_ADVERTISING).style}
+                  onChange={e=>commit({...d,advertising:{...(d.advertising||DEFAULT_ADVERTISING),style:e.target.value as "image"|"text"}})}>
+                  <option value="image">Image layout</option><option value="text">Text campaign</option>
+                </select></label>
+                <small>Frames shrink to fit their supporting face. Ground-floor entrances and the central gate opening remain clear. Rotate the building freely: placements remain on the two city-facing sides.</small>
               </div>
             )}
             {tab === "Branding" && (

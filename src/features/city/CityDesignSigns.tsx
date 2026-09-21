@@ -40,7 +40,7 @@ export function CityDesignSigns({
             campaign: false,
           }];
         return signs.map((designSign) => ({ ...p, designSign }));
-      }).slice(0, 800),
+      }).slice(0, 2000),
     [properties],
   );
   const [clock, setClock] = useState(Date.now);
@@ -58,19 +58,20 @@ export function CityDesignSigns({
     );
     return () => clearTimeout(timer);
   }, [items, clock]);
+  const atlasHeight = items.length > 1024 ? 4096 : 2048;
   const atlas = useMemo(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 2048;
-    canvas.height = 2048;
+    canvas.height = atlasHeight;
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
     return { canvas, texture };
-  }, []);
+  }, [atlasHeight]);
   useEffect(() => () => atlas.texture.dispose(), [atlas]);
   useEffect(() => {
     let live = true;
     const ctx = atlas.canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, 2048, 2048);
+    ctx.clearRect(0, 0, 2048, atlas.canvas.height);
     const images: HTMLImageElement[] = [];
     items.forEach((p, i) => {
       const x = (i % 16) * 128, y = Math.floor(i / 16) * 32;
@@ -84,6 +85,20 @@ export function CityDesignSigns({
         : p.profile.name;
       const draw = (img?: HTMLImageElement) => {
         if (!live) return;
+        if (p.designSign.advertisement) {
+          ctx.fillStyle = p.designSign.placeholder === "text" ? "#233d36" : "#ede3c8";
+          ctx.fillRect(x,y,128,32);
+          if(p.designSign.placeholder === "image") {
+            ctx.fillStyle = "#87a99b";ctx.fillRect(x+2,y+2,48,28);
+            ctx.fillStyle = "#e9c48c";ctx.beginPath();ctx.arc(x+37,y+10,6,0,Math.PI*2);ctx.fill();
+            ctx.fillStyle = "#45695c";ctx.beginPath();ctx.moveTo(x+2,y+30);ctx.lineTo(x+19,y+12);ctx.lineTo(x+50,y+30);ctx.fill();
+          }
+          ctx.fillStyle=p.designSign.placeholder === "text" ? "#fff4da" : "#233d36";
+          ctx.font="bold 10px sans-serif";ctx.textBaseline="middle";
+          ctx.fillText("YOUR AD",x+(p.designSign.placeholder === "text"?8:56),y+13);
+          ctx.font="6px sans-serif";ctx.fillText("PREVIEW",x+(p.designSign.placeholder === "text"?8:56),y+24);
+          atlas.texture.needsUpdate=true;invalidate();return;
+        }
         ctx.fillStyle = p.profile.color;
         ctx.fillRect(x, y, 128, 32);
         let start = x + 5;
@@ -142,7 +157,7 @@ export function CityDesignSigns({
         invalidate();
       };
       draw();
-      const source = p.designSign.campaign &&
+      const source = p.designSign.advertisement ? "" : p.designSign.campaign &&
           (!offer?.expiresAt || Date.parse(offer.expiresAt) > clock)
         ? p.profile.billboard || p.profile.hero || p.profile.logo
         : p.profile.logo;
@@ -167,9 +182,9 @@ export function CityDesignSigns({
     items.forEach((_, i) =>
       rects.set([
         (i % 16) / 16,
-        1 - (Math.floor(i / 16) + 1) / 64,
+        1 - (Math.floor(i / 16) + 1) / (atlas.canvas.height / 32),
         1 / 16,
-        1 / 64,
+        32 / atlas.canvas.height,
       ], i * 4)
     );
     geometry.setAttribute("atlasRect", new InstancedBufferAttribute(rects, 4));
@@ -207,7 +222,7 @@ export function CityDesignSigns({
         a = d.rotation * Math.PI / 2,
         s = plotSize / 24;
       return {
-        key: `${p.id}:${sign.campaign ? "campaign" : "brand"}`,
+        key: `${p.id}:${sign.advertisement || (sign.campaign ? "campaign" : "brand")}`,
         property: p,
         x: plotAxis(p.x) + (sign.x * Math.cos(a) + sign.z * Math.sin(a)) * s,
         y: sign.y * s,
