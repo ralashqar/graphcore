@@ -1,0 +1,13 @@
+# City streaming and billboard stability
+
+Billboard flicker came from clearing and asynchronously redrawing the entire atlas whenever its nearest-property list changed. The demo signs are SVG image files; both those and uploaded raster artwork are drawn into a canvas texture. Vector formatting was not the cause.
+
+Loaded artwork now stays in a bounded 128-entry LRU cache, resized to a maximum 512-pixel longest edge. Atlas rebuilds synchronously paint retained imagery before the next frame; only genuinely new assets need asynchronous loading. Failed requests keep the existing fallback. The atlas still budgets 32 detailed signs; distant signs outside that budget retain their brand-colour frame. Initial loads and uncached artwork are not promised to be instantaneous.
+
+The orthographic view controls a conservative world-distance resident radius, bounded from 120 to 520 metres, with 70 metres of preload. Existing residents remain for an additional 66 metres before unloading. Selected properties and active market movements are retained. Position checks run on the existing one-second camera sampling boundary. Roads/plot ground remain separately bounded, and near/far architectural assets remain instanced. This is render residency using existing city data, not a new server streaming API or asset download system.
+
+Resident arrivals share a property timestamp across building wings, billboard faces, frames and supports. A 550ms scale-in has one overshoot below 4%; LOD changes do not reset it, and paid movement takes precedence. Reduced motion skips the entrance. Removal happens outside the wider retention margin, without a disappearance animation. Mobile viewports disable real-time shadow maps; desktop retains existing cached shadows. No new visual feature flags or backend changes are needed.
+
+Validation includes cache reuse while panning, broken-image fallback, sign selection, repeated camera navigation, scale/radius tests, TypeScript, build and dev startup. A local 400-property fixture measured approximately 57 FPS / 100 draw calls on desktop and 60 FPS / 100 draw calls in a mobile-sized viewport on the same desktop GPU. These are local observations, not an isolated before/after comparison or a physical-device certification. Physical mobile testing remains required before claiming a mobile performance target.
+
+The follow-up residency check reduced mounted properties from 302 to 116 when zooming in on desktop, and from 222 to 103 in the mobile-sized viewport. Both views held approximately 60 FPS in that run. Selected/replaying properties remain exemptions to the distance filter.

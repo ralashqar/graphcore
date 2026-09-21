@@ -91,10 +91,18 @@ try {
     const stats = JSON.parse(
       await page.locator("canvas").getAttribute("data-city-render-stats"),
     );
+    const residents = page.locator("[data-city-resident-count]");
+    const initialResidents = Number(await residents.getAttribute("data-city-resident-count"));
+    await page.mouse.move(mobile ? 260 : 950, mobile ? 430 : 500);
+    for (let i=0;i<22;i++) { await page.mouse.wheel(0,-100); await page.waitForTimeout(50); }
+    await page.waitForTimeout(2200);
+    const closeResidents = Number(await residents.getAttribute("data-city-resident-count"));
+    assert.ok(closeResidents < initialResidents, "zooming in releases distant property instances");
     assert.deepEqual(errors, []);
     results.push({
       viewport: mobile ? "mobile-viewport-on-desktop-GPU" : "desktop",
       properties: 400,
+      initialResidents, closeResidents,
       performance,
       stats,
     });

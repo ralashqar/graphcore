@@ -13,6 +13,8 @@ page.on("console", (m) => {
   if (m.type() === "error") errors.push(m.text());
 });
 await mkdir("output/playwright", { recursive: true });
+const requestedImages = new Set();
+page.on("request", request => { if (request.url().includes("/city/demo-signs/")) requestedImages.add(request.url()); });
 async function ready() {
   await page.waitForFunction(() => {
     const value = document.querySelector("canvas")?.dataset.cityBillboards;
@@ -29,6 +31,21 @@ await page.route("**/functions/v1/city-*", route => route.fulfill({ json: { erro
 try {
   await page.goto(`${origin}/city?demo=1`);
   const loaded = await ready();
+  // A pan must not decode the same artwork again after the atlas set changes.
+  let repeatImages = 0;
+  const initialImages = new Set(requestedImages);
+  await page.route("**/city/demo-signs/**", route => { if (initialImages.has(route.request().url())) repeatImages++; return route.continue(); });
+  await page.mouse.move(850,450);
+  await page.mouse.down({button:"right"});
+  await page.mouse.move(1020,520,{steps:15});
+  await page.mouse.up({button:"right"});
+  await page.waitForTimeout(1600);
+  await ready();
+  await page.getByRole("button", {name:"Return to Central Plaza",exact:true}).click();
+  await page.waitForTimeout(1800);
+  await ready();
+  assert.equal(repeatImages, 0, "cached demo artwork is reused while panning");
+  await page.unroute("**/city/demo-signs/**");
   assert.equal(loaded.slots, 32);
   assert.ok(loaded.decodedImages >= 10);
   assert.equal(loaded.failedImages, 0);

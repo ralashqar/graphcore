@@ -1,7 +1,8 @@
 import { useMarketMotion } from "./CityMarketMotion";
+import { entranceScale } from "../../domain/cityStreaming";
 import { marketMotion } from "../../domain/cityMarket";
 import { plotAxis } from "../../domain/cityLayout";
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   Color,
@@ -12,6 +13,7 @@ import {
   type Material,
 } from "three";
 import type { CityProperty } from "../../domain/city";
+export const CityArrivalContext = createContext<ReadonlyMap<string, number>>(new Map());
 export type Instance = {
   key: string;
   x: number;
@@ -44,6 +46,7 @@ export function Batch({
     target = useMemo(() => new Vector3(), []);
   const { gl } = useThree();
   const playback = useMarketMotion();
+  const arrivals = useContext(CityArrivalContext);
   const moves = useMemo(
     () => new Map(playback?.event.moves.map((move) => [move.id, move]) || []),
     [playback],
@@ -60,7 +63,7 @@ export function Batch({
         );
         if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       }
-  }, [instances, pieces, playback, reduced]);
+  }, [instances, pieces, playback, reduced, arrivals]);
   useFrame((_, delta) => {
     const elapsed = playback ? performance.now() - playback.started : 4000;
     const playing = !!playback && elapsed < 3100 && !reduced;
@@ -100,6 +103,18 @@ export function Batch({
             z + dz * motion.scale,
           );
           dummy.scale.multiplyScalar(motion.scale);
+          moving = true;
+        }
+      }
+      const arrival = item.property && arrivals.get(item.property.id);
+      if (animate && !reduced && !move && arrival !== undefined) {
+        const age = performance.now() - arrival;
+        if (age < 550) {
+          const scale = entranceScale(age);
+          const x = plotAxis(item.property!.x), z = plotAxis(item.property!.z);
+          dummy.position.set(x + (dummy.position.x - x) * scale,
+            dummy.position.y * scale, z + (dummy.position.z - z) * scale);
+          dummy.scale.multiplyScalar(Math.max(0.001, scale));
           moving = true;
         }
       }

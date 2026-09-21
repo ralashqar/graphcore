@@ -1,3 +1,5 @@
+import { streamRadius } from "../../domain/cityStreaming";
+import { CityArrivalContext } from "./CityInstances";
 import { CityLaunchPlaza, LAUNCH_PLAZA_Z } from "./CityLaunchPlaza";
 import type { LaunchItem } from "../../domain/cityLaunches";
 import { useLiving } from "./CityLiving";
@@ -224,7 +226,7 @@ function CameraRig({
       onZoom(Math.round(camera.zoom * 2) / 2);
       const x = logicalAxis(control.target.x),
         z = logicalAxis(control.target.z),
-        key = `${Math.round(x / 4)},${Math.round(z / 4)}`;
+        key = `${x},${z}`;
       if (key !== last.current) {
         last.current = key;
         onRegion(x, z);
@@ -446,25 +448,24 @@ export default function CityScene({
   const [zoom, setZoom] = useState(3.8);
   const [center, setCenter] = useState({ x: 0, z: 0 });
   const [softwareRenderer, setSoftwareRenderer] = useState(false);
-  const visible = useMemo(
-    () =>
-      properties.filter(
-        (p) =>
-          (Math.abs(p.x - center.x) <= 12 && Math.abs(p.z - center.z) <= 12) ||
-          p.id === selected?.id ||
-          !!playback?.event.moves.some((m) =>
-            m.id === p.id && m.before &&
-            Math.abs(m.before.x - center.x) <= 12 &&
-            Math.abs(m.before.z - center.z) <= 12
-          ),
-      ),
-    [properties, center.x, center.z, selected?.id, playback],
-  );
+  const residents = useRef(new Map<string, number>());
+  const visible = useMemo(() => {
+    const radius = streamRadius(window.innerWidth, window.innerHeight, zoom);
+    return properties.filter(p => {
+      const distance = Math.hypot(position(p.x) - position(center.x), position(p.z) - position(center.z));
+      return distance <= radius + (residents.current.has(p.id) ? 66 : 0) || p.id === selected?.id ||
+        !!playback?.event.moves.some(m => m.id === p.id);
+    });
+  }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport]);
+  const arrivals = useMemo(() => new Map(visible.map(p => [p.id, residents.current.get(p.id) ?? performance.now()])), [visible]);
+  useEffect(() => { residents.current = arrivals; }, [arrivals]);
+  const mobile = window.innerWidth < 900;
   return (
     <SceneBoundary onFailure={onFailure}>
       <Canvas
+        data-city-resident-count={visible.length}
         dpr={softwareRenderer ? 0.75 : [1, 1.5]}
-        shadows={softwareRenderer ? false : { type: 0, autoUpdate: false }}
+        shadows={softwareRenderer || mobile ? false : { type: 0, autoUpdate: false }}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
           gl.setClearColor("#e4e5dc");
@@ -554,6 +555,7 @@ export default function CityScene({
             </mesh>
           ))}
         <MarketMotionContext.Provider value={playback || null}>
+          <CityArrivalContext.Provider value={arrivals}>
           <CityKit
             properties={visible}
             matchIds={matches ? new Set(matches) : undefined}
@@ -564,6 +566,7 @@ export default function CityScene({
             onSelect={onSelect}
             reduced={reduced}
           />
+          </CityArrivalContext.Provider>
         </MarketMotionContext.Provider>
         <SceneReady onReady={onReady} />
         {onExposure && (

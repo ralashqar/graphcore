@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useThree } from "@react-three/fiber";
 import {
   BoxGeometry,
@@ -26,13 +26,17 @@ const TILE_W = 512,
   ROWS = 8,
   LIMIT = COLS * ROWS;
 
+type BillboardImage = HTMLImageElement | HTMLCanvasElement;
+const imageWidth = (image: BillboardImage) => image instanceof HTMLImageElement ? image.naturalWidth : image.width;
+const imageHeight = (image: BillboardImage) => image instanceof HTMLImageElement ? image.naturalHeight : image.height;
+
 /** Text stays on the physical sign. The existing property panel is its accessible alternative. */
 export function drawTile(
   ctx: CanvasRenderingContext2D,
   p: CityProperty,
   index: number,
-  hero?: HTMLImageElement | null,
-  logo?: HTMLImageElement | null,
+  hero?: BillboardImage | null,
+  logo?: BillboardImage | null,
 ) {
   const x = (index % COLS) * TILE_W,
     y = Math.floor(index / COLS) * TILE_H;
@@ -45,8 +49,8 @@ export function drawTile(
   ctx.fillRect(0, 0, TILE_W, TILE_H);
   if (hero) {
     const rect = billboardImageRect(
-      hero.naturalWidth,
-      hero.naturalHeight,
+      imageWidth(hero),
+      imageHeight(hero),
       p.profile.billboardCrop,
     );
     ctx.drawImage(hero, rect.x, rect.y, rect.width, rect.height);
@@ -54,13 +58,13 @@ export function drawTile(
   if (logo) {
     ctx.fillStyle = "#faf8f0";
     ctx.fillRect(18, 18, 136, 76);
-    const scale = Math.min(116 / logo.naturalWidth, 56 / logo.naturalHeight);
+    const scale = Math.min(116 / imageWidth(logo), 56 / imageHeight(logo));
     ctx.drawImage(
       logo,
-      86 - (logo.naturalWidth * scale) / 2,
-      56 - (logo.naturalHeight * scale) / 2,
-      logo.naturalWidth * scale,
-      logo.naturalHeight * scale,
+      86 - (imageWidth(logo) * scale) / 2,
+      56 - (imageHeight(logo) * scale) / 2,
+      imageWidth(logo) * scale,
+      imageHeight(logo) * scale,
     );
   }
   ctx.fillStyle = hero ? "rgba(23,35,29,.94)" : "rgba(23,35,29,.4)";
@@ -94,6 +98,7 @@ export function CityBillboards({
   reduced: boolean;
 }) {
   const { gl } = useThree();
+  const decoded = useRef(new Map<string, HTMLCanvasElement>());
   const featured = useMemo(
     () =>
       [...properties]
@@ -124,10 +129,11 @@ export function CityBillboards({
     const ctx = atlas.canvas.getContext("2d")!;
     const pending = new Set<() => void>();
     ctx.clearRect(0, 0, atlas.canvas.width, atlas.canvas.height);
-    featured.forEach((p, i) => drawTile(ctx, p, i));
+    featured.forEach((p, i) => drawTile(ctx, p, i,
+      decoded.current.get(p.profile.billboard || p.profile.hero), decoded.current.get(p.profile.logo)));
     atlas.texture.needsUpdate = true;
-    const cache = new Map<string, Promise<HTMLImageElement | null>>();
-    function load(url: string): Promise<HTMLImageElement | null> {
+    const cache = new Map<string, Promise<BillboardImage | null>>();
+    function load(url: string): Promise<BillboardImage | null> {
       if (!url) return Promise.resolve(null);
       // Profiles contain approved storage URLs; demo fixtures use same-origin static images.
       let parsed: URL;
@@ -140,7 +146,16 @@ export function CityBillboards({
       if (!["https:", "http:"].includes(parsed.protocol))
         return Promise.resolve(null);
       if (cache.has(url)) return cache.get(url)!;
-      const promise = new Promise<HTMLImageElement | null>((resolve) => {
+      const retained = decoded.current.get(url);
+      if (retained) {
+        decodedImages++;
+        const ready = Promise.resolve(retained);
+        cache.set(url, ready);
+        // Bounded LRU: retain recent decoded artwork, never clear it merely for panning.
+        decoded.current.delete(url); decoded.current.set(url, retained);
+        return ready;
+      }
+      const promise = new Promise<BillboardImage | null>((resolve) => {
         const image = new Image();
         image.crossOrigin = "anonymous";
         let done = false;
@@ -151,9 +166,18 @@ export function CityBillboards({
           image.onload = null;
           image.onerror = null;
           pending.delete(cancel);
-          if (result) decodedImages++;
+          if (result) {
+            decodedImages++;
+            const thumbnail = document.createElement("canvas");
+            const scale = Math.min(1, 512 / Math.max(result.naturalWidth, result.naturalHeight));
+            thumbnail.width = Math.max(1, Math.round(result.naturalWidth * scale));
+            thumbnail.height = Math.max(1, Math.round(result.naturalHeight * scale));
+            thumbnail.getContext("2d")!.drawImage(result, 0, 0, thumbnail.width, thumbnail.height);
+            decoded.current.set(url, thumbnail);
+            while (decoded.current.size > 128) decoded.current.delete(decoded.current.keys().next().value!);
+          }
           else if (active) failedImages++;
-          resolve(result);
+          resolve(result ? decoded.current.get(url)! : null);
         };
         const cancel = () => {
           finish(null);
