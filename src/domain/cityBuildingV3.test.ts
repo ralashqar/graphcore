@@ -249,3 +249,18 @@ test("native columns bridge slab margins and reach the ground plinth",()=>{
   }
  }
 });
+
+test("service entrances reserve clear wall space in accents mode",()=>{
+ for(const blueprint of ["office","courtyard","l-shape","terraces"] as const)
+ for(const groundHeight of [3,3.6,4.2])for(const architecture of ["brick","creative","glass","boutique"] as const){
+  const r=resolveV3(normalizeV3({...newDesign("clear-door"),blueprint,groundHeight,architecture,width:12,depth:10,finish:"accents",stairExtension:"concrete",slots:{}}),"#778899");
+  const door=r.attachments.find(a=>a.asset==="Door_1" && Math.abs(a.rotation)>1);
+  if(!door)continue;
+  const wall=r.walls.find(w=>w.nx!==0 && Math.abs(w.z-door.position[2])<.01 && w.y===.65)!;
+  for(const offset of [-.4,0,.4]){
+   const point: [number,number,number]=[wall.x-wall.nx*.025,door.position[1]+1,door.position[2]+offset];
+   const blocking: typeof r.parts=r.parts.filter(p=>p.kind==="box" && point.every((v,i)=>Math.abs(v-p.position[i])<p.size[i]/2-.001));
+   assert.equal(blocking.length,0,`${blueprint}/${architecture}/${groundHeight}: wall pier blocks service door`);
+  }
+ }
+});

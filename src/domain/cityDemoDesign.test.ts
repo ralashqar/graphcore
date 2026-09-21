@@ -3,10 +3,15 @@ import { buildingMasses } from "./cityBuildingDesign.ts";
 import { buildingSlots } from "./cityBuildingV3.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { NATIVE_FACADES } from "./cityNativeFacades.ts";
 import { demoBuildingDesign } from "./cityDemoDesign.ts";
 import { resolveV3 } from "./cityBuildingV3.ts";
 test("demo designs are stable, varied and bounded across a full city", () => {
  const designs = Array.from({length:400}, (_,i)=>demoBuildingDesign(i,"#506b58"));
+ const facades = designs.filter(d => d.finish === "facade");
+ assert.deepEqual(new Set(facades.map(d => d.nativeFacade)), new Set(NATIVE_FACADES.map(f => f.id)));
+ assert.equal(new Set(facades.slice(0, NATIVE_FACADES.length).map(d => d.nativeFacade)).size, NATIVE_FACADES.length);
+ for (let i = designs.length - 1; i >= 0; i--) assert.deepEqual(designs[i], demoBuildingDesign(i, "#506b58"));
  assert.deepEqual(designs[17],demoBuildingDesign(17,"#506b58"));
  assert.equal(new Set(designs.map(d=>d.enclosure)).size,4);
  assert.equal(new Set(designs.map(d=>d.finish)).size,3);

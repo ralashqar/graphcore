@@ -728,11 +728,11 @@ export function resolveV3(
     const columnWidth = column[1] * columnScale;
     // Only exposed walls receive details. Native pieces retain uniform XYZ scaling.
     const addDetail = (asset:string,offset:number,bottom:number,scale:number,size:readonly number[],role:string) => {
-      if (extensionWall===wall && Math.abs(offset)<1.4) return;
+      if (extensionWall===wall && Math.abs(offset)<Math.max(1.4,NATIVE_MODULES.Door_1.width/2+.2)+size[0]*scale/2) return;
       const wx=x+(horizontal?offset:0)+nx*.045,wz=z+(horizontal?0:offset)+nz*.045;
       const bounds={position:[wx+nx*size[2]*scale/2,bottom+size[1]*scale/2,wz+nz*size[2]*scale/2],size:[(horizontal?size[0]:size[2])*scale,size[1]*scale,(horizontal?size[2]:size[0])*scale]};
       if (Math.abs(bounds.position[0])+bounds.size[0]/2>11.5 || Math.abs(bounds.position[2])+bounds.size[2]/2>11.5) return;
-      if (y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(wx)<2) return;
+      if (y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(wx)<entryWidth/2+.12+size[0]*scale/2) return;
       if (slots.some(slot=>slot.active && overlaps(bounds,slot))) return;
       if (advertising.signs.some(sign=>overlaps(bounds,{position:[sign.x,sign.y,sign.z],size:[sign.rotation? .6:sign.width,sign.height,sign.rotation?sign.width:.6]}))) return;
       attach(asset,wx,bottom,wz,angle,scale,role);
@@ -816,7 +816,7 @@ export function resolveV3(
       const wx = x + (horizontal ? offset : 0),
         wz = z + (horizontal ? 0 : offset);
       const door = Math.abs(y - .65) < .01 && nz === 1 &&
-        Math.abs(wz - entrance.z) < .01 && Math.abs(wx) < (bayWidth / 2 + 1.4);
+        Math.abs(wz - entrance.z) < .01 && Math.abs(wx) < (bayWidth / 2 + (d.finish!=="procedural" ? entryWidth/2+.12 : 1.4));
       const reserved = slots.some((s) =>
         s.active && (s.selected === "brand" || s.selected === "campaign") &&
         overlaps({
@@ -828,7 +828,8 @@ export function resolveV3(
           ],
         }, s)
       );
-      if (door || reserved) continue;
+      const serviceDoor=extensionWall===wall && Math.abs(offset)<bayWidth/2+NATIVE_MODULES.Door_1.width/2+.12;
+      if (door || reserved || serviceDoor) continue;
       if (y === .65 && d.base === "plinth") continue;
       const panel = y > .65 && d.rhythm === "alternating" &&
         (Math.round(offset / bayWidth) + d.facadeSeed) % 2 === 0;
@@ -869,24 +870,19 @@ export function resolveV3(
       );
 
     }
-    if (openings.length) {
-      // Replace the solid backing with wall strips around real openings.
+    if (openings.length || extensionWall===wall) {
+      // Windows and service doors reserve actual holes in the procedural shell.
+      // Leaving a default wall pier here previously put it through the door.
       parts.splice(wallIndex,1);
-      const strip=(along:number,w:number,cy:number,h:number)=>{
-        if(w<=.0001 || h<=.0001)return;
-        box(x+(horizontal?along:0)-nx*.15,cy,z+(horizontal?0:along)-nz*.15,
+      const innerHeight=height-.36;
+      const bays=openings.map(o=>({center:o.offset,width:bayWidth,bottom:(innerHeight-o.height)/2,top:(innerHeight+o.height)/2}));
+      const doorCuts=extensionWall===wall ? [{left:-NATIVE_MODULES.Door_1.width/2-.06,right:NATIVE_MODULES.Door_1.width/2+.06,bottom:stairLanding-y-.18,top:stairLanding-y-.18+NATIVE_MODULES.Door_1.height+.06}] : [];
+      for(const rect of partitionNativeWall(length,innerHeight,bays,doorCuts)){
+        if(rect.kind!=="solid")continue;
+        const along=(rect.left+rect.right)/2,w=rect.right-rect.left,h=rect.top-rect.bottom;
+        box(x+(horizontal?along:0)-nx*.15,y+.18+rect.bottom+h/2,z+(horizontal?0:along)-nz*.15,
           horizontal?w:.3,h,horizontal?.3:w,p.wall);
-      };
-      let cursor=-length/2;
-      for(const opening of openings.sort((a,b)=>a.offset-b.offset)) {
-        const left=opening.offset-bayWidth/2,right=opening.offset+bayWidth/2;
-        strip((cursor+left)/2,left-cursor,y+height/2,height-.36);
-        const band=(height-.36-opening.height)/2;
-        strip(opening.offset,bayWidth,y+.18+band/2,band);
-        strip(opening.offset,bayWidth,y+height-.18-band/2,band);
-        cursor=right;
       }
-      strip((cursor+length/2)/2,length/2-cursor,y+height/2,height-.36);
     }
   }
   box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);

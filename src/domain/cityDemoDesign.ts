@@ -4,12 +4,33 @@ import { buildingSlots } from "./cityBuildingV3.ts";
 import { applyComposition, COMPOSITIONS, identitySeed, newDesign, normalizeV3 } from "./cityBuildingV3.ts";
 import { ARCHITECTURES, brandPalette, FINISHES } from "./cityBuildingV2.ts";
 import { ENCLOSURES, PAVING_PATTERNS, DETAIL_SETS } from "./cityBuildingGrounds.ts";
+import { NATIVE_FACADES } from "./cityNativeFacades.ts";
 import { roofVariants } from "./cityBuildingArchetypes.ts";
+
+// A seeded shuffled bag gives every source module a turn, without changing the
+// existing shape/grounds/advertising random stream or depending on render order.
+const demoFacades = [...NATIVE_FACADES].sort((a, b) =>
+  identitySeed(`city-demo-facade:${a.id}`) - identitySeed(`city-demo-facade:${b.id}`) || a.id.localeCompare(b.id));
+const facadeOrdinals: number[] = [];
+let facadeCount = 0;
+function demoRandom(index: number) {
+  let state = identitySeed(`city-demo-building:${index}`);
+  return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 4294967296; };
+}
+function demoFacade(index: number) {
+  while (facadeOrdinals.length <= index) {
+    const random = demoRandom(facadeOrdinals.length);
+    random(); // Architecture precedes finish in the existing fixture stream.
+    const finish = FINISHES[Math.floor(random() * FINISHES.length)];
+    facadeOrdinals.push(facadeCount);
+    if (finish === "facade") facadeCount++;
+  }
+  return demoFacades[facadeOrdinals[index] % demoFacades.length].id;
+}
 
 /** Stable fictional fixtures; never modifies a merchant recipe or paid geography. */
 export function demoBuildingDesign(index: number, color: string) {
-  let state = identitySeed(`city-demo-building:${index}`);
-  const random = () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 4294967296; };
+  const random = demoRandom(index);
   const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)];
   // Coprime stride covers every complete preset, including the first visible rings.
   const d = applyComposition(newDesign(`demo-${index}`), (index * 9 + 1) % COMPOSITIONS.length);
@@ -45,6 +66,7 @@ export function demoBuildingDesign(index: number, color: string) {
   result.textures.groundBorder = chooseBorder(result.textures.ground, "ground");
   // Modular facades showcase their own authored UV/PBR materials by default.
   if (result.finish === "facade") {
+    result.nativeFacade = demoFacade(index);
     result.textures.wall = "none";
     result.textures.wallBorder = "none";
   }

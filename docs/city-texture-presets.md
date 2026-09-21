@@ -84,3 +84,17 @@ Inspection of actual Brick_Plain_3 vertices found near-zero RGB at the bottom an
 Tests cover the exact demo entrance and preservation of native PBR maps. Browser fixtures capture accents and native brick without texture overrides, alongside the complete catalogue. No schema, hosted deployment or provider changes are involved.
 
 Verification: 18 geometry/material tests, the exact entrance browser fixture, all 27 catalogue choices, mocked persistence and driving/mobile checks pass. TypeScript, production build and fresh Vite runtime checks pass; existing public-manifest and large-chunk/landing-asset warnings remain. Refresh open tabs to rebuild cached native materials.
+
+### Doorway clearance (2026-09-21)
+
+The obstruction in accents mode was a generated wall pier between windows: the service door existed visually but had no reserved opening in the procedural wall. Wall partitioning now reserves the measured service-door rectangle with a small reveal margin, then creates only the surrounding solid strips. Adjacent windows cannot occupy the doorway span. Main and side entrance detail checks include the full component width, preventing wide columns whose centres lie outside the opening from clipping it. Main entrance window reservations also follow the native frame width.
+
+Regression tests sample the service opening across four footprints, four architectural families and three ground-floor heights; the 14-test geometry/partition suite passes. The native entrance browser fixture passes. No stored recipe, server API or provider change is introduced.
+
+### Full-catalogue demo variation (2026-09-22)
+
+Demo properties using the facade finish now select explicit modules from the complete 39-entry native facade catalogue. A stable seeded permutation cycles across facade properties, so every module appears before the cycle repeats; procedural and accents finishes remain in the mix. The selection does not consume the existing random stream for shape, grounds or advertising. Native facade materials remain enabled. Merchant recipes are unaffected.
+
+The 400-property regression asserts complete catalogue coverage, no early repetition, reverse-order reproducibility, valid advertising and bounded geometry. Combined demo, doorway and partition tests pass (15 tests).
+
+Verification: TypeScript, production build, fresh Vite runtime and driving/mobile browser checks pass. No browser runtime errors were captured. Existing public-manifest, landing-asset and large-chunk warnings remain. The temporary verification server was stopped; the user dev server remains running.
