@@ -8,6 +8,14 @@ import validator from "gltf-validator";
 
 await MeshoptDecoder.ready;
 const bytes = await readFile("public/city/offices/offices.glb");
+const manifest = JSON.parse(await readFile("public/city/offices/manifest.json", "utf8"));
+const families = new Set();
+for (let i = 0; i < 6; i++) {
+  const preset = manifest.assets[`Office_${i}_near`];
+  families.add(preset.facade);
+  assert.equal(preset.nativeBayWidth, /^(Marble|WhiteBrick)_/.test(preset.facade) ? 4 : 2);
+}
+assert.equal(families.size, 4, "Office collection must retain four distinct facade families");
 assert.ok(bytes.length < 12 * 1024 * 1024, "Office pack exceeds 12 MiB");
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
   .registerDependencies({ "meshopt.decoder": MeshoptDecoder });

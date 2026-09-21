@@ -8,11 +8,21 @@ office_recipes=[
  ('Civic Steps',[(0,0,30,24,0,2),(0,-2,24,18,2,2),(0,-4,18,12,4,2),(0,-5,10,8,6,3)]),
  ('Cantilever House',[(0,0,28,24,0,2),(-3,-3,18,16,2,4),(1,-3,22,12,6,2),(3,-3,12,10,8,2)]),
 ]
+# Curated material families, not random per-tile colours. Wide source windows
+# occupy two grid bays at native scale; exposed remainders use matching piers.
+facades=[
+ ('Brick_Window_Trim','Brick_Plain_3',2,brick,'Trim_FirstFloor_Window'),
+ ('Metal_Window_Half','Metal_Plain_3',2,metal,'Metal_FirstFloor_Window'),
+ ('WhiteBrick_Window','WhiteBrick_Plain_3',4,whitebrick,'Trim_FirstFloor_Window'),
+ ('Brick_Window_Trim','Brick_Plain_3',2,brick,'Trim_FirstFloor_Window'),
+ ('Marble_Window','Marble_Plain_3',4,marble,'Trim_FirstFloor_Window'),
+ ('WhiteBrick_Window','WhiteBrick_Plain_3',4,whitebrick,'Metal_FirstFloor_Window'),
+]
 plinth=.55
 for index,(label,volumes) in enumerate(office_recipes):
  near=[];far=[]
  warm=index in [0,3,4]
- surface=marble if warm else metal
+ upper,plain,bay_width,surface,ground=facades[index]
  # Broad foundation, entry steps and low planted terraces give a convincing base.
  base=volumes[0];bw,bd=base[2:4]
  for target in [near,far]:
@@ -25,6 +35,7 @@ for index,(label,volumes) in enumerate(office_recipes):
   for floor in range(count):
    y=base_y+floor*3
    for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
+    consumed=set()
     for bay in range(int(length/2)):
      local=-length/2+1+bay*2
      x=cx+math.cos(angle)*local+math.sin(angle)*offset
@@ -34,12 +45,22 @@ for index,(label,volumes) in enumerate(office_recipes):
      hidden=any((ox,oz,ow,od,st,n)!=(cx,cz,w,d,start,count) and abs(probe_x-ox)<ow/2 and abs(probe_z-oz)<od/2 and st<=start+floor<st+n for ox,oz,ow,od,st,n in volumes)
      if hidden:continue
      entrance=start==0 and floor==0 and angle==0 and bay==int(length/4)
+     if bay in consumed:
+      far+=window_quad(x+math.sin(angle)*.04,y+1.5,z+math.cos(angle)*.04,1.6,2,angle,glass)
+      continue
      if entrance:
       near+=part('DoorFrame_Metal_Single',x,y,z,angle)
       near+=part('Door_1',x+.5,y,z,angle)
      else:
-      module='Trim_FirstFloor_Window' if warm and start==0 and floor==0 else 'Metal_FirstFloor_Window' if start==0 and floor==0 else 'Metal_Window_Half'
-      near+=part(module,x,y,z,angle)
+      module=ground if start==0 and floor==0 else upper
+      if module==upper and bay_width==4:
+       nx=probe_x+math.cos(angle)*2;nz=probe_z-math.sin(angle)*2
+       next_hidden=any((ox,oz,ow,od,st,n)!=(cx,cz,w,d,start,count) and abs(nx-ox)<ow/2 and abs(nz-oz)<od/2 and st<=start+floor<st+n for ox,oz,ow,od,st,n in volumes)
+       if bay+1<int(length/2) and not next_hidden:
+        near+=part(module,x+math.cos(angle),y,z-math.sin(angle),angle)
+        consumed.add(bay+1)
+       else:near+=part(plain,x,y,z,angle)
+      else:near+=part(module,x,y,z,angle)
      far+=window_quad(x+math.sin(angle)*.04,y+1.5,z+math.cos(angle)*.04,1.6,2,angle,glass)
    # Clean horizontal floor plates read as office layers rather than many small shops.
    for target in [near,far]:
@@ -58,6 +79,6 @@ for index,(label,volumes) in enumerate(office_recipes):
  for target in [near,far]:
   target+=box('Entry canopy',0,4.2,bd/2+1,8,.35,3,metal)
   for x in [-3.7,3.7]:target+=box('Entry column',x,2.2,bd/2+1.9,.25,4,.25,stone)
- metadata={'label':label,'officeVersion':1,'volumes':volumes,'height':plinth+max(v[4]+v[5] for v in volumes)*3+2,'envelope':[34,36,30]}
+ metadata={'label':label,'officeVersion':2,'facade':upper,'nativeBayWidth':bay_width,'volumes':volumes,'height':plinth+max(v[4]+v[5] for v in volumes)*3+2,'envelope':[34,36,30]}
  bake(f'Office_{index}_near',near,metadata)
  bake(f'Office_{index}_far',far,metadata)

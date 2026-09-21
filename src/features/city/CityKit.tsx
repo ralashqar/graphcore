@@ -61,7 +61,7 @@ export function CityKit({
 }) {
   const { plotAxis, plotSize, roadCapacityMultiplier } = useCityMapLayout();
   const playback = useMarketMotion();
-  const { scene } = useGLTF(estateDemo ? "/city/offices/offices.glb?v=1" : "/city/downtown/downtown.glb?v=source-v3", false, true);
+  const { scene } = useGLTF(estateDemo ? "/city/offices/offices.glb?v=2" : "/city/downtown/downtown.glb?v=source-v3", false, true);
   const signEnvelope = estateDemo ? estateBillboard : billboardEnvelope;
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),

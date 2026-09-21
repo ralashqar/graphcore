@@ -121,3 +121,10 @@ The demo now replaces the Unity office prefabs with six authored Quaternius asse
 One assembly occupies each 48-metre demo estate. Buildings remain inside a 34 by 30 metre envelope, leaving clearance for paths and the single 36-metre hero billboard on the bottom-left edge. The regular City retains its original buildings, and the Unity asset showcase remains available.
 
 `scripts/city-office-recipes.py` defines the massing and is executed by the existing Blender bake. Optimisation splits the output into the unchanged 7,402,488-byte Downtown GLB and a 10,422,980-byte office GLB, each including streets so the demo loads only one kit. Six near/far pairs retain the same silhouette with simpler distant geometry. Rebuild with the existing MegaKit pipeline; `scripts/city-office-test.mjs` verifies the 12 MiB budget, plot clearance, reduced far geometry and zero glTF validation errors. Physical mobile performance remains unverified.
+
+
+### Office facade variation
+
+The six office recipes now use four source facade families: brick with window trim, dark metal, white brick and marble. Ground-floor storefront modules are selected separately. White-brick and marble windows span four metres and consume two grid bays at native scale; matching solid piers fill exposed remainder bays. This preserves facade proportions around corners and party walls. Far LOD wall colours match each family. The demo office URL is versioned to invalidate the previous all-metal upper floors.
+
+The varied office pack is 10,807,088 bytes, below the 12 MiB limit. Both packs pass glTF validation; the office check enforces four facade families and the correct native bay widths. Desktop/mobile-viewport billboard loading, image failure fallback and selection passed with no runtime errors.

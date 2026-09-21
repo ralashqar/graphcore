@@ -252,7 +252,9 @@
         13.5
       ],
       "label": "Terrace House",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -298,7 +300,9 @@
         13.5
       ],
       "label": "Terrace House",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -344,7 +348,9 @@
         14.500001907348633
       ],
       "label": "Offset Glass",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -390,7 +396,9 @@
         14.500001907348633
       ],
       "label": "Offset Glass",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Metal_Window_Half",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -436,7 +444,9 @@
         14.499999046325684
       ],
       "label": "Twin Atrium",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
@@ -482,7 +492,9 @@
         14.499999046325684
       ],
       "label": "Twin Atrium",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
@@ -528,7 +540,9 @@
         14.499999046325684
       ],
       "label": "Courtyard Offices",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -574,7 +588,9 @@
         14.499999046325684
       ],
       "label": "Courtyard Offices",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Brick_Window_Trim",
+      "nativeBayWidth": 2,
       "volumes": [
         [
           0,
@@ -620,7 +636,9 @@
         14.499999046325684
       ],
       "label": "Civic Steps",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
@@ -674,7 +692,9 @@
         14.499999046325684
       ],
       "label": "Civic Steps",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "Marble_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
@@ -728,7 +748,9 @@
         14.500001907348633
       ],
       "label": "Cantilever House",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
@@ -782,7 +804,9 @@
         14.500001907348633
       ],
       "label": "Cantilever House",
-      "officeVersion": 1,
+      "officeVersion": 2,
+      "facade": "WhiteBrick_Window",
+      "nativeBayWidth": 4,
       "volumes": [
         [
           0,
