@@ -32,13 +32,14 @@ import {
   upgradeV3,
 } from "../../domain/cityBuildingV3";
 import { useCityMapLayout } from "./CityMapLayout";
+import { CityPreviewEnvironment } from "./CityPreviewEnvironment";
 import { CityDesignBuildings } from "./CityDesignBuildings";
 
 function FitCamera({ height }: { height: number }) {
   const { camera, size, invalidate } = useThree();
   useEffect(() => {
     if (!size.width || !size.height) return;
-    camera.zoom = Math.min(size.width, size.height) / Math.max(43, height + 24);
+    camera.zoom = Math.min(size.width, size.height) / Math.max(56, height + 32);
     camera.updateProjectionMatrix();
     invalidate();
   }, [camera, size.width, size.height, invalidate, height]);
@@ -455,6 +456,7 @@ export function CityBuildingDesigner(
             <DesignBoundary>
               <Canvas
                 orthographic
+                shadows
                 frameloop="demand"
                 dpr={[1, 1.5]}
                 camera={{
@@ -463,11 +465,9 @@ export function CityBuildingDesigner(
                   near: .1,
                   far: 250,
                 }}
-                gl={{ antialias: true }}
+                gl={{ antialias: true, alpha: true }}
               >
-                <color attach="background" args={["#e8e5da"]} />
-                <ambientLight intensity={1.6} />
-                <directionalLight position={[10, 30, 20]} intensity={2} />
+                <CityPreviewEnvironment />
                 <FitCamera height={height} />
                 {!legacy && showSlots && (
                   <SlotHandles design={d} onSelect={selectSlot} />

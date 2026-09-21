@@ -63,3 +63,9 @@ Verification: 15 local geometry tests, four Deno recipe/profile tests, TypeScrip
 ## Unified presets - 21 September 2026
 
 The editor now has Presets, Branding and Grounds sections. Presets contains the six complete compositions, followed by footprint, dimension, floor-stack and facade controls for fine-tuning. The older shape preset cards are removed: changing the footprint now changes only that choice (subject to existing geometry compatibility rules), without resetting floors or crown. Applying a complete composition remains one undoable action and retains business identity and palette. Saved recipe contracts are unchanged.
+
+## Preview environment - 21 September 2026
+
+The live editor frames the plot with a procedural street loop, lane markings, kerbs and grass fading into atmospheric haze. A CSS sky gradient sits behind the transparent canvas. Warm directional sunlight, cool hemisphere/fill light and one bounded 1024px shadow map replace flat ambient lighting. Four merged environment meshes require no texture downloads. Demand rendering and capped DPR remain enabled; the full city renderer and saved building recipes are unchanged. Desktop/mobile browser fixtures, TypeScript and the production build verify the preview change.
+
+One repeat browser run reported an intermittent R3F null event-target/addEventListener error during canvas lifecycle changes; the initial and final repeat runs passed with no page errors. The race is not claimed fixed by this visual change.

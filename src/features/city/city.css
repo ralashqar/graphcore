@@ -1508,3 +1508,6 @@ body:has(.city-app) {
 .city-slot-handle {width:26px;height:26px;border-radius:50%;background:#fff6dc;color:#345544;border:1px solid #96763a;cursor:pointer;padding:0;}
 .city-slot-controls {padding:16px;border:1px solid var(--city-line,#d4dad0);border-radius:12px;display:grid;gap:12px;margin-top:16px;}
 .city-slot-controls label {display:grid;gap:6px;}
+
+/* A soft sky behind the transparent, demand-rendered building preview. */
+.city-design-canvas { background:linear-gradient(180deg,#8dbce0 0%,#c8deeb 55%,#e8efeb 100%); border-radius:12px; overflow:hidden; }
