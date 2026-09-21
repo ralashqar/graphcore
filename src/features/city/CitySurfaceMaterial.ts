@@ -68,7 +68,8 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
   shader.fragmentShader = shader.fragmentShader.replace("#include <color_fragment>", `
    #include <color_fragment>
    ${glass ? `
-    diffuseColor.rgb = mix(vec3(0.025, 0.045, 0.055), diffuseColor.rgb * 0.12, 0.25);
+    // Keep a blue-grey body colour even when the authored brand palette is dark.
+    diffuseColor.rgb = mix(vec3(0.10, 0.17, 0.20), diffuseColor.rgb * 0.35, 0.20);
    ` : `
     float grain = cityGrain(citySurfacePosition*3.7+vec3(13.2,7.1,2.6))-.5;
     float fade = 1.0-smoothstep(25.0,85.0,length(vViewPosition));
@@ -81,13 +82,16 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    vec3 reflectedWorld = inverseTransformDirection(reflect(-glassView, glassNormal), viewMatrix);
    float skyAmount = smoothstep(-0.16, 0.18, reflectedWorld.y);
    vec3 sky = mix(vec3(0.57,0.68,0.72),vec3(0.13,0.32,0.50),smoothstep(0.0,0.85,reflectedWorld.y));
-   vec3 reflectedSky = mix(vec3(0.07,0.095,0.09),sky,skyAmount);
-   float fresnel = 0.2 + 0.65 * pow(1.0-clamp(dot(glassNormal,glassView),0.0,1.0),5.0);
+   // Elevated city views reflect the ground, not the sky. A daylight
+   // ground/horizon keeps those panes readable without emission or shadow maps.
+   vec3 ground = mix(vec3(0.16,0.21,0.23),vec3(0.34,0.40,0.41),smoothstep(-1.0,0.0,reflectedWorld.y));
+   vec3 reflectedSky = mix(ground,sky,skyAmount);
+   float fresnel = 0.48 + 0.42 * pow(1.0-clamp(dot(glassNormal,glassView),0.0,1.0),5.0);
    float sun = pow(max(0.0,dot(reflectedWorld,normalize(vec3(-120.0,240.0,80.0)))),160.0);
    outgoingLight = mix(outgoingLight,reflectedSky,fresnel) + vec3(1.0,0.91,0.72)*sun*0.8;
    #include <opaque_fragment>
   `);
  };
- material.customProgramCacheKey = () => glass ? "city-glass-4" : "city-mineral-4-"+textureId;
+ material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-4-"+textureId;
  return material;
 }
