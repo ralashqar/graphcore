@@ -80,3 +80,7 @@ output/director-*.mjs
 output/director-edge-bundles/
 
 output/city-staging/
+
+# Local Unity asset conversion intermediates and geometry probes.
+output/megacity-audit/
+output/megacity-showcase/

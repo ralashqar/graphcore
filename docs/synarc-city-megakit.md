@@ -108,3 +108,7 @@ The Source pack replaces Standard as the vendor input. Only selected dependencie
 The 400-property fixture reports 855,834 rendered triangles and 98 calls on desktop, and 843,034 triangles in the mobile-sized desktop-GPU viewport. Physical mobile acceptance is still outstanding. All changes are asset/build-tool and frontend presentation changes: no migration, worker deployment, paid generation or production activation is involved.
 
 TypeScript (`npx tsc --noEmit`), production build and development startup passed. The build retains existing landing-atlas and large-chunk warnings. An initial desktop benchmark overlapped compilation and measured 50 FPS; the repeat after compilation measured 60.07 FPS desktop and 60.05 FPS in the mobile-sized desktop-GPU viewport over ten-second samples. This repeat is a local rendering measurement, not a hosted or physical-mobile guarantee.
+
+## MegaCity comparison collection
+
+A separate `/city/asset-showcase` page now compares five converted JC MegaCity buildings and three decorative modules with these Quaternius presets. Normal City rendering continues to use this Downtown pack. See [MegaCity showcase](synarc-city-megacity-showcase.md) for the prefab conversion process, review controls, measurements and remaining adoption decisions.

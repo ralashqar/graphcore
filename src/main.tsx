@@ -4,7 +4,9 @@ import { isLandingOnly } from './config/appProfile'
 
 const root = createRoot(document.getElementById('root')!)
 
-if (window.location.pathname === '/city' || window.location.pathname.startsWith('/city/')) {
+if (window.location.pathname === '/city/asset-showcase') {
+  void import('./features/city/CityAssetShowcase').then(({ CityAssetShowcase }) => root.render(<CityAssetShowcase />))
+} else if (window.location.pathname === '/city' || window.location.pathname.startsWith('/city/')) {
   void import('./features/city/CityApp').then(({ CityApp }) => {
     // R3F owns the WebGL lifecycle; avoid StrictMode's development-only renderer teardown.
     root.render(<CityApp />)

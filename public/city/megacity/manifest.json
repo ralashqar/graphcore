@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "key": "commercial-01",
+      "label": "Corner shop",
+      "tier": 1,
+      "sourceMeshes": 3,
+      "triangles": 1710,
+      "farTriangles": 684,
+      "width": 9.399999618530273,
+      "depth": 8.825002193450928,
+      "height": 5.056966297328017,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 5.556966297328017,
+        "front": 5.062501096725464
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "commercial-04",
+      "label": "Compact retail",
+      "tier": 1,
+      "sourceMeshes": 2,
+      "triangles": 846,
+      "farTriangles": 338,
+      "width": 9.599998474121094,
+      "depth": 9.600000381469727,
+      "height": 5.689558506011963,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 6.189558506011963,
+        "front": 5.450000190734864
+      },
+      "materials": [
+        "M_MegaCity_01"
+      ]
+    },
+    {
+      "key": "commercial-10",
+      "label": "Small storefront",
+      "tier": 1,
+      "sourceMeshes": 2,
+      "triangles": 2371,
+      "farTriangles": 947,
+      "width": 8.450687408447266,
+      "depth": 6.57477068901062,
+      "height": 3.89383147058129,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 4.39383147058129,
+        "front": 3.93738534450531
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "commercial-18",
+      "label": "Candy kiosk",
+      "tier": 3,
+      "sourceMeshes": 2,
+      "triangles": 5916,
+      "farTriangles": 2365,
+      "width": 6.428570985794067,
+      "depth": 6.200000047683716,
+      "height": 7.359012085199311,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 7.859012085199311,
+        "front": 3.750000023841858
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Light_Building_05"
+      ]
+    },
+    {
+      "key": "bank",
+      "label": "Civic landmark",
+      "tier": 4,
+      "sourceMeshes": 3,
+      "triangles": 13516,
+      "farTriangles": 5404,
+      "width": 11.259369850158691,
+      "depth": 11.717607498168945,
+      "height": 12.688745491206646,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 13.188745491206646,
+        "front": 6.508803749084473
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_02"
+      ]
+    },
+    {
+      "key": "decor-01",
+      "label": "Air-conditioning unit",
+      "tier": null,
+      "sourceMeshes": 1,
+      "triangles": 450,
+      "farTriangles": 180,
+      "width": 1.3672233819961548,
+      "depth": 1.732504665851593,
+      "height": 1.2794481842378502,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 1.7794481842378502,
+        "front": 1.5162523329257964
+      },
+      "materials": [
+        "M_MegaCity_01"
+      ]
+    },
+    {
+      "key": "decor-02",
+      "label": "Wall vent",
+      "tier": null,
+      "sourceMeshes": 1,
+      "triangles": 124,
+      "farTriangles": 48,
+      "width": 0.6030462384223938,
+      "depth": 0.07742713764309883,
+      "height": 0.6030462384223938,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 1.1030462384223938,
+        "front": 0.6887135688215494
+      },
+      "materials": [
+        "M_MegaCity_01"
+      ]
+    },
+    {
+      "key": "decor-03",
+      "label": "Roof vent",
+      "tier": null,
+      "sourceMeshes": 1,
+      "triangles": 302,
+      "farTriangles": 120,
+      "width": 1.0579755306243896,
+      "depth": 1.9975860118865967,
+      "height": 0.4828830219925493,
+      "uniformScale": 1,
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 0.9828830219925493,
+        "front": 1.6487930059432983
+      },
+      "materials": [
+        "M_MegaCity_01"
+      ]
+    }
+  ],
+  "sourceHashes": {
+    "Prefabs\\Buildings\\SM_Buildings_Commercial_01.prefab": "a1798293198dc4306a66f3ae1a51b236dbd54c64438e1c01aeaabd78b55e860f",
+    "Models\\Buildings\\SM_Buildings_Commercial_Door_02_R.fbx": "f505e10542d1f17550feaf0e46235f2b2d4b8b093874005130cb99e9953f82ea",
+    "Models\\Buildings\\SM_Buildings_Commercial_Door_02_R.fbx.meta": "0223a8f2d542544ed8b06b127b7f8c396d02072b9c83b6430afdf1e924014c8b",
+    "Materials\\M_MegaCity_01.mat": "666eaa2f6d05f75121f28c5f442605c01fb11829c535ea97837272c0a9688de8",
+    "Materials\\M_MegaCity_01.mat.meta": "99ee60b8a2764b8812a66aefb84e93cc62b5b233443099509bcadaf46ff3f425",
+    "Textures\\T_MegaCity_01.png": "1749fe55f16b130bbeccce5d2ea07ca75d4916afb8f3d6e305a97cb76fc11a8a",
+    "Textures\\T_MegaCity_01.png.meta": "a33f69ed353ce9ea2a03b516486a54a5812c0e75da23430a72b913cb1306e774",
+    "Materials\\M_MegaCity_Glass_01.mat": "70fdb2a8d9fb1ef21bad36ac8b30bbbb908cb4357d77032780d0433f1bc2aea2",
+    "Materials\\M_MegaCity_Glass_01.mat.meta": "60bed1f879bab0f45a99ce4a4df74a2239d0cdb396f82db5b49836ea7d9d5b26",
+    "Models\\Buildings\\SM_Buildings_Commercial_01.fbx": "df8c2e79ee7592487e606e634239271433a61d1e50380d8e09656459c755827c",
+    "Models\\Buildings\\SM_Buildings_Commercial_01.fbx.meta": "ae219ec20c68323de50317414aff63e88177423d52cd72850ce4a229d4aeac35",
+    "Models\\Buildings\\SM_Buildings_Commercial_Door_02_L.fbx": "e6b998f89db37be1b10bfa673c83e9278a06968b4918a33fbd23d279b9a7a39b",
+    "Models\\Buildings\\SM_Buildings_Commercial_Door_02_L.fbx.meta": "e00f0f53bf3e4512e6adf990e04f070e9e96e0a0137340a8570ce2641777a572",
+    "Prefabs\\Buildings\\SM_Buildings_Commercial_04.prefab": "4b22491cf05d722f430cbbc7e04ab4b9e5984c9e2f1cee1610d45b3d30328c2a",
+    "Models\\Buildings\\SM_Buildings_Commercial_SideDoor_01.fbx": "84ac4eb6338f19c48648d050cdadd9fafd7ff03901abd59adc8931ef53127cda",
+    "Models\\Buildings\\SM_Buildings_Commercial_SideDoor_01.fbx.meta": "0c905471aac0a3b625f525d04080ad2e7b8c5f51253e5a2038eaa332fc63bd45",
+    "Models\\Buildings\\SM_Buildings_Commercial_04.fbx": "9cb8de7870d81d7f2a08fea6b24e5ca588ad69be436fa307e474a009facb528f",
+    "Models\\Buildings\\SM_Buildings_Commercial_04.fbx.meta": "6c88c220f4d3f4720001b19a2a56fbbe0288f760bd4af6e57f16f8d368fd3cbe",
+    "Prefabs\\Buildings\\SM_Buildings_Commercial_10.prefab": "92acbf0e37048a96717225b7a53644050b24534fba5def41b9572c2f44cc4dce",
+    "Models\\Buildings\\SM_Buildings_Commercial_10.fbx": "0736ac318f24af4d9016caba90d5a9b1f5f9210b0eaf1a54f26bc16a0482ea67",
+    "Models\\Buildings\\SM_Buildings_Commercial_10.fbx.meta": "55684db467c24829cb3266135a3d0484a6744cc37998f49ef22c380b00a53549",
+    "Prefabs\\Buildings\\SM_Buildings_Commercial_18.prefab": "f831f4fb3efd6da9649235183e141b71cb3c96786a8a2f1407a9d14d0e1be817",
+    "Models\\Buildings\\SM_Buildings_Commercial_18.fbx": "d91fed89058efab036cf123b6028eac7cbf52e75387a903cabd3d09f89359c7c",
+    "Models\\Buildings\\SM_Buildings_Commercial_18.fbx.meta": "fba7434ac7dddfd0dc28ee368644f876d7005e36c48b2c5b399592de2dd52c05",
+    "Materials\\M_MegaCity_Light_Building_05.mat": "1f8a4a8e43660b8e3a91dd9a7dcc99f644e7c433be3c955764d6121a20e8887d",
+    "Materials\\M_MegaCity_Light_Building_05.mat.meta": "dc8b7d9f6f079c26fb38dfd12c06661295d620c7a73c53f0d12a37511f8ad2e5",
+    "Models\\Buildings\\SM_Buildings_Commercial_18_Door.fbx": "ed2058075863efa3dfcfe94d98aba04c3c793ba6ee165abfa0a4eb5d10244a9a",
+    "Models\\Buildings\\SM_Buildings_Commercial_18_Door.fbx.meta": "bc6961f340a12448d65c5c36cc7de27c7f51983be20ebd8b926dc0b572392951",
+    "Prefabs\\Buildings\\SM_Buildings_Bank.prefab": "dbad4dfd5d51356f2635d6219b73e7faa2f3a5728c57968319bbf5ef9557edc6",
+    "Models\\Buildings\\SM_Buildings_Bank_Door_R.fbx": "63a85d672d5fbb4e0bdc35437768b8ad568054d49919f19cfc2cd48a955e3635",
+    "Models\\Buildings\\SM_Buildings_Bank_Door_R.fbx.meta": "0001235a80addb6af288252eb805a18a352f775beb37c7348adeb5599b965ffb",
+    "Materials\\M_MegaCity_Glass_02.mat": "7422db9cc40f9c7c8bbc8017cce7b5986a6ff0a66238f6b31f8f82f453a1be9a",
+    "Materials\\M_MegaCity_Glass_02.mat.meta": "7ae1017dfa2b801fdecf799a3260cbfde88826b20afec0f722451de0b226b1ff",
+    "Models\\Buildings\\SM_Buildings_Bank.fbx": "a3018ce7ae9f6fdbe93aaa227610d29444b95e403c34dcba50797393c0341923",
+    "Models\\Buildings\\SM_Buildings_Bank.fbx.meta": "713936bf3fedf20736e2d7ca59493471109fb5f765f7f5b66d72594e657dffde",
+    "Models\\Buildings\\SM_Buildings_Bank_Door_L.fbx": "d68a28fe4134197506d4d8f78673ac15640fe8bbeab777248851b392d4e75e21",
+    "Models\\Buildings\\SM_Buildings_Bank_Door_L.fbx.meta": "4727b82462a91585f9e2333b2a087fd93e94f8788627be9ee99aaa9538f40775",
+    "Prefabs\\BuildingsDecor\\SM_BuildingsDecor_01.prefab": "a258ec3b71903ff03ff75a45e4a24c887e5c6d8c9336d01f395350efc3f2f89b",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_01.fbx": "4c7a21ef1b60fd5e5b351fd64596bf986b09bc015b31ea5cfff36dfe9c843f43",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_01.fbx.meta": "9fce3192b79ed31bbcec3bab986e6c44710d938199955491d239aa1bd7f4d899",
+    "Prefabs\\BuildingsDecor\\SM_BuildingsDecor_02.prefab": "2f4869247f68f1544a3781437a4e129178965e74ccad0162c9f6e613265fce90",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_02.fbx": "26d0128c1a9dec284f4eb45f03542ea531aa112d150e636c7594f3b6c4def299",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_02.fbx.meta": "1ffabcd33fa408b3092e29732cbcb439b37e5ca0fec3cf72059326643c408b28",
+    "Prefabs\\BuildingsDecor\\SM_BuildingsDecor_03.prefab": "d767731ed4303f27aa70e05273ab1ab57729a963785f07fc81e2d705ce023b7a",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_03.fbx": "3ea8630585a27ff0e492d66984bfed317ac4359cdfc741ecb2a0ed940e0aa7bf",
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_03.fbx.meta": "9936c8c5bf982d849ab71b344d225e320348d7a616a219582cdc3acca5c68590"
+  },
+  "materialPolicy": "Shared base-color atlas; opaque glass; Unity lighting and scripts omitted",
+  "bytes": 512524,
+  "materials": 4,
+  "textures": 1
+}
