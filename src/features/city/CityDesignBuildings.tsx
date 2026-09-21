@@ -1,3 +1,4 @@
+import { bevelCityGeometry } from "./CityBevelGeometry";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import { residentDetails, type CityDetail } from "../../domain/cityStreaming";
 import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
@@ -86,17 +87,18 @@ export function CityDesignBuildings(
   }, [needsPack, pack]);
   const resources = useMemo(
     () => ({
-      box: new BoxGeometry(1, 1, 1),
+      box: bevelCityGeometry(new BoxGeometry(1, 1, 1)),
+      pane: new BoxGeometry(1, 1, 1),
       tree: new IcosahedronGeometry(1, 1),
-      hip: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("hip"), 3)); g.computeVertexNormals(); return g; })(),
-      shed: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("shed"), 3)); g.computeVertexNormals(); return g; })(),
+      hip: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("hip"), 3)); g.computeVertexNormals(); return bevelCityGeometry(g); })(),
+      shed: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("shed"), 3)); g.computeVertexNormals(); return bevelCityGeometry(g); })(),
       column: new CylinderGeometry(.5, .5, 1, 12),
       pediment: (() => {
         const g = new BufferGeometry();
         g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions(), 3));
         g.rotateY(Math.PI / 2);
         g.computeVertexNormals();
-        return g;
+        return bevelCityGeometry(g);
       })(),
       roof: (() => {
         const g = new BufferGeometry();
@@ -105,7 +107,7 @@ export function CityDesignBuildings(
           new Float32BufferAttribute(pitchedRoofPositions(), 3),
         );
         g.computeVertexNormals();
-        return g;
+        return bevelCityGeometry(g);
       })(),
       material: citySurfaceMaterial(),
       glass: citySurfaceMaterial(true),
@@ -114,6 +116,7 @@ export function CityDesignBuildings(
   );
   useEffect(() => () => {
     resources.box.dispose();
+    resources.pane.dispose();
     resources.column.dispose();
     resources.hip.dispose();
     resources.shed.dispose();
@@ -208,7 +211,7 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])]]
             : [{
-              geometry: kind === "glassBox" ? resources.box : resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
+              geometry: kind === "glassBox" ? resources.pane : resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
               material: kind === "glassBox" ? resources.glass : resources.material,
             }]}
           instances={items}
