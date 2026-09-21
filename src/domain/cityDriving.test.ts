@@ -24,7 +24,7 @@ test("bounds and long frame deltas cannot teleport the car",()=>{
 test("curbs preserve momentum and steer the car back into the road",()=>{
  const s={x:4.99,z:33,heading:Math.PI/4,speed:12};
  const next=driveStep(s,{...input,forward:true},.04,330);
- assert.ok(next.x<5 && next.z>s.z);
+ assert.ok(next.x<=5 && next.z>s.z);
  assert.ok(next.speed>=s.speed);
  assert.ok(next.heading<s.heading);
 });
@@ -52,4 +52,19 @@ test("reverse input brakes first and steering builds progressively",()=>{
  assert.ok(coast.speed>11.8);
  const stopped=driveStep({...start,speed:0},{...input,left:true},1/60,330);
  assert.equal(stopped.heading,0);
+});
+
+test("sustained curb contact has no inward position pulses",()=>{
+ let s={x:5,z:20,heading:.3,speed:12};
+ for(let i=0;i<90;i++) {
+  s=driveStep(s,{...input,forward:true},1/120,330);
+  assert.ok(Math.abs(s.x-5)<1e-8);
+ }
+});
+test("braking increases steering authority",()=>{
+ const s={x:0,z:33,heading:0,speed:12,steering:.4};
+ const normal=driveStep(s,{...input,left:true},1/120,330);
+ const braking=driveStep(s,{...input,left:true,brake:true},1/120,330);
+ assert.ok(braking.steering!>normal.steering!);
+ assert.ok(braking.heading>normal.heading);
 });
