@@ -42,3 +42,17 @@ Exact logo typography should be composited from the authorised logo after genera
 `scripts/city-sprite-browser.mjs` checks the canonical demo route, three shared sprite textures, absence of building-pack downloads, property selection, mobile viewport and empty mode. Run `scripts/city-navigation-browser.mjs` for repeated pan/zoom, blur recovery, central reset and reduced motion. Physical mobile performance, hundreds of unique textures and a live generation endpoint remain separate acceptance work.
 
 Local browser checks passed with 72 resident properties, three shared textures and no console/runtime errors. Repeated navigation and reduced motion passed. The three PNGs total 964,637 bytes; the streets-only pack is 682,344 bytes. This measures asset transfer, not an FPS guarantee. These are frontend/asset changes only: no database migration, worker deployment, endpoint activation or new provider configuration.
+
+## Corporate branding studies
+
+`/city?demo=1&cityRender=corporate` adds Nike, Slack and Zoom to the first three demo properties, with corresponding names and explicit unofficial-concept descriptions. Their displayed geography and City Value remain simulated. These fixtures have no website, offer or redemption CTA; they do not represent participating merchants. The selector preserves the original three-image city for comparison. Remaining plots retain fictional businesses. Corporate mode loads six shared textures; ordinary sprite mode still loads only three.
+
+Saved 512px files: `public/city/sprites/nike.png`, `slack.png`, `zoom.png`. All were generated with the built-in image tool from the same tile reference and manually calibrated anchors. The common prompt retained the orthographic camera, cozy smooth clay toy-diorama look, low texture detail, sage lawn, cream paths, upper-left lighting and flat magenta cutout background, with no separate billboards or promotional claims.
+
+Subject prompts:
+
+- Nike: unofficial flagship retail concept, white sculptural two-level sports store, black glazing, large black swoosh on the front facade, orange entrance accent, rooftop running track and chunky sneaker sculpture.
+- Slack: unofficial headquarters, rounded ivory collaborative office with stepped terraces, dark plum windows, multicolour hash logo on the facade, cyan/yellow/green/red architectural fins and rooftop collaboration pods. Clear red rather than magenta protects the colour-key process.
+- Zoom: unofficial white/bright-blue headquarters with rounded stepped terraces, sky-blue glazing, oversized video-camera roof emblem, lowercase white `zoom` wordmark on an integrated blue facade panel, and a small round meeting pavilion.
+
+These generated logos are visual approximations, not approved brand assets. Production would composite a supplied authorised vector/logo rather than rely on generative logo accuracy. No merchant endpoint, provider configuration or deployment is added by these samples.

@@ -1,0 +1,24 @@
+import {chromium} from 'playwright';
+import assert from 'node:assert/strict';
+const browser=await chromium.launch({headless:true});
+const page=await browser.newPage({viewport:{width:1440,height:960}});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.route('**/functions/v1/city-*',r=>r.fulfill({json:{error:'Demo offline'}}));
+await page.goto('http://localhost:5183/city?demo=1&cityRender=corporate');
+await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.citySprites);
+await page.waitForTimeout(2000);
+assert.equal(await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.citySprites).textures),6);
+for(const label of ['01 Nike','02 Slack','03 Zoom']) await page.getByRole('button',{name:label,exact:true}).waitFor();
+await page.screenshot({path:'output/playwright/city-corporate.png'});
+await page.mouse.click(893,465);
+await page.getByRole('complementary',{name:'Nike property',exact:true}).waitFor();
+assert.ok(page.url().includes('cityRender=corporate'));
+await page.getByRole('button',{name:'Close property',exact:true}).click();
+await page.waitForTimeout(1500);
+await page.getByRole('button',{name:'01 Nike',exact:true}).click();
+await page.getByRole('complementary',{name:'Nike property',exact:true}).waitFor();
+await page.getByRole('button',{name:'Close property',exact:true}).click();
+await page.setViewportSize({width:390,height:844});await page.waitForTimeout(1500);
+await page.screenshot({path:'output/playwright/city-corporate-mobile.png'});
+assert.deepEqual(errors,[]);console.log('Corporate labels, six textures, selection, mode persistence and mobile viewport passed.');await browser.close();
+

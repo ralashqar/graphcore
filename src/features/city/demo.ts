@@ -24,7 +24,7 @@ const artwork = [
   "tidal",
   "monday",
 ];
-export function demoCity(count = 72): CitySnapshot {
+export function demoCity(count = 72, corporate = false): CitySnapshot {
   const plots = cityPlots(Math.max(count, 400));
   return {
     revision: 1,
@@ -65,6 +65,17 @@ export function demoCity(count = 72): CitySnapshot {
           expiresAt: null,
           url: "",
         };
+      if (corporate && i < 3) {
+        Object.assign(profile, {
+          name: ["Nike", "Slack", "Zoom"][i],
+          tagline: "Unofficial architectural concept · visual experiment",
+          description: "An independently generated branding study, not an official building, participating merchant or endorsement. Position and City Value are simulated demo data.",
+          color: ["#151515", "#4a154b", "#2d8cff"][i],
+          category: i === 0 ? "Shopping" : "SaaS",
+          logo: "", hero: "",
+          website: "", offer: emptyCityProfile().offer,
+        });
+      }
       return {
         id: `demo-${i}`,
         slug: `demo-${i}`,

@@ -7,11 +7,15 @@ import { useCityMapLayout } from "./CityMapLayout";
 import type { CityProperty } from "../../domain/city";
 
 const urls = ["studio", "cafe", "games"].map(name => `/city/sprites/${name}.png?v=1`);
+const corporateUrls = [...urls, ...["nike", "slack", "zoom"].map(name => `/city/sprites/${name}.png?v=1`)];
 // Reviewed pixel anchors compensate for small generator framing drift.
 const anchors = [
   {left:26,right:486,side:349,front:472},
   {left:30,right:482,side:355,front:478},
   {left:32,right:480,side:360,front:482},
+  {left:22,right:489,side:327,front:450},
+  {left:29,right:483,side:343,front:468},
+  {left:30,right:482,side:327,front:464},
 ];
 // 448px-wide 48m diamond in a 512px sprite. Ground centre is pixel (256,360).
 const size = 48 * Math.SQRT2 * 512 / 448;
@@ -28,7 +32,8 @@ export function CitySpriteBuildings({properties, selected, matchIds, onSelect, r
   properties: CityProperty[]; selected: CityProperty | null; matchIds?: Set<string>;
   onSelect: (p: CityProperty) => void; reduced: boolean;
 }) {
-  const textures = useTexture(urls);
+  const corporate = new URLSearchParams(window.location.search).get("cityRender") === "corporate";
+  const textures = useTexture(corporate ? corporateUrls : urls);
   const { gl } = useThree();
   const { plotAxis } = useCityMapLayout();
   const assets = useMemo(() => textures.map((texture,index) => {
@@ -64,11 +69,11 @@ export function CitySpriteBuildings({properties, selected, matchIds, onSelect, r
   }), [textures]);
   useEffect(() => () => assets.forEach(a => {a.keyed.dispose();a.pieces.forEach(p => {p.geometry.dispose();p.material.dispose();});}), [assets]);
   const groups = useMemo(() => {
-    const result: Instance[][] = [[],[],[]];
-    properties.forEach(p => result[variant(p.id)].push({key:p.id,property:p,x:plotAxis(p.x),y:.15,z:plotAxis(p.z),
+    const result: Instance[][] = Array.from({length:corporate ? 6 : 3},()=>[]);
+    properties.forEach(p => result[corporate && /^demo-[012]$/.test(p.id) ? 3+Number(p.id.slice(5)) : variant(p.id)].push({key:p.id,property:p,x:plotAxis(p.x),y:.15,z:plotAxis(p.z),
       color:matchIds && !matchIds.has(p.id) && p.id!==selected?.id ? "#7b8178" : "#ffffff"}));
     return result;
-  },[properties,selected,matchIds,plotAxis]);
+  },[properties,selected,matchIds,plotAxis,corporate]);
   useEffect(() => {
     gl.domElement.dataset.citySprites=JSON.stringify({textures:assets.length,properties:properties.length,size:512});
     return () => {delete gl.domElement.dataset.citySprites;};

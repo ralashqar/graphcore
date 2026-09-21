@@ -319,6 +319,7 @@ export function CityApp() {
           new URLSearchParams(location.search).get("stress") === "1"
             ? 2000
             : 72,
+          new URLSearchParams(location.search).get("cityRender") === "corporate",
         )
         : await citySnapshot({ ...region.current, slug });
       if (id !== requestId.current) return;
@@ -701,10 +702,11 @@ export function CityApp() {
           {demo.current && (
             <div className="city-demo-banner">
               DEMONSTRATION CITY{" "}
-              <span>Fictional businesses · no real purchases or offers</span>
+              <span>{new URLSearchParams(location.search).get("cityRender") === "corporate" ? "Unofficial brand concepts · simulated positions · no affiliation" : "Fictional businesses · no real purchases or offers"}</span>
               <label>View <select aria-label="Demo city rendering" value={new URLSearchParams(window.location.search).get("cityRender") || "sprites"}
                 onChange={e => { const url=new URL(window.location.href);url.searchParams.set("cityRender",e.target.value);window.location.assign(url.toString()); }}>
                 <option value="sprites">Illustrated buildings</option>
+                <option value="corporate">Nike / Slack / Zoom concepts</option>
                 <option value="empty">Roads &amp; plots</option>
                 <option value="offices">3D offices</option>
               </select></label>

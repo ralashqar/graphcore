@@ -348,7 +348,8 @@ export function CityKit({
               className={`city-map-label ${
                 selected?.id === p.id ? "is-selected" : ""
               }`}
-              onClick={() => onSelect(p)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {e.stopPropagation();onSelect(p);}}
             >
               <span>{String(p.rank).padStart(2, "0")}</span>
               {p.profile.name}

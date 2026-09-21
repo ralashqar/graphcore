@@ -161,6 +161,9 @@ export default function CityCampus({
     setClaim(null);
     if (demo) {
       const b =
+        (new URLSearchParams(location.search).get("cityRender") === "corporate"
+          ? demoCity(72, true).properties.find((b) => b.slug === slug)
+          : undefined) ||
         discoveryDemo().storefronts.find((b) => b.slug === slug) ||
         demoCity().properties.find((b) => b.slug === slug);
       if (b) {
