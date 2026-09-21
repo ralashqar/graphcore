@@ -1,3 +1,4 @@
+import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import { residentDetails, type CityDetail } from "../../domain/cityStreaming";
 import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -106,7 +107,8 @@ export function CityDesignBuildings(
         g.computeVertexNormals();
         return g;
       })(),
-      material: new MeshLambertMaterial({ color: "#ffffff" }),
+      material: citySurfaceMaterial(),
+      glass: citySurfaceMaterial(true),
     }),
     [],
   );
@@ -119,6 +121,7 @@ export function CityDesignBuildings(
     resources.tree.dispose();
     resources.roof.dispose();
     resources.material.dispose();
+    resources.glass.dispose();
   }, [resources]);
   const batches = useMemo(() => {
     const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [], hip: [], shed: [] };
@@ -141,7 +144,8 @@ export function CityDesignBuildings(
           if (kit && "fallback" in part && part.fallback &&
             ("fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
-          out[part.kind].push({
+          const key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : part.kind;
+          (out[key] ||= []).push({
             key: `${p.id}:${index}`,
             property: p,
             x: plotAxis(p.x) + (x * c + z * s) * scale,
@@ -204,8 +208,8 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])]]
             : [{
-              geometry: resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
-              material: resources.material,
+              geometry: kind === "glassBox" ? resources.box : resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
+              material: kind === "glassBox" ? resources.glass : resources.material,
             }]}
           instances={items}
           onSelect={onSelect}

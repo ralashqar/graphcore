@@ -1,8 +1,9 @@
+import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import {
   Float32BufferAttribute,
   type Material,
   Mesh,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { Piece } from "./CityInstances";
@@ -14,7 +15,7 @@ export function loadDecorators(): Promise<DecoratorPack> {
   pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=1")
     .then((gltf) => {
       const out: DecoratorPack = new Map(),
-        materials = new Map<Material, MeshLambertMaterial>();
+        materials = new Map<Material, MeshStandardMaterial>();
       gltf.scene.updateMatrixWorld(true);
       for (const root of gltf.scene.children) {
         const pieces: Piece[] = [];
@@ -24,8 +25,8 @@ export function loadDecorators(): Promise<DecoratorPack> {
           const original = child.material;
           let material = materials.get(original);
           if (!material) {
-            material = new MeshLambertMaterial({ color: "#ffffff" });
             const name = original.name.toLowerCase();
+            material = citySurfaceMaterial(name.includes("glass") || name.includes("interior"));
             material.userData.cityPalette =
               name.includes("glass") || name.includes("interior")
                 ? "glass"
