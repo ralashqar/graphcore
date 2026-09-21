@@ -36,7 +36,7 @@ try {
     .click();
   await page.waitForTimeout(1400);
   await page.screenshot({ path: "output/playwright/megacity-skyscraper.png" });
-  await page.getByRole("button", { name: "Next", exact: true }).click();
+  assert.equal(await page.getByRole("navigation", { name: "Building presets" }).getByRole("button").count(), 6);
   await page
     .getByRole("navigation", { name: "Building presets" })
     .getByRole("button", { name: /Skyscraper 06/ })

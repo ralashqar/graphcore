@@ -412,9 +412,10 @@ export function CityAssetShowcase() {
       ),
     [collection],
   );
+  const pageSize = collection === "skyscrapers" ? 6 : 5;
   const buildings = useMemo(
-    () => collectionBuildings.slice(page * 5, page * 5 + 5),
-    [collectionBuildings, page],
+    () => collectionBuildings.slice(page * pageSize, (page + 1) * pageSize),
+    [collectionBuildings, page, pageSize],
   );
   const [focus, setFocus] = useState<number | null>(null);
   const [stress, setStress] = useState(false);
@@ -480,10 +481,10 @@ export function CityAssetShowcase() {
                 Previous
               </button>
               <span>
-                {page + 1} / {Math.ceil(collectionBuildings.length / 5)}
+                {page + 1} / {Math.ceil(collectionBuildings.length / pageSize)}
               </span>
               <button
-                disabled={(page + 1) * 5 >= collectionBuildings.length}
+                disabled={(page + 1) * pageSize >= collectionBuildings.length}
                 onClick={() => {
                   setPage(page + 1);
                   setFocus(null);
