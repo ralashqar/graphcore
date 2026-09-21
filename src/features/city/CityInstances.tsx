@@ -44,7 +44,6 @@ export function Batch({
 }) {
   const { plotAxis } = useCityMapLayout();
   const refs = useRef<(InstancedMesh | null)[]>([]),
-    poses = useRef(new Map<string, Vector3>()),
     dirty = useRef(true);
   const dummy = useMemo(() => new Object3D(), []),
     target = useMemo(() => new Vector3(), []);
@@ -55,32 +54,15 @@ export function Batch({
     () => new Map(playback?.event.moves.map((move) => [move.id, move]) || []),
     [playback],
   );
-  useLayoutEffect(() => {
-    dirty.current = true;
-    const keys = new Set(instances.map((i) => i.key));
-    for (const key of poses.current.keys())
-      if (!keys.has(key)) poses.current.delete(key);
-    for (const mesh of refs.current)
-      if (mesh) {
-        instances.forEach((item, i) =>
-          mesh.setColorAt(i, new Color(item.color || "#ffffff")),
-        );
-        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      }
-  }, [instances, pieces, playback, reduced, arrivals]);
-  useFrame((_, delta) => {
-    const elapsed = playback ? performance.now() - playback.started : 4000;
+  const updateMatrices = () => {
+    const now = performance.now();
+    const elapsed = playback ? now - playback.started : 4000;
     const playing = !!playback && elapsed < 3100 && !reduced;
     if (!dirty.current && !playing) return;
     let moving = false;
     instances.forEach((item, index) => {
       target.set(item.x, item.y || 0, item.z);
-      const pose = poses.current.get(item.key) || target.clone();
-      if (!animate || reduced) pose.copy(target);
-      else pose.lerp(target, Math.min(1, delta * 5));
-      poses.current.set(item.key, pose);
-      if (pose.distanceToSquared(target) > 0.0001) moving = true;
-      dummy.position.copy(pose);
+      dummy.position.copy(target);
       dummy.rotation.set(0, item.rotation || 0, 0);
       dummy.scale.set(...(item.scale || [1, 1, 1]));
       const candidate =
@@ -112,7 +94,7 @@ export function Batch({
       }
       const arrival = item.property && arrivals.get(item.property.id);
       if (animate && !reduced && !move && arrival !== undefined) {
-        const age = performance.now() - arrival;
+        const age = now - arrival;
         if (age < 550) {
           const scale = entranceScale(age);
           const x = plotAxis(item.property!.x), z = plotAxis(item.property!.z);
@@ -132,7 +114,20 @@ export function Batch({
       }
     dirty.current = moving;
     gl.shadowMap.needsUpdate = true;
-  });
+  };
+  useLayoutEffect(() => {
+    dirty.current = true;
+    for (const mesh of refs.current)
+      if (mesh) {
+        instances.forEach((item, i) =>
+          mesh.setColorAt(i, new Color(item.color || "#ffffff")),
+        );
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      }
+    // New/reallocated instance buffers must be valid before the first paint.
+    updateMatrices();
+  }, [instances, pieces, playback, reduced, arrivals]);
+  useFrame(() => updateMatrices());
   return (
     <>
       {pieces.map((piece, index) => (

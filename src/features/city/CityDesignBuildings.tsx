@@ -1,5 +1,6 @@
+import { residentDetails, type CityDetail } from "../../domain/cityStreaming";
 import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   BoxGeometry,
   CylinderGeometry,
@@ -54,6 +55,17 @@ export function CityDesignBuildings(
           Math.max(Math.abs(p.x - center.x), Math.abs(p.z - center.z)) <= 3)
       ).slice(0, 12).map((p) => p.id),
     ), [properties, center?.x, center?.z, zoom, selectedId]);
+  // Detail is selected once per residency, not reranked on every camera pan.
+  // Changing the top-12 list used to replace walls/props on still-visible buildings.
+  const residentDetail = useRef(new Map<string, CityDetail>());
+  const detail = useMemo(() => {
+    const candidates = new Map<string, CityDetail>();
+    for (const p of properties) candidates.set(p.id,
+      (nearby.has(p.id) ? "near" : center && Math.max(Math.abs(p.x-center.x), Math.abs(p.z-center.z)) > 6 ? "far" : "medium"));
+    const next = residentDetails(residentDetail.current, candidates);
+    residentDetail.current = next;
+    return next;
+  }, [properties, nearby, center?.x, center?.z]);
   const [pack, setPack] = useState<DecoratorPack | null>(null);
   const needsPack = properties.some((p) =>
     !p.profile.buildingArt &&
@@ -118,10 +130,7 @@ export function CityDesignBuildings(
         c = Math.cos(angle),
         s = Math.sin(angle);
       const dim = matchIds && !matchIds.has(p.id) && p.id !== selectedId;
-      const lod = nearby.has(p.id) ? "near" : center &&
-          Math.max(Math.abs(p.x - center.x), Math.abs(p.z - center.z)) > 6
-        ? "far"
-        : "medium";
+      const lod = detail.get(p.id) || "medium";
       const resolved = d.version !== 1
         ? resolveCurrent(d, p.profile.color, lod)
         : null;
@@ -180,7 +189,7 @@ export function CityDesignBuildings(
     plotSize,
     matchIds,
     selectedId,
-    nearby,
+    detail,
     pack,
     center?.x,
     center?.z,

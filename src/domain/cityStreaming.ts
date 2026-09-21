@@ -7,3 +7,18 @@ export function entranceScale(elapsed: number) {
   // One restrained overshoot; no ongoing spring or oscillation.
   return 1 + 2 * (t - 1) ** 3 + (t - 1) ** 2;
 }
+
+export type CityDetail = "near" | "medium" | "far";
+/** A residency owns its detail choice. Eviction, not camera movement, resets it. */
+export function residentDetails(previous: ReadonlyMap<string, CityDetail>, candidates: ReadonlyMap<string, CityDetail>) {
+  const result = new Map<string, CityDetail>();
+  for (const id of candidates.keys()) if (previous.has(id)) result.set(id, previous.get(id)!);
+  let nearCount = [...result.values()].filter(detail => detail === "near").length;
+  for (const [id, candidate] of candidates) {
+    if (result.has(id)) continue;
+    const detail = candidate === "near" && nearCount >= 12 ? "medium" : candidate;
+    result.set(id, detail);
+    if (detail === "near") nearCount++;
+  }
+  return result;
+}

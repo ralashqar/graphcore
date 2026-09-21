@@ -11,10 +11,32 @@ try {
  await page.locator('[data-city-resident-count]').waitFor();
  await page.waitForTimeout(6000);
  await page.screenshot({path:'output/playwright/city-preset-demo.png'});
+ const matrices = () => page.evaluate(async () => {
+   const {_roots} = await import('/node_modules/.vite/deps/@react-three_fiber.js');
+   const root = [..._roots.values()][0];
+   const result = {};
+   root.store.getState().scene.traverse(mesh => {
+     if (!mesh.isInstancedMesh) return;
+     for (const [i,item] of (mesh.userData.cityInstances || []).entries()) {
+       if (!item.property) continue;
+       const key = item.key + ':' + mesh.geometry.attributes.position.count;
+       result[key] = Array.from(mesh.instanceMatrix.array.slice(i*16,i*16+16));
+     }
+   });
+   return result;
+ });
+ const before = await matrices();
  console.log('residents',await page.locator('[data-city-resident-count]').getAttribute('data-city-resident-count'));
  await page.mouse.move(800,500); await page.mouse.down({button:'right'}); await page.mouse.move(1050,650,{steps:3}); await page.mouse.up({button:'right'});
  await page.waitForTimeout(1000);
  await page.screenshot({path:'output/playwright/city-preset-demo-pan.png'});
+ const after = await matrices();
+ const shared = Object.keys(before).filter(key => key in after);
+ const retained = new Set(shared.map(key=>key.split(':')[0]));
+ for(const id of retained) assert.deepEqual(Object.keys(after).filter(k=>k.startsWith(id+':')).sort(),Object.keys(before).filter(k=>k.startsWith(id+':')).sort(),`Resident component set changed: ${id}`);
+ assert.ok(shared.length > 100);
+ for(const key of shared) assert.deepEqual(after[key],before[key],`Resident component moved while panning: ${key}`);
+ console.log('Stable resident component matrices:',shared.length);
  assert.deepEqual(errors,[]);
  console.log('Preset demo city renders and pans without page errors.');
 } finally {await browser.close();}

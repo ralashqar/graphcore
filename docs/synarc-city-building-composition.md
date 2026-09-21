@@ -132,3 +132,16 @@ Verification: 19 focused geometry tests, seven Deno schema tests, TypeScript and
 The 72-property customised demo also rendered and panned without browser page errors. All 14 preset thumbnails were regenerated; procedural preset defaults produced unchanged preview files.
 
 Production build passed with the existing landing-atlas and chunk-size warnings.
+
+
+## Stable whole-building streaming (2026-09-21)
+
+Building detail is chosen on entry and retained for that residency. Camera panning no longer reranks existing residents into different component sets. Full eviction clears the detail choice; re-entry uses the existing shared property arrival timestamp. This intentionally trades immediate in-place LOD changes for stable silhouettes and facades. Explicit recipe edits still regenerate the building.
+
+Instance batches no longer interpolate individual component poses, which were keyed by generated indices and could become different components after detail changes. All matrices and bounds are initialized in layout effects before painting newly allocated instance buffers. Explicit whole-property market motion and shared arrival scaling remain; reduced motion still bypasses both.
+
+Streaming residency and arrival tests cover stable detail, eviction and bounded overshoot. Browser verification compares retained instance sets and matrices while right-dragging the full demo city. No server contract, deployment pairing or provider changes.
+
+Verification: seven streaming/market tests passed. The D3D11 browser retained identical component sets and 15,837 identical instance transforms across a pan, with no page errors. The twelve-property near-detail budget is reserved by current residents, preventing detail growth during travel. Physical-mobile performance remains unverified.
+
+Production build and fresh dev-runtime checks passed with the existing landing-atlas, public-office-manifest and large-chunk warnings.
