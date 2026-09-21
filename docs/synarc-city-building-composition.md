@@ -165,3 +165,8 @@ TypeScript, production build and fresh dev-runtime checks passed. Existing large
 ### Road driving preview (September 2026)
 
 Explore now offers Drive mode: a procedural car with a ground-level perspective follow camera, WASD/arrow steering, Space braking, right-drag look, touch hold controls and Escape/back-to-map restoration. Movement is bounded to the road grid; blur clears held inputs. Map mode remains the default. This is a frontend-only preview without traffic simulation or vehicle physics. Movement/boundary tests, browser movement/braking/look/return/re-entry/mobile viewport checks, TypeScript and production build passed. Physical mobile performance remains unverified.
+
+
+### Demo advertisements and forgiving curbs
+
+Seeded demo recipes now select one or two fitting advertising placements with varied dimensions and placeholder styles. All 400 fixtures retain at least one rendered advert. Merchant recipes are unchanged. Driving projects curb contact onto the road corridor and steers away from the contact normal while retaining speed; forward, reverse and head-on recovery tests cover the behavior. Browser driving/map restoration checks passed.

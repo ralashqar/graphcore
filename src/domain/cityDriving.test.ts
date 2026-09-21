@@ -18,5 +18,26 @@ test("bounds and long frame deltas cannot teleport the car",()=>{
  const next=driveStep(s,{...input,forward:true},5,330);
  assert.ok(next.z-s.z<=.800001);
  assert.ok(onCityRoad(next.x,next.z,330));
- assert.equal(driveStep({...s,z:330},{...input,forward:true},.04,330).speed,0);
+ assert.ok(driveStep({...s,z:330},{...input,forward:true},.04,330).speed>0);
+});
+
+test("curbs preserve momentum and steer the car back into the road",()=>{
+ const s={x:4.99,z:33,heading:Math.PI/4,speed:12};
+ const next=driveStep(s,{...input,forward:true},.04,330);
+ assert.ok(next.x<5 && next.z>s.z);
+ assert.ok(next.speed>=s.speed);
+ assert.ok(next.heading<s.heading);
+});
+
+test("head-on and reverse curb contact recover while staying on roads",()=>{
+ for(const speed of [12,-8]) {
+  let s={x:4.99,z:33,heading:speed>0?Math.PI/2:-Math.PI/2,speed};
+  const controls={...input,forward:speed>0,reverse:speed<0};
+  for(let i=0;i<180;i++) {
+   s=driveStep(s,controls,1/60,330);
+   assert.ok(onCityRoad(s.x,s.z,330));
+   assert.ok(Math.abs(s.speed)>1);
+  }
+  assert.ok(Math.hypot(s.x-4.99,s.z-33)>5);
+ }
 });

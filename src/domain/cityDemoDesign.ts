@@ -1,3 +1,6 @@
+import { advertisingLayout } from "./cityAdvertising.ts";
+import { buildingMasses } from "./cityBuildingDesign.ts";
+import { buildingSlots } from "./cityBuildingV3.ts";
 import { applyComposition, COMPOSITIONS, identitySeed, newDesign, normalizeV3 } from "./cityBuildingV3.ts";
 import { ARCHITECTURES, brandPalette, FINISHES } from "./cityBuildingV2.ts";
 import { ENCLOSURES, PAVING_PATTERNS, DETAIL_SETS } from "./cityBuildingGrounds.ts";
@@ -25,5 +28,14 @@ export function demoBuildingDesign(index: number, color: string) {
   if (!["cafe", "kiosk"].includes(d.archetype || "")) d.middleFloors = Math.min(5, Math.max(0, d.middleFloors + pick([-1, 0, 1])));
   d.roofVariant = pick(roofVariants(d));
   d.slots["ground.left"] = d.slots["ground.right"] = d.grounds === "minimal" ? null : d.grounds === "urban" ? "bollards" : "planter";
-  return normalizeV3(d);
+  const result = normalizeV3(d);
+  result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
+  const masses = buildingMasses(result);
+  const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);
+  const count = pick([1, 2]);
+  while (available.length && result.advertising.placements.length < count) {
+    const [fit] = available.splice(Math.floor(random() * available.length), 1);
+    result.advertising.placements.push(fit.id);
+  }
+  return result;
 }

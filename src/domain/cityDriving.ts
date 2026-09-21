@@ -11,5 +11,18 @@ export function driveStep(state:DriveState,input:DriveInput,dt:number,bound:numb
  speed=Math.max(-8,Math.min(20,speed));
  const heading=state.heading+(Number(input.left)-Number(input.right))*1.5*delta*Math.min(1,Math.abs(speed)/3)*Math.sign(speed||1);
  const x=state.x+Math.sin(heading)*speed*delta,z=state.z+Math.cos(heading)*speed*delta;
- return onCityRoad(x,z,bound)?{x,z,heading,speed}:{...state,heading,speed:0};
+ if(onCityRoad(x,z,bound)) return {x,z,heading,speed};
+ // Project onto the nearest road corridor: remove inward curb motion, not momentum.
+ const clamp=(v:number,min:number,max:number)=>Math.max(min,Math.min(max,v));
+ const bx=clamp(x,-bound,bound),bz=clamp(z,-bound,bound);
+ const roadX=clamp(Math.round(bx/66)*66,-bound,bound),roadZ=clamp(Math.round(bz/66)*66,-bound,bound);
+ const vertical={x:clamp(bx,roadX-4.9,roadX+4.9),z:bz};
+ const horizontal={x:bx,z:clamp(bz,roadZ-4.9,roadZ+4.9)};
+ const distance=(p:{x:number;z:number})=>Math.hypot(p.x-x,p.z-z);
+ const p=distance(vertical)<=distance(horizontal)?vertical:horizontal;
+ // Turn the nose away from the contact normal, including when reversing.
+ const correction=Math.atan2((p.x-x)*Math.sign(speed||1), (p.z-z)*Math.sign(speed||1));
+ const difference=Math.atan2(Math.sin(correction-heading),Math.cos(correction-heading));
+ const nudged=heading+clamp(difference,-2.8*delta,2.8*delta);
+ return {x:clamp(p.x,-bound,bound),z:clamp(p.z,-bound,bound),heading:nudged,speed};
 }
