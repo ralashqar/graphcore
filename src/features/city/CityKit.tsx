@@ -1,4 +1,3 @@
-import { createCityArchitecture } from "./CityArchitecture";
 import { useMarketMotion } from "./CityMarketMotion";
 import { Batch, type Instance, type Piece } from "./CityInstances";
 import { CityBillboards } from "./CityBillboards";
@@ -57,7 +56,7 @@ export function CityKit({
   matchIds?: Set<string>;
 }) {
   const playback = useMarketMotion();
-  const { scene } = useGLTF("/city/downtown/downtown.glb", false, true);
+  const { scene } = useGLTF("/city/downtown/downtown.glb?v=modular-v2", false, true);
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();
@@ -65,7 +64,6 @@ export function CityKit({
     for (const root of scene.children) {
       const key = root.userData.assetKey || root.name,
         pieces: Piece[] = [];
-      if (String(key).startsWith("Building_")) continue;
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         const original = child.material as MeshStandardMaterial;
@@ -113,7 +111,6 @@ export function CityKit({
       });
       result.set(key, pieces);
     }
-    for (const [key, pieces] of createCityArchitecture()) result.set(key, pieces);
     return result;
   }, [scene]);
   useEffect(

@@ -44,12 +44,12 @@ export function buildingVariant(id: string): number {
 export function buildingMassing(tier: number, id: string) {
   const recipe = BUILDING_RECIPES[tier];
   const variant = buildingVariant(id);
-  const width = tier < 2 ? 12 : 16;
+  const width = tier < 2 ? 12 : 14;
   const height = recipe.floors * 3;
   const frontageHeight = (tier >= 3 ? Math.max(1, Math.round(recipe.floors * 0.65)) : recipe.floors) * 3;
   const wings = [
     { x: 0, z: 4.5, width, depth: 6, height: frontageHeight },
-    { x: width / 2 - 3, z: -3, width: 6, depth: 9, height },
+    { x: width / 2 - 3, z: -2.5, width: 6, depth: 8, height },
   ];
   // Transpose, rather than rotate, so neither layout puts its sign on a rear edge.
   return { wings: wings.map(w => variant ? { ...w, x: w.z, z: w.x, width: w.depth, depth: w.width } : w),

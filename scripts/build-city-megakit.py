@@ -97,64 +97,48 @@ manifest['Street_2Lane']['connectors']=[[-3,0,0],[3,0,0]]
 manifest['Street_Curve_2Lane']['connectors']=[[0,0,6],[6,0,0]]
 
 recipes=[(4,4,1),(8,8,1),(12,10,2),(12,12,4),(12,12,7),(14,14,10)]
-for tier,(width,depth,floors) in enumerate(recipes):
+for tier,(_,_,floors) in enumerate(recipes):
+    width=12 if tier<2 else 14
+    frontfloors=max(1,math.floor(floors*.65+.5)) if tier>=3 else floors
     for variant in range(2):
-        pieces=[]
+        wings=[(0,4.5,width,6,frontfloors),(width/2-3,-2.5,6,8,floors)]
+        if variant: wings=[(z,x,d,w,f) for x,z,w,d,f in wings]
+        near=[];far=[]
         upper='Brick_Window_Trim' if variant==0 else 'Metal_Window_Half'
         ground='Trim_FirstFloor_Window_001' if variant==0 else 'Metal_FirstFloor_Window'
         cornice='Cornice_Brick_Center' if variant==0 else 'Cornice_Metal_Center'
-        for floor in range(floors):
-            # Landmark's top two floors step in by one 2m bay on each side.
-            inset=2 if tier==5 and floor>=8 else 0
-            w,d=width-inset*2,depth-inset*2
+        for index,(cx,cz,w,d,count) in enumerate(wings):
+            ox,oz,ow,od,of=wings[1-index]
+            for floor in range(count):
+                for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
+                    for bay in range(int(length/2)):
+                        local=-length/2+1+bay*2
+                        x=cx+math.cos(angle)*local+math.sin(angle)*offset
+                        z=cz-math.sin(angle)*local+math.cos(angle)*offset
+                        # Internal shared walls disappear; upper return floors remain exposed.
+                        if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and floor<of: continue
+                        frontangle=math.pi/2 if variant else 0
+                        if index==0 and floor==0 and angle==frontangle and bay==int(length/4):
+                            near+=part('Door_1',x,0,z,angle)
+                        else:
+                            near+=part(ground if floor==0 else upper,x,floor*3,z,angle)
+                        if floor%2==0:
+                            far+=window_quad(x+math.sin(angle)*.025,floor*3+1.5,z+math.cos(angle)*.025,1.5,1.8,angle,glass)
+            # Low-poly roofs replace dense repeated roof tiles, while real kit cornices retain character.
+            near+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
+            near+=box('Foundation',cx,.08,cz,w,.16,d,stone)
+            far+=box('Mass',cx,count*1.5,cz,w,count*3,d,brick if variant==0 else metal)
+            far+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
             for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
                 for bay in range(int(length/2)):
                     local=-length/2+1+bay*2
-                    x=math.cos(angle)*local+math.sin(angle)*offset
-                    z=-math.sin(angle)*local+math.cos(angle)*offset
-                    if floor==0 and angle==0 and bay==int(length/4):
-                        # A true opening, with jambs/header rather than a door pasted onto a window.
-                        pieces+=box('DoorJamb',x-.75,1.5,z-.1,.5,3,.2,stone)
-                        pieces+=box('DoorJamb',x+.75,1.5,z-.1,.5,3,.2,stone)
-                        pieces+=box('DoorHeader',x,2.6,z-.1,1,.8,.2,stone)
-                        pieces+=part('Door_1',x+.5,0,z)
-                    else:
-                        pieces+=part(ground if floor==0 else upper,x,floor*3,z,angle)
-            # Roof at final level and the exposed terrace below the setback.
-            if floor==floors-1 or (tier==5 and floor==7):
-                for x in range(int(-w/2)+1,int(w/2),2):
-                    for z in range(int(-d/2)+1,int(d/2),2):
-                        pieces+=part('Roof_2x2',x,(floor+1)*3+.2,z)
-        # Roof cornice is a separate cap; avoids stretching façade bays.
-        inset=2 if tier==5 else 0; w=width-inset*2; d=depth-inset*2
-        for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
-            for bay in range(int(length/2)):
-                local=-length/2+1+bay*2
-                pieces+=part(cornice,math.cos(angle)*local+math.sin(angle)*offset,floors*3,
-                             -math.sin(angle)*local+math.cos(angle)*offset,angle)
-        # Closed bottom, subtle plinth, and bounded rooftop plant.
-        pieces+=box('Foundation',0,.08,0,width,.16,depth,stone)
-        if tier>=2: pieces+=part('Prop_ACUnit',0,floors*3,0)
-        metadata={'tier':tier,'variant':variant,'floors':floors,'front':[0,0,1], 'envelope':[16,36,16]}
-        obj=bake(f'Building_{tier}_{variant}_near',pieces,metadata)
-        bounds=manifest[obj.name]
-        if max(bounds['max'][0]-bounds['min'][0],bounds['max'][2]-bounds['min'][2])>16.001:
-            raise ValueError('Building exceeds its setback envelope: '+obj.name)
-        # Distant architecture retains silhouette and horizontal window rhythm.
-        far=[]; mat=brick if variant==0 else metal
-        lowerfloors=min(8,floors) if tier==5 else floors
-        far+=box('Mass',0,lowerfloors*1.5,0,width,lowerfloors*3,depth,mat)
-        if tier==5:far+=box('Crown',0,27,0,width-4,6,depth-4,mat)
-        for floor in range(floors):
-            inset=2 if tier==5 and floor>=8 else 0; w=width-inset*2;d=depth-inset*2
-            for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
-                for bay in range(int(length/2)):
-                    local=-length/2+1+bay*2
-                    x=math.cos(angle)*local+math.sin(angle)*(offset+.02)
-                    z=-math.sin(angle)*local+math.cos(angle)*(offset+.02)
-                    far+=window_quad(x,floor*3+1.6,z,1.5,2,angle,stone if variant==0 else metal)
-                    far+=window_quad(x+math.sin(angle)*.01,floor*3+1.6,z+math.cos(angle)*.01,1.15,1.6,angle,glass)
-        far+=box('Cap',0,floors*3+.25,0,w+.3,.5,d+.3,roofmat)
+                    x=cx+math.cos(angle)*local+math.sin(angle)*offset
+                    z=cz-math.sin(angle)*local+math.cos(angle)*offset
+                    if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and count<=of: continue
+                    near+=part(cornice,x,count*3,z,angle)
+        metadata={'tier':tier,'variant':variant,'floors':floors,'front':[variant,0,1-variant],
+                  'envelope':[16,36,16],'modulePitch':2,'floorHeight':3,'layoutVersion':2,'wings':wings}
+        bake(f'Building_{tier}_{variant}_near',near,metadata)
         bake(f'Building_{tier}_{variant}_far',far,metadata)
 
 bpy.ops.object.select_all(action='DESELECT')
