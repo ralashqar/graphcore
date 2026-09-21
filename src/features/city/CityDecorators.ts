@@ -1,4 +1,4 @@
-import { closeNativePanel } from "./CityNativePanelGeometry";
+import { closeNativePanel, recessNativeFloorSides } from "./CityNativePanelGeometry";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import {
@@ -59,6 +59,7 @@ export function loadDecorators(): Promise<DecoratorPack> {
             const closed=closeNativePanel(geometry,module);
             if(closed!==geometry){geometry.dispose();geometry=closed;}
           }
+          if(root.name === "Floor_4x4"){const recessed=recessNativeFloorSides(geometry);geometry.dispose();geometry=recessed;}
           geometry.computeBoundingBox();
           pieces.push({ geometry, material });
         });

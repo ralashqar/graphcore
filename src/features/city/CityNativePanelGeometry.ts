@@ -23,7 +23,17 @@ export function closeNativePanel(source:BufferGeometry, module:typeof NATIVE_MOD
  for(const {a,b,count} of edges.values()){
   const p=point(a),q=point(b);
   if(count!==1||!perimeter(p,q)||Math.min(p.z,q.z)<=back+.001)continue;
-  const pb=p.clone().setZ(back),qb=q.clone().setZ(back);
+  // Keep the visible seam fixed, but tuck its rear vertices into this panel.
+  // Adjacent panels otherwise generate opposing coplanar return quads.
+  const inset=(v:Vector3)=>{
+   const r=v.clone().setZ(back),epsilon=.006;
+   for(const edge of new Set([-module.width/2,module.center-module.span/2]))if(Math.abs(v.x-edge)<.004)r.x+=epsilon;
+   for(const edge of new Set([module.width/2,module.center+module.span/2]))if(Math.abs(v.x-edge)<.004)r.x-=epsilon;
+   if(Math.abs(v.y)<.004)r.y+=epsilon;
+   if(Math.abs(v.y-module.height)<.004)r.y-=epsilon;
+   return r;
+  };
+  const pb=inset(p),qb=inset(q);
   for(const tri of [[q,p,pb],[q,pb,qb]]){
    const normal=tri[1].clone().sub(tri[0]).cross(tri[2].clone().sub(tri[0])).normalize();
    for(const v of tri){extra.push(v.x,v.y,v.z);extraNormals.push(normal.x,normal.y,normal.z);extraUv.push(v.x/module.width,v.y/module.height);extraSources.push(v===p||v===pb?a:b);}
@@ -49,4 +59,25 @@ export function closeNativePanel(source:BufferGeometry, module:typeof NATIVE_MOD
  }
  geometry.dispose();
  return out;
+}
+
+/** Keep the roof/floor top exactly tiled; recess only its lower perimeter.
+ * Native walls own the vertical exterior plane. Sloping the slab edge inward
+ * removes coincident wall/slab faces without opening the horizontal floor seam.
+ */
+export function recessNativeFloorSides(source:BufferGeometry):BufferGeometry {
+ const out=source.clone();out.computeBoundingBox();
+ const bounds=out.boundingBox!,p=out.getAttribute("position"),height=bounds.max.y-bounds.min.y;
+ if(height<.00001)return out;
+ const inset=.012;
+ for(let i=0;i<p.count;i++){
+  const depth=(bounds.max.y-p.getY(i))/height;
+  let x=p.getX(i),z=p.getZ(i);
+  if(Math.abs(x-bounds.min.x)<.0001)x+=inset*depth;
+  if(Math.abs(x-bounds.max.x)<.0001)x-=inset*depth;
+  if(Math.abs(z-bounds.min.z)<.0001)z+=inset*depth;
+  if(Math.abs(z-bounds.max.z)<.0001)z-=inset*depth;
+  p.setXYZ(i,x,p.getY(i),z);
+ }
+ out.computeVertexNormals();out.computeBoundingBox();return out;
 }

@@ -2,8 +2,8 @@ import {NATIVE_FACADES} from "./cityNativeFacades";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {NodeIO} from "@gltf-transform/core";
-import {BufferGeometry,Float32BufferAttribute,Mesh,MeshBasicMaterial,DoubleSide,Raycaster,Vector3,PlaneGeometry,BufferAttribute} from "three";
-import {closeNativePanel} from "../features/city/CityNativePanelGeometry";
+import {BufferGeometry,Float32BufferAttribute,Mesh,MeshBasicMaterial,DoubleSide,Raycaster,Vector3,PlaneGeometry,BufferAttribute,BoxGeometry} from "three";
+import {closeNativePanel,recessNativeFloorSides} from "../features/city/CityNativePanelGeometry";
 import {NATIVE_MODULES} from "./cityNativeModules";
 import {newDesign,resolveV3,normalizeV3,COMPOSITIONS,applyComposition} from "./cityBuildingV3";
 
@@ -89,5 +89,26 @@ test("every curated facade renders its selected native module at bounded dimensi
    assert.ok([...a.position,a.scale,...(a.axisScale||[])].every(Number.isFinite));
    assert.ok(a.scale>0);
   }
+ }
+});
+
+test("native floor sides recede while top seams and vertex attributes remain fixed",()=>{
+ const source=new BoxGeometry(4,.1,4),closed=recessNativeFloorSides(source);
+ const a=source.getAttribute("position"),b=closed.getAttribute("position");
+ for(let i=0;i<a.count;i++){
+  assert.equal(a.getY(i),b.getY(i));
+  if(a.getY(i)>0){assert.equal(a.getX(i),b.getX(i));assert.equal(a.getZ(i),b.getZ(i));}
+  else {assert.ok(Math.abs(b.getX(i))<2);assert.ok(Math.abs(b.getZ(i))<2);}
+ }
+ assert.deepEqual(closed.getAttribute("uv").array,source.getAttribute("uv").array);
+ source.dispose();closed.dispose();
+});
+
+test("native full-height facade suppresses redundant lower slab only after pack loads",()=>{
+ for(const blueprint of ["office","courtyard","l-shape","terraces"] as const){
+  const r=resolveV3(normalizeV3({...newDesign("slab-seams"),blueprint,finish:"facade"}),"#778899");
+  const lower=r.parts.filter(p=>p.kind==="box" && Math.abs(p.size[1]-.18)<.00001 && r.masses.some(m=>Math.abs(p.position[1]-(m.y+.09))<.00001));
+  assert.ok(lower.length);
+  for(const p of lower){assert.equal(p.fallback,"facade");assert.equal(p.fallbackAsset,"Floor_4x4");}
  }
 });
