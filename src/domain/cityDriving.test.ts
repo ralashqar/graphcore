@@ -41,3 +41,15 @@ test("head-on and reverse curb contact recover while staying on roads",()=>{
   assert.ok(Math.hypot(s.x-4.99,s.z-33)>5);
  }
 });
+
+test("reverse input brakes first and steering builds progressively",()=>{
+ const start={x:0,z:33,heading:0,speed:12};
+ const reverse=driveStep(start,{...input,reverse:true},1/60,330);
+ assert.ok(reverse.speed>0 && reverse.speed<start.speed);
+ const turn=driveStep(start,{...input,left:true},1/120,330);
+ assert.ok(turn.steering!>0 && turn.steering!<.1);
+ const coast=driveStep(start,input,1/60,330);
+ assert.ok(coast.speed>11.8);
+ const stopped=driveStep({...start,speed:0},{...input,left:true},1/60,330);
+ assert.equal(stopped.heading,0);
+});

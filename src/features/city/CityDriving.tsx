@@ -5,11 +5,12 @@ import { Group,PerspectiveCamera as Camera,Vector3 } from "three";
 import { driveStep,type DriveInput } from "../../domain/cityDriving";
 import { useCityMapLayout } from "./CityMapLayout";
 const empty=():DriveInput=>({forward:false,reverse:false,left:false,right:false,brake:false});
-export function CityDriving({capacity,onRegion,onExit}:{capacity:number;onRegion:(x:number,z:number)=>void;onExit:()=>void;reduced:boolean}) {
+export function CityDriving({capacity,onRegion,onExit,reduced}:{capacity:number;onRegion:(x:number,z:number)=>void;onExit:()=>void;reduced:boolean}) {
  const camera=useRef<Camera>(null),car=useRef<Group>(null),input=useRef(empty());
  const state=useRef({x:0,z:33,heading:0,speed:0}),look=useRef({yaw:0,pitch:0}),timer=useRef(0);
- const {gl}=useThree(),{logicalAxis,roadCapacityMultiplier}=useCityMapLayout();
+ const {gl,setEvents,events}=useThree(),{logicalAxis,roadCapacityMultiplier}=useCityMapLayout();
  const bound=Math.max(66,(Math.ceil(Math.sqrt(capacity*roadCapacityMultiplier)/4)-1)*66);
+ useEffect(()=>{const enabled=events.enabled;setEvents({enabled:false});return()=>setEvents({enabled});},[setEvents]);
  const exit=useRef(onExit);exit.current=onExit;
  useEffect(()=>{
   const keys:Record<string,keyof DriveInput>={w:"forward",ArrowUp:"forward",s:"reverse",ArrowDown:"reverse",a:"left",ArrowLeft:"left",d:"right",ArrowRight:"right"," ":"brake"};
@@ -30,7 +31,7 @@ export function CityDriving({capacity,onRegion,onExit}:{capacity:number;onRegion
   const canvas=gl.domElement;canvas.addEventListener("pointerdown",down);canvas.addEventListener("pointermove",move);canvas.addEventListener("pointerup",up);canvas.addEventListener("pointercancel",up);canvas.addEventListener("contextmenu",menu);
   return()=>{clear();window.removeEventListener("keydown",key);window.removeEventListener("keyup",key);window.removeEventListener("blur",clear);document.removeEventListener("visibilitychange",visibility);canvas.removeEventListener("pointerdown",down);canvas.removeEventListener("pointermove",move);canvas.removeEventListener("pointerup",up);canvas.removeEventListener("pointercancel",up);canvas.removeEventListener("contextmenu",menu);delete canvas.dataset.cityDriving;};
  },[gl]);
- const simulation=useRef(0);
+ const simulation=useRef(0),cameraReady=useRef(false);
  const desired=useRef(new Vector3()),target=useRef(new Vector3());
  useFrame((_,dt)=>{
   // Bounded fixed steps keep driving speed stable through occasional long frames.
@@ -47,7 +48,8 @@ export function CityDriving({capacity,onRegion,onExit}:{capacity:number;onRegion
    // The chase camera stays in the road corridor instead of clipping into plots.
    const dx=Math.abs(desired.current.x-Math.round(desired.current.x/66)*66),dz=Math.abs(desired.current.z-Math.round(desired.current.z/66)*66);
    if(Math.min(dx,dz)>6){if(dx<dz)desired.current.x=Math.round(desired.current.x/66)*66+Math.sign(desired.current.x-Math.round(desired.current.x/66)*66)*6;else desired.current.z=Math.round(desired.current.z/66)*66+Math.sign(desired.current.z-Math.round(desired.current.z/66)*66)*6;}
-   camera.current.position.copy(desired.current);
+   if(!cameraReady.current || reduced){camera.current.position.copy(desired.current);cameraReady.current=true;}
+   else camera.current.position.lerp(desired.current,1-Math.exp(-10*Math.min(dt,.1)));
    target.current.set(v.x+Math.sin(heading)*7,1.8,v.z+Math.cos(heading)*7);
    camera.current.lookAt(target.current);
   }

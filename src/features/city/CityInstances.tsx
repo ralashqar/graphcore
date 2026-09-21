@@ -127,7 +127,7 @@ export function Batch({
     // New/reallocated instance buffers must be valid before the first paint.
     updateMatrices();
   }, [instances, pieces, playback, reduced, arrivals]);
-  useFrame(() => updateMatrices());
+  useFrame(() => { if (dirty.current || (!reduced && playback)) updateMatrices(); });
   return (
     <>
       {pieces.map((piece, index) => (

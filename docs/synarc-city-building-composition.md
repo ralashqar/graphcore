@@ -180,3 +180,8 @@ City and building-editor canvases now disable shadow maps. The city previously u
 ### Dedicated driving viewport
 
 Driving hides site chrome and fills the viewport. Up to 100 loaded properties remain resident with no car-triggered region updates; larger datasets retain bounded streaming. Driving uses 1x DPR, suppresses arrival motion and exposure scanning, and pauses street activity. Fixed 120Hz movement steps use a bounded catch-up window. Browser checks verify full-height canvas, hidden header, stable resident count, driving and map restoration. This is not a measured frame-time guarantee or physical mobile benchmark.
+
+
+### Arcade handling refinement
+
+The flat-road driving model now uses a 2.7m bicycle wheelbase, smoothed speed-sensitive steering and bounded lateral acceleration. Opposite throttle brakes before reversing; coasting uses drag and Space applies service braking. Existing forgiving curb projection remains. Camera damping respects reduced motion. Driving disables R3F scene picking and restores it on exit; static instance callbacks skip matrix work before querying time. This is arcade handling, not rigid-body suspension or a measured FPS guarantee.
