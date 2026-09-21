@@ -202,3 +202,9 @@ test("procedural recessed panes have no solid wall overlapping their opening",()
   for(const wall of walls) assert.ok(![0,1,2].every(axis=>Math.abs(wall.position[axis]-pane.position[axis])<(wall.size[axis]+pane.size[axis])/2-.001));
  }
 });
+
+test("clean procedural windows do not add projecting vertical frame bars",()=>{
+ const d=newDesign("clean-windows");d.finish="procedural";
+ const parts=resolveV3(d,"#506b58","near").parts;
+ assert.equal(parts.filter(p=>p.color===d.palette.trim && ((p.size[0]===.1 && p.size[2]===.16)||(p.size[0]===.16 && p.size[2]===.1))).length,0);
+});

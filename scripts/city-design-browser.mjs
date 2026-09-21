@@ -148,6 +148,7 @@ try {
   if (process.env.CITY_TEXTURE_AUDIT === "1") {
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
+    await page.getByLabel("Building finish",{exact:true}).selectOption("facade");
     await page.getByRole("button",{name:"Branding",exact:true}).click();
     for(const id of ["brick","plaster","concrete","terracotta","metal","timber","pavers","checker","none"]){
       await page.getByLabel("wall texture",{exact:true}).selectOption(id);

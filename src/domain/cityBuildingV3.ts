@@ -714,19 +714,7 @@ export function resolveV3(
           ? "facade"
           : undefined,
       );
-      if (lod === "near" && (d.finish === "procedural" || y === .65)) {
-        for (const side of [-1, 1]) {
-          box(
-            wx + (horizontal ? side * bayWidth / 2 : nx * .1),
-            y + height * .5,
-            wz + (horizontal ? nz * .1 : side * bayWidth / 2),
-            horizontal ? .1 : .16,
-            winH + .16,
-            horizontal ? .16 : .1,
-            p.trim,
-          );
-        }
-      }
+
     }
     if (openings.length) {
       // Replace the solid backing with wall strips around real openings.
