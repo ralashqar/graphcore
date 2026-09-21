@@ -272,7 +272,7 @@ function World({
   onFocus: (i: number) => void;
 }) {
   const mega = usePieces("/city/megacity/showcase.glb?v=3");
-  const kit = usePieces("/city/downtown/downtown.glb?v=source-v4");
+  const kit = usePieces("/city/downtown/downtown.glb?v=source-v3");
   const groups = useMemo(() => {
     const out = new Map<string, Instance[]>();
     for (let i = 0; i < (stress ? 400 : buildings.length); i++) {

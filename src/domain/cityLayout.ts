@@ -44,13 +44,12 @@ export function buildingVariant(id: string): number {
 export function buildingMassing(tier: number, id: string) {
   const recipe = BUILDING_RECIPES[tier];
   const variant = buildingVariant(id);
-  const width = 12;
-  const floors = Math.max(1, Math.ceil(recipe.floors / 2));
-  const height = floors * 6;
-  const frontageHeight = (tier >= 3 ? Math.max(1, Math.round(floors * 0.65)) : floors) * 6;
+  const width = tier < 2 ? 12 : 14;
+  const height = recipe.floors * 3;
+  const frontageHeight = (tier >= 3 ? Math.max(1, Math.round(recipe.floors * 0.65)) : recipe.floors) * 3;
   const wings = [
-    { x: 0, z: 4, width, depth: 4, height: frontageHeight },
-    { x: 4, z: -2, width: 4, depth: 8, height },
+    { x: 0, z: 4.5, width, depth: 6, height: frontageHeight },
+    { x: width / 2 - 3, z: -2.5, width: 6, depth: 8, height },
   ];
   // Transpose, rather than rotate, so neither layout puts its sign on a rear edge.
   return { wings: wings.map(w => variant ? { ...w, x: w.z, z: w.x, width: w.depth, depth: w.width } : w),
@@ -59,7 +58,7 @@ export function buildingMassing(tier: number, id: string) {
 export function billboardEnvelope(tier: number, id = "") {
   const layout = buildingMassing(tier, id);
   const width = layout.width - 0.4;
-  return { width, height: width / 2, front: 6.65, depth: 0.3,
+  return { width, height: width / 2, front: 7.65, depth: 0.3,
     bottom: layout.frontageHeight + 0.35, rotation: layout.rotation };
 }
 /** Local +Z façade faces the nearer east/west street. Stable within its plot. */

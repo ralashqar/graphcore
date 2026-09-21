@@ -117,10 +117,10 @@ test("exported modular footprints and full-height bays match the runtime without
  const manifest=JSON.parse(readFileSync(new URL("../../public/city/downtown/manifest.json",import.meta.url),"utf8"));
  for(let tier=0;tier<6;tier++) for(let variant=0;variant<2;variant++) {
   const id=["preset-0","preset-1"].find(id=>buildingVariant(id)===variant)!;
-  const expected=buildingMassing(tier,id).wings.map(w=>[w.x,w.z,w.width,w.depth,w.height/6]);
+  const expected=buildingMassing(tier,id).wings.map(w=>[w.x,w.z,w.width,w.depth,w.height/3]);
   for(const lod of ["near","far"]) {
    const asset=manifest.assets[`Building_${tier}_${variant}_${lod}`];
-   assert.equal(asset.layoutVersion,4); assert.equal(asset.modulePitch,4);assert.equal(asset.floorHeight,6);
+   assert.equal(asset.layoutVersion,3); assert.equal(asset.modulePitch,2);assert.equal(asset.floorHeight,3);
    assert.deepEqual(asset.wings,expected);
   }
  }
