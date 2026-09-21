@@ -56,7 +56,7 @@ export function CityKit({
   matchIds?: Set<string>;
 }) {
   const playback = useMarketMotion();
-  const { scene } = useGLTF("/city/downtown/downtown.glb?v=source-v3", false, true);
+  const { scene } = useGLTF("/city/downtown/downtown.glb?v=source-v4", false, true);
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();

@@ -112,3 +112,10 @@ TypeScript (`npx tsc --noEmit`), production build and development startup passed
 ## MegaCity comparison collection
 
 A separate `/city/asset-showcase` page now compares five converted JC MegaCity buildings and three decorative modules with these Quaternius presets. Normal City rendering continues to use this Downtown pack. See [MegaCity showcase](synarc-city-megacity-showcase.md) for the prefab conversion process, review controls, measurements and remaining adoption decisions.
+## Larger Quaternius modules (September 2026)
+
+Layout version 4 uniformly doubles facade, door, cornice and awning modules on all three axes. The assembly grid is now four metres wide with six-metre storeys; source four-metre accent windows become eight-metre spans. Storey counts are approximately halved (rounded up), preserving the tier progression without stretching individual faces. Whole buildings remain unit-scale instances.
+
+Both mirrored L variants use a 12-by-12-metre outer footprint on the larger module grid, leaving extra plot space. Shared walls remain omitted. Runtime massing, distant geometry and roof billboard mounts match the regenerated presets. Roads, road markings and street props retain their previous scale. Both the City and the showcase comparison load the revised asset URL.
+
+The pack shrank from 7,402,488 to 2,440,360 bytes (about 67% smaller), retaining 24 building presets, 17 materials and eight textures. All six layout checks, source hashes, plot bounds and glTF validation passed. Showcase and City billboard browser checks passed, including image fallback, selection, mobile viewport and reduced motion, with no runtime errors. Physical-phone performance remains unverified.

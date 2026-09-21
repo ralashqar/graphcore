@@ -118,10 +118,12 @@ manifest['Street_Curve_2Lane']['connectors']=[[0,0,6],[6,0,0]]
 
 recipes=[(4,4,1),(8,8,1),(12,10,2),(12,12,4),(12,12,7),(14,14,10)]
 for tier,(_,_,floors) in enumerate(recipes):
-    width=12 if tier<2 else 14
+    # Double native modules uniformly; use a 4m grid and half as many storeys.
+    floors=max(1,math.ceil(floors/2))
+    width=12
     frontfloors=max(1,math.floor(floors*.65+.5)) if tier>=3 else floors
     for variant in range(2):
-        wings=[(0,4.5,width,6,frontfloors),(width/2-3,-2.5,6,8,floors)]
+        wings=[(0,4,width,4,frontfloors),(4,-2,4,8,floors)]
         if variant: wings=[(z,x,d,w,f) for x,z,w,d,f in wings]
         near=[];far=[]
         accent=tier in [2,4]
@@ -134,49 +136,48 @@ for tier,(_,_,floors) in enumerate(recipes):
             for floor in range(count):
                 for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
                     consumed=set()
-                    for bay in range(int(length/2)):
+                    for bay in range(int(length/4)):
                         if bay in consumed: continue
-                        local=-length/2+1+bay*2
+                        local=-length/2+2+bay*4
                         x=cx+math.cos(angle)*local+math.sin(angle)*offset
                         z=cz-math.sin(angle)*local+math.cos(angle)*offset
                         # Internal shared walls disappear; upper return floors remain exposed.
                         if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and floor<of: continue
                         frontangle=math.pi/2 if variant else 0
-                        if index==0 and floor==0 and angle==frontangle and bay==int(length/4):
-                            near+=part('DoorFrame_Trim' if variant==0 else 'DoorFrame_Metal_Single',x,0,z,angle)
-                            near+=part('Door_1',x+math.cos(angle)*.5,0,z-math.sin(angle)*.5,angle)
+                        if index==0 and floor==0 and angle==frontangle and bay==int(length/8):
+                            near+=part('DoorFrame_Trim' if variant==0 else 'DoorFrame_Metal_Single',x,0,z,angle,scale=(2,2,2))
+                            near+=part('Door_1',x+math.cos(angle),0,z-math.sin(angle),angle,scale=(2,2,2))
                         elif accent and floor>0:
-                            nx=x+math.cos(angle)*2; nz=z-math.sin(angle)*2
+                            nx=x+math.cos(angle)*4; nz=z-math.sin(angle)*4
                             next_exposed=not(abs(nx-ox)<ow/2+.01 and abs(nz-oz)<od/2+.01 and floor<of)
-                            if bay+1<int(length/2) and next_exposed:
-                                near+=part(upper,x+math.cos(angle),floor*3,z-math.sin(angle),angle)
+                            if bay+1<int(length/4) and next_exposed:
+                                near+=part(upper,x+math.cos(angle)*2,floor*6,z-math.sin(angle)*2,angle,scale=(2,2,2))
                                 consumed.add(bay+1)
-                            else: near+=part(plain,x,floor*3,z,angle)
+                            else: near+=part(plain,x,floor*6,z,angle,scale=(2,2,2))
                         else:
-                            near+=part(ground if floor==0 else upper,x,floor*3,z,angle)
-                        if floor%2==0:
-                            far+=window_quad(x+math.sin(angle)*.025,floor*3+1.5,z+math.cos(angle)*.025,1.5,1.8,angle,glass)
+                            near+=part(ground if floor==0 else upper,x,floor*6,z,angle,scale=(2,2,2))
+                        far+=window_quad(x+math.sin(angle)*.025,floor*6+3,z+math.cos(angle)*.025,3,3.6,angle,glass)
             # Low-poly roofs replace dense repeated roof tiles, while real kit cornices retain character.
-            near+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
+            near+=box('Roof',cx,count*6+.1,cz,w,.2,d,roofmat)
             near+=box('Foundation',cx,.08,cz,w,.16,d,stone)
-            far+=box('Mass',cx,count*1.5,cz,w,count*3,d,(whitebrick if variant==0 else marble) if accent else (brick if variant==0 else metal))
-            far+=box('Roof',cx,count*3+.1,cz,w,.2,d,roofmat)
+            far+=box('Mass',cx,count*3,cz,w,count*6,d,(whitebrick if variant==0 else marble) if accent else (brick if variant==0 else metal))
+            far+=box('Roof',cx,count*6+.1,cz,w,.2,d,roofmat)
             for angle,length,offset in [(0,w,d/2),(math.pi,w,d/2),(math.pi/2,d,w/2),(-math.pi/2,d,w/2)]:
-                for bay in range(int(length/2)):
-                    local=-length/2+1+bay*2
+                for bay in range(int(length/4)):
+                    local=-length/2+2+bay*4
                     x=cx+math.cos(angle)*local+math.sin(angle)*offset
                     z=cz-math.sin(angle)*local+math.cos(angle)*offset
                     if abs(x-ox)<ow/2+.01 and abs(z-oz)<od/2+.01 and count<=of: continue
-                    inset=.06 if cornice=='Cornice_Marble_Center' else 0
-                    near+=part(cornice,x-math.sin(angle)*inset,count*3,z-math.cos(angle)*inset,angle)
+                    inset=.12 if cornice=='Cornice_Marble_Center' else 0
+                    near+=part(cornice,x-math.sin(angle)*inset,count*6,z-math.cos(angle)*inset,angle,scale=(2,2,2))
             if index==0 and tier in [1,2,3]:
-                # Facing the open courtyard, not the billboard facade. Native-size awning.
+                # Facing the open courtyard with the same uniform module scale.
                 angle=-math.pi/2 if variant else math.pi
-                ax=1.5 if variant else -width/2+2
-                az=-width/2+2 if variant else 1.5
-                near+=part('Prop_Awning',ax,0,az,angle)
+                ax=2 if variant else -width/2+2
+                az=-width/2+2 if variant else 2
+                near+=part('Prop_Awning',ax,0,az,angle,scale=(2,2,2))
         metadata={'tier':tier,'variant':variant,'floors':floors,'front':[variant,0,1-variant],
-                  'envelope':[16,36,16],'modulePitch':2,'floorHeight':3,'layoutVersion':3,'wings':wings,'facade':upper,'nativeBayWidth':4 if accent else 2}
+                  'envelope':[16,36,16],'modulePitch':4,'floorHeight':6,'moduleScale':2,'layoutVersion':4,'wings':wings,'facade':upper,'nativeBayWidth':4 if accent else 2}
         bake(f'Building_{tier}_{variant}_near',near,metadata)
         bake(f'Building_{tier}_{variant}_far',far,metadata)
 
