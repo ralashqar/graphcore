@@ -27,6 +27,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -111,7 +112,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "04df40c2030b6b158dd766ce7d44fa751a6ce36a17f35d1b74aa3836b5c437c4",
       "attachmentType": "facade.bay",
@@ -183,6 +185,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -198,6 +201,80 @@
       "clearanceSize": [
         2.0,
         1.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_Plain_3": {
+      "kind": "wall",
+      "family": "Brick",
+      "size": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_RedBrick",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim"
+      ],
+      "sourceSha256": "95624f083d56c171943a067e2534e180899f6fd69c3f9a9ac9a55f918104f1a7",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "Concrete_Plain_3": {
+      "kind": "wall",
+      "family": "Concrete",
+      "size": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Concrete",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Concrete_Plain_3",
+        "Entrance_Concrete_2x1",
+        "Concrete_Corner",
+        "Stairs_Entrance_Concrete"
+      ],
+      "sourceSha256": "7d615bb0b7b21957aee109cf08324cc2ca05d9c3995fd09e02bc75d157fa846b",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
         0.2
       ],
       "detailLevel": "near"
@@ -260,7 +337,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "f6668f6f3f5aa256d2544de92f5bb2a8c51d889af9d1be90a38f5c22ef73ccde",
       "attachmentType": "facade.bay",
@@ -333,7 +411,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "a93652dac15f07c56f859b80eb9a075ec09c57b5e9dc08460fed22e491e1150b",
       "attachmentType": "entrance",
@@ -362,8 +441,10 @@
         "Decor_MI_Trim_MetalConcrete"
       ],
       "compatible": [
+        "Concrete_Plain_3",
         "Entrance_Concrete_2x1",
-        "Concrete_Corner"
+        "Concrete_Corner",
+        "Stairs_Entrance_Concrete"
       ],
       "sourceSha256": "df8b376d55f82da292f4f085fd0d348d6da8b8c50fa9e8b565e9cad090c1854b",
       "attachmentType": "entrance",
@@ -506,6 +587,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -545,6 +627,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -584,6 +667,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -623,6 +707,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -699,7 +784,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "8f00418b36a05e749dee230689afcedffa0a5ef0298d879cb2a6fea0a9f079c2",
       "attachmentType": "roof.edge",
@@ -883,6 +969,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -921,8 +1008,10 @@
         "Decor_MI_InteriorWall"
       ],
       "compatible": [
+        "Concrete_Plain_3",
         "Entrance_Concrete_2x1",
-        "Concrete_Corner"
+        "Concrete_Corner",
+        "Stairs_Entrance_Concrete"
       ],
       "sourceSha256": "eeefdebe81bb9720386bc7c4774197eb25a68d4f45e44dccaff3c3db1b30b9f5",
       "attachmentType": "facade.corner",
@@ -953,6 +1042,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -1066,7 +1156,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "1bbe316f6f6b2ca825658a63ced21de6d6a42de4885e2954814a6fe657698e9e",
       "attachmentType": "facade.corner",
@@ -1101,6 +1192,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -1222,6 +1314,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -1263,6 +1356,7 @@
       "compatible": [
         "Brick_Window_Trim",
         "Brick_Plain_1",
+        "Brick_Plain_3",
         "Cornice_Brick_Center",
         "Cornice_Brick_L",
         "Cornice_Brick_R",
@@ -1306,7 +1400,8 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center",
         "Marble_BevelColumn_Center",
-        "Marble_Plain_1"
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "83edfbddd0fc353553cc73d338fedd4ee0de92291d9284e49759ae0881e79318",
       "attachmentType": "facade.band",
@@ -1387,6 +1482,74 @@
         2.0,
         1.0,
         0.2
+      ],
+      "detailLevel": "near"
+    },
+    "Stairs_Entrance_Concrete": {
+      "kind": "stairs",
+      "family": "Concrete",
+      "size": [
+        2.0,
+        1.00675,
+        1.99078
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Concrete"
+      ],
+      "compatible": [
+        "Concrete_Plain_3",
+        "Entrance_Concrete_2x1",
+        "Concrete_Corner",
+        "Stairs_Entrance_Concrete"
+      ],
+      "sourceSha256": "ca8d4fea5ae5489c5bb3fb6381e4219d5240a91af05a32dcbf602534f1eed81d",
+      "attachmentType": "wall.extension",
+      "clearanceSize": [
+        2.0,
+        1.00675,
+        1.99078
+      ],
+      "detailLevel": "near"
+    },
+    "Stairs_Entrance_Marble": {
+      "kind": "stairs",
+      "family": "Marble",
+      "size": [
+        2.0,
+        1.00759,
+        2.08197
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim"
+      ],
+      "compatible": [
+        "Marble_Window",
+        "Marble_Plain_3",
+        "Entrance_Marble_2x1",
+        "Cornice_Marble_Center",
+        "Marble_BevelColumn_Center",
+        "Marble_Plain_1",
+        "Stairs_Entrance_Marble"
+      ],
+      "sourceSha256": "47d2f247fdf1256f8658add7fd4a743ff69e5f34801a5d9a77649808532c08d7",
+      "attachmentType": "wall.extension",
+      "clearanceSize": [
+        2.0,
+        1.00759,
+        2.08197
       ],
       "detailLevel": "near"
     },

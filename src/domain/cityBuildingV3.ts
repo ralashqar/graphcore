@@ -42,6 +42,8 @@ export const COMPONENTS = [
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
   textures?: CityTextureChoices;
+  solidSideWalls?: boolean;
+  stairExtension?: "none" | "concrete" | "marble";
   advertising?: Advertising;
   version: 3;
   generatorRevision: "city-grammar-1";
@@ -81,6 +83,7 @@ export type Corner = {
   kind: "convex" | "concave" | "end";
 };
 export type ResolvedV3 = ResolvedDesign & {
+  extensionReason: string | null;
   slots: Slot[];
   signs: DesignSign[];
   corners: Corner[];
@@ -555,6 +558,28 @@ export function resolveV3(
     width: 3.2,
     height: .55,
   };
+  let extensionWall: typeof walls[number] | undefined;
+  let extensionReason: string | null = null;
+  if (d.stairExtension && d.stairExtension !== "none") {
+    extensionReason = d.finish === "procedural" ? "Choose Quaternius accents or facade for native stairs." : "No clear side wall has room for stairs inside this plot.";
+    if (d.finish !== "procedural") {
+      for (const wall of walls.filter(w=>w.y===.65 && w.nx!==0 && w.length>=4).sort((a,b)=>b.nx-a.nx || a.z-b.z)) {
+        const depth=d.stairExtension==="marble"?2.082:1.991;
+        const bounds={position:[wall.x+wall.nx*(depth/2+.08),1.9,wall.z],size:[depth,3.3,2.4]};
+        if(Math.abs(bounds.position[0])+depth/2>10.6 || Math.abs(wall.z)+1.2>10.6)continue;
+        if(masses.some(m=>overlaps(bounds,{position:[m.x,m.y+m.height/2,m.z],size:[m.width,m.height,m.depth]})))continue;
+        if(slots.some(slot=>slot.active && overlaps(bounds,slot)))continue;
+        if(advertising.signs.some(sign=>overlaps(bounds,{position:[sign.x,sign.y,sign.z],size:[sign.rotation?.6:sign.width,sign.height,sign.rotation?sign.width:.6]})))continue;
+        extensionWall=wall;extensionReason=null;
+        if(lod!=="far") {
+          attach(d.stairExtension==="marble"?"Stairs_Entrance_Marble":"Stairs_Entrance_Concrete",wall.x+wall.nx*.08,.25,wall.z,Math.atan2(wall.nx,0),1,"stairs");
+          // A raised service door gives the decorative landing a coherent destination.
+          attach("Door_1",wall.x+wall.nx*.04,1.26,wall.z,Math.atan2(wall.nx,0),.65,"door");
+        }
+        break;
+      }
+    }
+  }
   const surface =
     { garden: "#8c9d77", limestone: "#d5ceba", slate: "#7b8587" }[d.tile];
   box(0, .05, 0, 23.5, .24, 23.5, p.trim);
@@ -576,7 +601,7 @@ export function resolveV3(
   }
   const family = {
     glass: ["Metal_Window_Half", "Metal_Plain_3", "Cornice_Metal_Center"],
-    brick: ["Brick_Window_Trim", "Brick_Plain_1", "Cornice_Brick_Center"],
+    brick: ["Brick_Window_Trim", "Brick_Plain_3", "Cornice_Brick_Center"],
     boutique: ["Marble_Window", "Marble_Plain_3", "Cornice_Marble_Center"],
     creative: [
       "WhiteBrick_Window",
@@ -638,6 +663,7 @@ export function resolveV3(
     const columnWidth = column[1] * columnScale;
     // Only exposed walls receive details. Native pieces retain uniform XYZ scaling.
     const addDetail = (asset:string,offset:number,bottom:number,scale:number,size:readonly number[],role:string) => {
+      if (extensionWall===wall && Math.abs(offset)<1.4) return;
       const wx=x+(horizontal?offset:0)+nx*.045,wz=z+(horizontal?0:offset)+nz*.045;
       const bounds={position:[wx+nx*size[2]*scale/2,bottom+size[1]*scale/2,wz+nz*size[2]*scale/2],size:[(horizontal?size[0]:size[2])*scale,size[1]*scale,(horizontal?size[2]:size[0])*scale]};
       if (Math.abs(bounds.position[0])+bounds.size[0]/2>11.5 || Math.abs(bounds.position[2])+bounds.size[2]/2>11.5) return;
@@ -674,14 +700,15 @@ export function resolveV3(
         const wx = x + (horizontal ? offset : 0), wz = z + (horizontal ? 0 : offset);
         const door = y === .65 && nz === 1 && Math.abs(wz-entrance.z)<.01 && Math.abs(wx)<width/2+1.4;
         const reserved = slots.some(s => s.active && (s.selected === "brand" || s.selected === "campaign") && overlaps({position:[wx+nx*.2,y+height/2,wz+nz*.2],size:[horizontal?width:.6,height,horizontal?.6:width]},s));
-        const plain = (y === .65 && d.base === "plinth") || (y > .65 && d.rhythm === "alternating" && (Math.round(offset/width)+d.facadeSeed)%2===0);
+        const stairBay = extensionWall===wall && Math.abs(offset)<width/2+1.2;
+        const plain = stairBay || (d.solidSideWalls && nx!==0) || (y === .65 && d.base === "plinth") || (y > .65 && d.rhythm === "alternating" && (Math.round(offset/width)+d.facadeSeed)%2===0);
         // Keep the actual entrance unobstructed; its procedural surround fills the bay.
         if (door || reserved) continue;
         const asset = plain ? (detailArchitecture === "brick" && y===.65 ? "Brick_BottomTrim" : family[1])
           : detailArchitecture === "glass" && y===.65 ? "Metal_FirstFloor_Window"
           : detailArchitecture === "brick" && d.facadeSeed%2===0 ? "Brick_Window_Trim_Single" : family[0];
         const columns = plain ? nativeWidth/2 : 1;
-        const rows = plain && detailArchitecture === "brick" && asset!=="Brick_BottomTrim" ? 3 : 1;
+        const rows = 1;
         for(let col=0;col<columns;col++) for(let row=0;row<rows;row++) {
           const along = (col-(columns-1)/2)*2*moduleScale;
           attach(asset, wx+(horizontal?along:0)+nx*.025, y+.18+row*moduleScale, wz+(horizontal?0:along)+nz*.025, angle,moduleScale,"facade");
@@ -896,6 +923,7 @@ export function resolveV3(
     masses,
     entrance,
     sign,
+    extensionReason,
     slots,
     signs,
     corners,

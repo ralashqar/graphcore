@@ -221,3 +221,15 @@ test("native architectural details are scoped and restricted to near view",()=>{
   assert.ok(entrance.attachments.filter(a=>a.role==="column").every(a=>a.position[1]<1));
  }
 });
+
+test("stairs fit side walls, preserve selections when blocked and reserve solid backing",()=>{
+ const d={...newDesign("stairs"),width:12,depth:10,finish:"facade" as const,stairExtension:"concrete" as const,solidSideWalls:true,slots:{}};
+ const r=resolveV3(d,"#445566");
+ assert.equal(r.extensionReason,null);
+ assert.equal(r.attachments.filter(a=>a.role==="stairs").length,1);
+ assert.ok(r.attachments.some(a=>a.role==="facade" && a.asset.includes("Plain")));
+ const blocked=resolveV3({...d,finish:"procedural"},"#445566");
+ assert.ok(blocked.extensionReason);
+ assert.ok(!blocked.attachments.some(a=>a.role==="stairs"));
+ assert.ok(!resolveV3(d,"#445566","far").attachments.some(a=>a.role==="stairs"));
+});

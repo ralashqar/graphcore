@@ -11,7 +11,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useThree, events } from "@react-three/fiber";
+
+// Thumbnail roots may finish async creation after their tab has unmounted.
+function previewEvents(state: Parameters<typeof events>[0]) {
+  const manager = events(state);
+  const connect = manager.connect;
+  return {...manager, connect: (target: HTMLElement) => { if (target) connect?.(target); }};
+}
 import { Html, OrbitControls } from "@react-three/drei";
 import {
   buildingMasses,
@@ -32,6 +39,7 @@ import {
   newDesign,
   normalizeV3,
   resolveCurrent,
+  resolveV3,
   type SlotId,
   upgradeV3,
 } from "../../domain/cityBuildingV3";
@@ -468,6 +476,7 @@ export function CityBuildingDesigner(
           >
             <DesignBoundary>
               <Canvas
+                events={previewEvents}
                 orthographic
                 shadows={false}
                 frameloop="demand"
@@ -777,6 +786,11 @@ export function CityBuildingDesigner(
                     <option value="crown">Roofline only</option>
                   </select>
                 </label>
+                <label><input type="checkbox" checked={!!d.solidSideWalls} onChange={e=>commit({...d,solidSideWalls:e.target.checked,finish:e.target.checked?"facade":d.finish})}/>Solid side walls with native panels</label>
+                <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,finish:d.finish==="procedural"?"accents":d.finish})}>
+                  <option value="none">None</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
+                </select></label>
+                {d.stairExtension && d.stairExtension!=="none" && <small>{resolveV3(d,"#547364").extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
                 <small>Accents add entrances with solid architectural trim. Façade mode tiles all eligible floors and walls; accent placement does not limit wall coverage. Modules retain uniform proportions, with plain corner fillers and reserved door/sign bays.</small>
                 {d.finish !== "procedural" && (
                   <small>

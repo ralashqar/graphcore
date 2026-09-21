@@ -6,12 +6,13 @@ SOURCE=pathlib.Path(os.environ.get('CITY_MEGAKIT_SOURCE',r'C:\Users\daruk\Projec
 OUT=ROOT/'public/city/decorators';OUT.mkdir(parents=True,exist_ok=True)
 NAMES={
 'window':['Brick_Window_Trim','WhiteBrick_Window','Marble_Window','Metal_Window_Half'],
-'wall':['Brick_Plain_1','WhiteBrick_Plain_3','Marble_Plain_3','Metal_Plain_3'],
+'wall':['Brick_Plain_1','Brick_Plain_3','Concrete_Plain_3','WhiteBrick_Plain_3','Marble_Plain_3','Metal_Plain_3'],
 'entrance':['Entrance_Marble_2x1','Entrance_Concrete_2x1','Door_1','DoorFrame_Trim','DoorFrame_Metal_Single'],
 'cornice':['Cornice_Brick_Center','Cornice_Brick_L','Cornice_Brick_R','Cornice_Brick_90Angle_L','Cornice_WhiteBrick_Center','Cornice_Marble_Center','Cornice_Metal_Center','Cornice_Metal_L','Cornice_Metal_R','Cornice_Metal_90Angle_L'],
 'corner':['Brick_Corner_Plain','Concrete_Corner','Brick_Column_Small','WhiteBrick_Column_Half','Metal_Column_Small_Center','Marble_BevelColumn_Center'],
 'windowExtra':['Brick_Window_Trim_Single','Metal_FirstFloor_Window','Trim_FirstFloor_Window'],
 'band':['Brick_BottomTrim','Brick_TopTrim','Marble_Plain_1','WhiteBrick_Plain_1','Metal_Plain_1'],
+'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble'],
 'ground':['Floor_2x2','Prop_Awning','Prop_Planter_Single','Prop_Bollard'],
 }
 bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
@@ -56,7 +57,7 @@ bpy.ops.object.select_all(action='DESELECT')
 for o in exports:o.hide_set(False);o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'decorators.glb'),export_format='GLB',use_selection=True,export_yup=True,export_extras=True)
 for entry in manifest.values():
- entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band'}[entry['kind']]
+ entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension'}[entry['kind']]
  entry['clearanceSize']=entry['size']
  entry['detailLevel']='near'
 (OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','assets':manifest},indent=2)+'\n')

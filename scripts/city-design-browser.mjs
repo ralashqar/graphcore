@@ -149,6 +149,8 @@ try {
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
     await page.getByLabel("Building finish",{exact:true}).selectOption("facade");
+    await page.getByLabel("Side stairs",{exact:true}).selectOption("concrete");
+    await page.getByLabel("Solid side walls with native panels",{exact:true}).check();
     await page.getByRole("button",{name:"Branding",exact:true}).click();
     for(const id of ["brick","plaster","concrete","terracotta","metal","timber","pavers","checker","none"]){
       await page.getByLabel("wall texture",{exact:true}).selectOption(id);
@@ -161,6 +163,8 @@ try {
     await page.getByLabel("ground texture",{exact:true}).selectOption("pavers");
     await page.getByRole("button",{name:"Save property draft",exact:true}).click();
     await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.stairExtension,"concrete");
+    assert.equal(business.draft.buildingDesign.solidSideWalls,true);
     assert.deepEqual(business.draft.buildingDesign.textures,{wall:"brick",roof:"terracotta",ground:"pavers",wallBorder:"primary",groundBorder:"concrete"});
     await page.reload();
     await page.getByRole("button",{name:"Branding",exact:true}).click();

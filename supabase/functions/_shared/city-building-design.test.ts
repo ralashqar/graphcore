@@ -138,3 +138,9 @@ Deno.test("texture choices round trip and reject arbitrary URLs",()=>{
  assert.throws(()=>buildingDesignSchema.parse({...d,textures:{groundBorder:"https://example.com"}}));
  assert.throws(()=>buildingDesignSchema.parse({...d,textures:{wall:"primary"}}));
 });
+
+Deno.test("native side wall and stair settings persist and reject unknown assets",()=>{
+ const d={...newDesign("stairs"),solidSideWalls:true,stairExtension:"marble"};
+ assert.deepEqual(buildingDesignSchema.parse(d),d);
+ assert.throws(()=>buildingDesignSchema.parse({...d,stairExtension:"external-model"}));
+});

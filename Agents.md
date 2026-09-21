@@ -1174,3 +1174,7 @@ Version-3 building recipes accept optional allowlisted wall/roof/ground texture 
 ### City secondary texture contract (September 2026)
 
 Version-3 building recipes accept optional wallBorder/groundBorder texture IDs, including explicit primary inheritance. Strict public profile validation rejects arbitrary URLs and limits inheritance to secondary roles. Demo fixtures select distinct border materials. This shared profile contract is consumed by the City endpoints and Fly world worker (city-design-3.6); paired staging rollout remains pending designated identifiers. No migration, paid generation or production activation. See docs/city-texture-presets.md.
+
+### City native side extensions (September 2026)
+
+Optional v3 solidSideWalls and stairExtension (none/concrete/marble) are strict public-profile recipe fields. Geometry reserves a clear bounded side-wall stair/landing and solid backing; unavailable choices remain authored. The City shared schema and world worker city-design-3.7 must roll out with the frontend to designated staging. No migration, production activation or provider work. See docs/city-texture-presets.md.

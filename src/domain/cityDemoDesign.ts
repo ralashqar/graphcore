@@ -48,6 +48,8 @@ export function demoBuildingDesign(index: number, color: string) {
     result.textures.wall = "none";
     result.textures.wallBorder = "none";
   }
+  result.solidSideWalls = index % 4 === 0;
+  result.stairExtension = result.finish === "procedural" || index % 3 !== 0 ? "none" : index % 2 ? "marble" : "concrete";
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);
