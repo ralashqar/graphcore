@@ -180,6 +180,8 @@ for tier,(_,_,floors) in enumerate(recipes):
         bake(f'Building_{tier}_{variant}_near',near,metadata)
         bake(f'Building_{tier}_{variant}_far',far,metadata)
 
+exec(compile((ROOT/'scripts/city-office-recipes.py').read_text(), 'city-office-recipes.py', 'exec'))
+
 bpy.ops.object.select_all(action='DESELECT')
 for obj in exports: obj.hide_set(False);obj.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'downtown.gltf'),export_format='GLTF_SEPARATE',

@@ -112,3 +112,12 @@ TypeScript (`npx tsc --noEmit`), production build and development startup passed
 ## MegaCity comparison collection
 
 A separate `/city/asset-showcase` page now compares five converted JC MegaCity buildings and three decorative modules with these Quaternius presets. Normal City rendering continues to use this Downtown pack. See [MegaCity showcase](synarc-city-megacity-showcase.md) for the prefab conversion process, review controls, measurements and remaining adoption decisions.
+
+
+## Layered office experiment (September 2026)
+
+The demo now replaces the Unity office prefabs with six authored Quaternius assemblies: Terrace House, Offset Glass, Twin Atrium, Courtyard Offices, Civic Steps and Cantilever House. Each combines a broad foundation and podium with stepped upper volumes, entrance steps/canopy, horizontal floor bands, terrace parapets and restrained rooftop equipment. Two-metre bays and three-metre floors preserve source module proportions on every facade. Stable business identity selects the architecture; relocation does not regenerate it.
+
+One assembly occupies each 48-metre demo estate. Buildings remain inside a 34 by 30 metre envelope, leaving clearance for paths and the single 36-metre hero billboard on the bottom-left edge. The regular City retains its original buildings, and the Unity asset showcase remains available.
+
+`scripts/city-office-recipes.py` defines the massing and is executed by the existing Blender bake. Optimisation splits the output into the unchanged 7,402,488-byte Downtown GLB and a 10,422,980-byte office GLB, each including streets so the demo loads only one kit. Six near/far pairs retain the same silhouette with simpler distant geometry. Rebuild with the existing MegaKit pipeline; `scripts/city-office-test.mjs` verifies the 12 MiB budget, plot clearance, reduced far geometry and zero glTF validation errors. Physical mobile performance remains unverified.

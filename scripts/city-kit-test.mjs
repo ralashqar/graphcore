@@ -40,9 +40,15 @@ assert.ok(!doc.getRoot().listMaterials().some(m => /collision/i.test(m.getName()
 const manifest = JSON.parse(await readFile("public/city/downtown/manifest.json", "utf8"));
 assert.ok(manifest.assets.Road_Arrows.markings.includes("Decal_ArrowStraight"));
 assert.ok(manifest.assets.Street_Curve_4LaneShort.markings.includes("Decal_Curve_4LaneShort_DoubleYellow"));
-let buildings = 0;
+let buildings = 0, offices = 0;
 for (const node of doc.getRoot().listNodes()) {
   const key = node.getExtras().assetKey;
+  if (key?.startsWith("Office_")) {
+    const {min,max}=getBounds(node);
+    assert.ok(min[1]>=-0.05 && max[1]<36 && max[0]-min[0]<34 && max[2]-min[2]<30, `${key}: office bounds`);
+    assert.ok(node.getMesh()?.listPrimitives().length, `${key}: empty office`);
+    offices++; continue;
+  }
   if (!key?.startsWith("Building_")) continue;
   const { min, max } = getBounds(node);
   assert.ok(
@@ -54,6 +60,7 @@ for (const node of doc.getRoot().listNodes()) {
   buildings++;
 }
 assert.equal(buildings, 24);
+assert.equal(offices, 0);
 for (const texture of doc.getRoot().listTextures())
   assert.ok(texture.getImage()?.length, "Missing embedded texture");
 console.log(

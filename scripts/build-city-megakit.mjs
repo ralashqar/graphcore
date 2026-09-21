@@ -32,3 +32,4 @@ run(blender, [
 run(python, ["scripts/prepare-city-megakit.py", "--optimise"]);
 run(process.execPath, ["scripts/optimise-city-megakit.mjs"]);
 run(process.execPath, ["scripts/city-kit-test.mjs"]);
+run(process.execPath, ["scripts/city-office-test.mjs"]);

@@ -61,18 +61,15 @@ export function CityKit({
 }) {
   const { plotAxis, plotSize, roadCapacityMultiplier } = useCityMapLayout();
   const playback = useMarketMotion();
-  const loaded = useGLTF(estateDemo
-    ? ["/city/downtown/downtown.glb?v=source-v3", "/city/megacity/showcase.glb?v=3"]
-    : ["/city/downtown/downtown.glb?v=source-v3"], false, true);
+  const { scene } = useGLTF(estateDemo ? "/city/offices/offices.glb?v=1" : "/city/downtown/downtown.glb?v=source-v3", false, true);
   const signEnvelope = estateDemo ? estateBillboard : billboardEnvelope;
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();
-    for (const { scene } of loaded) {
     scene.updateMatrixWorld(true);
     for (const root of scene.children) {
       const key = root.userData.assetKey || root.name;
-      if (estateDemo && (key.startsWith("Building_") || (scene === loaded[1]?.scene && !key.startsWith("office-")))) continue;
+      if (estateDemo ? key.startsWith("Building_") : key.startsWith("Office_")) continue;
       const pieces: Piece[] = [];
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
@@ -121,9 +118,8 @@ export function CityKit({
       });
       result.set(key, pieces);
     }
-    }
     return result;
-  }, [loaded[0].scene, loaded[1]?.scene, estateDemo]);
+  }, [scene, estateDemo]);
   useEffect(
     () => () => {
       const materials = new Set<Material>();

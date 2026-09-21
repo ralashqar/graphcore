@@ -88,3 +88,8 @@ No module rebake or directional facade stretching is introduced. Near/far varian
 ## Prefab restoration
 
 The Quaternius estate iteration is reverted at the user’s request. The current demo again uses one centred Unity office prefab per 48m block, with the single large bottom-left billboard retained. Stable identity selects among the ten offices; no skyscrapers are used. The normal City and showcase remain unchanged.
+
+
+### Current demo architecture
+
+The layered-office experiment supersedes the Unity prefab selection in `/city/demo`. Demo estates now use six Quaternius podium-and-tower assemblies; this Unity showcase and all converted assets remain available for comparison. See [office experiment](synarc-city-megakit.md#layered-office-experiment-september-2026).
