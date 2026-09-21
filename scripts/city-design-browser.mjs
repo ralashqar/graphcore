@@ -140,16 +140,24 @@ try {
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
   const before = await page.locator(".city-design-canvas").screenshot();
-  await page.getByRole("button", { name: /Corner studio/ }).click();
+  await page.getByRole("button", { name: "Corner showroom", exact: true }).click();
+  await page.getByLabel("Footprint", { exact: true }).selectOption("l-shape");
   await page.getByLabel("Floors", { exact: true }).fill("5");
-  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "Shape", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Architecture", exact: true }).count(), 0);
+  assert.equal(await page.locator(".city-preset-picker").count(), 1);
+  await page.getByLabel("Footprint", { exact: true }).selectOption("courtyard");
+  assert.equal(await page.getByLabel("Floors", { exact: true }).inputValue(), "5");
+  await page.getByLabel("Footprint", { exact: true }).selectOption("l-shape");
+
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByRole("button", { name: "Warm brick", exact: true }).click();
   await page.getByLabel("Building finish", { exact: true }).selectOption(
     "facade",
   );
   await page.getByRole("button", { name: "Grounds", exact: true }).click();
   await page.getByLabel("Tile styling", { exact: true }).selectOption("slate");
-  await page.getByRole("button", { name: "Shape", exact: true }).click();
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByText("Advanced dimensions", { exact: true }).click();
   await page.getByLabel("Building orientation", { exact: true }).selectOption(
     "1",
@@ -186,7 +194,7 @@ try {
     await page.getByLabel("Building orientation", { exact: true }).inputValue(),
     "1",
   );
-  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByText("Advanced floor stack", { exact: true }).click();
   await page.getByLabel("Middle floors", { exact: true }).fill("3");
   await page.getByLabel("Crown", { exact: true }).selectOption("penthouse");
@@ -261,7 +269,7 @@ try {
   await page.goto(`${origin}/city/manage`);
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
-  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   assert.equal(
     await page.getByLabel("Building finish", { exact: true }).inputValue(),
     "facade",
@@ -305,7 +313,7 @@ try {
   await page.locator('.city-design-canvas[data-version="2"]').waitFor();
   await page.getByRole("button", { name: "Upgrade design", exact: true })
     .click();
-  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   for (
     const name of [
       "Retail flagship",
@@ -332,7 +340,7 @@ try {
     "Inactive: A pitched roof does not support this sign. Your selection is retained.",
     { exact: true },
   ).waitFor();
-  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.screenshot({ path: "output/playwright/city-design-pitched-roof.png" });
   await page.getByLabel("Roof style", { exact: true }).selectOption("flat");
   await page.getByRole("button", { name: "Branding", exact: true }).click();

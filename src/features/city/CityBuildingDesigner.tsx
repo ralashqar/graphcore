@@ -10,7 +10,6 @@ import {
 import { Canvas, useThree } from "@react-three/fiber";
 import { Html, OrbitControls } from "@react-three/drei";
 import {
-  BUILDING_PRESETS,
   buildingMasses,
   type CityBuildingDesign,
 } from "../../domain/cityBuildingDesign";
@@ -288,7 +287,7 @@ export function CityBuildingDesigner(
   const [view, setView] = useState<"3d" | "fixed" | "plan">("3d"),
     [cameraKey, setCameraKey] = useState(0),
     [grid, setGrid] = useState(false),
-    [tab, setTab] = useState("Shape");
+    [tab, setTab] = useState("Presets");
   const [past, setPast] = useState<CityBuildingDesign[]>([]),
     [future, setFuture] = useState<CityBuildingDesign[]>([]);
   const commit = (next: CityBuildingDesign) => {
@@ -548,7 +547,7 @@ export function CityBuildingDesigner(
             role="group"
             aria-label="Design controls"
           >
-            {["Shape", "Architecture", "Branding", "Grounds"].map((t) => (
+            {["Presets", "Branding", "Grounds"].map((t) => (
               <button
                 key={t}
                 type="button"
@@ -560,31 +559,38 @@ export function CityBuildingDesigner(
             ))}
           </div>
           <fieldset className="city-design-fields" disabled={legacy}>
-            {tab === "Shape" && (
-              <>
+            {tab === "Presets" && (
+              <div className="city-art-controls">
+                <p className="city-studio-note">Choose a complete building, then fine-tune it below. Presets set the footprint, architecture and grounds; your business identity and colours stay intact.</p>
                 <div className="city-preset-picker">
-                  {BUILDING_PRESETS.map((p) => (
+                  {COMPOSITIONS.map((p, i) => (
                     <button
                       type="button"
                       key={p.name}
-                      aria-pressed={d.blueprint === p.design.blueprint}
-                      onClick={() =>
-                        commit({
-                          ...d,
-                          blueprint: p.design.blueprint,
-                          middleFloors: p.design.floors - 1,
-                          crown: "none",
-                        })}
+                      onClick={() => {
+                        setLastPreset(i);
+                        commit(applyComposition(d, i));
+                      }}
                     >
-                      <Blueprint
-                        design={{ ...d, blueprint: p.design.blueprint }}
-                        mini
-                      />
+                      <Blueprint design={applyComposition(d, i)} mini />
                       <strong>{p.name}</strong>
-                      <small>{p.description}</small>
                     </button>
                   ))}
                 </div>
+                <h3>Fine-tune building</h3>
+                <p className="city-studio-note">These controls adjust the current design without applying another preset.</p>
+                <label>
+                  Footprint<select
+                    aria-label="Footprint"
+                    value={d.blueprint}
+                    onChange={(e) => update("blueprint", e.target.value as typeof d.blueprint)}
+                  >
+                    <option value="office">Rectangular</option>
+                    <option value="terraces">Stepped</option>
+                    <option value="courtyard">Courtyard</option>
+                    <option value="l-shape">L-shaped</option>
+                  </select>
+                </label>
                 <div className="city-art-controls">
                   {ranges("Floors", "floors", 1, 8)}
                   {ranges(
@@ -625,25 +631,6 @@ export function CityBuildingDesigner(
                       </select>
                     </label>
                   </details>
-                </div>
-              </>
-            )}
-            {tab === "Architecture" && (
-              <div className="city-art-controls">
-                <div className="city-preset-picker">
-                  {COMPOSITIONS.map((p, i) => (
-                    <button
-                      type="button"
-                      key={p.name}
-                      onClick={() => {
-                        setLastPreset(i);
-                        commit(applyComposition(d, i));
-                      }}
-                    >
-                      <Blueprint design={applyComposition(d, i)} mini />
-                      <strong>{p.name}</strong>
-                    </button>
-                  ))}
                 </div>
                 <details>
                   <summary>Advanced floor stack</summary>
@@ -727,6 +714,7 @@ export function CityBuildingDesigner(
                     {d.crown === "none" ? 0 : 1} crown = {d.floors} floors
                   </p>
                 </details>
+                <h3>Façade style</h3>
                 <div className="city-style-picker">
                   {ARCHITECTURES.map((a) => (
                     <button

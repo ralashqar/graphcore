@@ -59,3 +59,7 @@ The shared editor/city pitched-roof prism now uses outward triangle winding on b
 Version-2 and version-3 wall shells now stop at the inner faces of their 18 cm floor and ceiling slabs. Previously the slab sides and wall sides occupied the same plane over these bands, producing depth fighting during camera movement. The recipe, silhouette, window placement and floor heights are unchanged. The version-2 geometry snapshot intentionally incorporates this visual bug fix; version-1 output remains frozen.
 
 Verification: 15 local geometry tests, four Deno recipe/profile tests, TypeScript, production build and fresh development-server browser checks. The browser fixture covers presets, pitched-roof preview, save/reload, mobile layout, city rendering and missing-pack fallback using mocked APIs. Native façade position/normal inspection confirmed no forward-facing surfaces on their zero-depth backing plane. No provider calls, database changes or hosted deployments are required for this visual correction.
+
+## Unified presets - 21 September 2026
+
+The editor now has Presets, Branding and Grounds sections. Presets contains the six complete compositions, followed by footprint, dimension, floor-stack and facade controls for fine-tuning. The older shape preset cards are removed: changing the footprint now changes only that choice (subject to existing geometry compatibility rules), without resetting floors or crown. Applying a complete composition remains one undoable action and retains business identity and palette. Saved recipe contracts are unchanged.
