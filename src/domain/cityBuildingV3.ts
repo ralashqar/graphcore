@@ -550,7 +550,8 @@ export function resolveV3(
       y + height / 2,
       z - nz * .075,
       horizontal ? length : .15,
-      height,
+      // Slabs own the bottom/top 18 cm; coplanar wall faces caused z-fighting.
+      height - .36,
       horizontal ? .15 : length,
       d.crown === "penthouse" && y === masses.at(-1)!.y ? p.glass : p.wall,
     );

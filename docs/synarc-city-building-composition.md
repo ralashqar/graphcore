@@ -51,3 +51,11 @@ V3 meets the <=10% p95 regression target in this test. Streaming reduced residen
 Pair city-api, city-command, city-building-art, city-reconcile, city-stripe-webhook, matching frontend and the world-generation Fly worker (`2026-09-21-city-design-3`) on isolated staging. The campus worker imports the profile parser; unrelated workers do not require deployment. No migration, paid generation or production activation is part of this release.
 
 The designated isolated staging identifiers have not been supplied. Hosted save/publication, staged worker image validation and a documented physical-mobile performance run remain release gates. Do not substitute the shared production project. The existing broader world-worker check with the City Edge configuration has unrelated dependency/type failures; the changed City/campus import path is checked independently. Existing office-manifest dev warnings and landing-atlas/chunk-size build warnings are tracked separately.
+
+## Surface correction — 21 September 2026
+
+The shared editor/city pitched-roof prism now uses outward triangle winding on both slopes, both gables and its underside. It remains a closed, front-sided mesh; double-sided materials are not used to conceal invalid normals. A regression test verifies outward normals, nondegenerate triangles and paired opposite edges.
+
+Version-2 and version-3 wall shells now stop at the inner faces of their 18 cm floor and ceiling slabs. Previously the slab sides and wall sides occupied the same plane over these bands, producing depth fighting during camera movement. The recipe, silhouette, window placement and floor heights are unchanged. The version-2 geometry snapshot intentionally incorporates this visual bug fix; version-1 output remains frozen.
+
+Verification: 15 local geometry tests, four Deno recipe/profile tests, TypeScript, production build and fresh development-server browser checks. The browser fixture covers presets, pitched-roof preview, save/reload, mobile layout, city rendering and missing-pack fallback using mocked APIs. Native façade position/normal inspection confirmed no forward-facing surfaces on their zero-depth backing plane. No provider calls, database changes or hosted deployments are required for this visual correction.

@@ -333,6 +333,7 @@ try {
     { exact: true },
   ).waitFor();
   await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.screenshot({ path: "output/playwright/city-design-pitched-roof.png" });
   await page.getByLabel("Roof style", { exact: true }).selectOption("flat");
   await page.getByRole("button", { name: "Branding", exact: true }).click();
   assert.equal(

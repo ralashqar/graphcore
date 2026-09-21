@@ -328,7 +328,8 @@ export function resolveDesign(
       y + height / 2,
       z - nz * .075,
       horizontal ? length : .15,
-      height,
+      // Slabs own the bottom/top 18 cm; coplanar wall faces caused z-fighting.
+      height - .36,
       horizontal ? .15 : length,
       p.wall,
     );

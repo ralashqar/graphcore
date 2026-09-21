@@ -1,3 +1,4 @@
+import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
 import { useEffect, useMemo, useState } from "react";
 import {
   BoxGeometry,
@@ -75,43 +76,9 @@ export function CityDesignBuildings(
       tree: new IcosahedronGeometry(1, 1),
       roof: (() => {
         const g = new BufferGeometry();
-        const v = [
-          [-.5, -.5, -.5],
-          [.5, -.5, -.5],
-          [.5, -.5, .5],
-          [-.5, -.5, .5],
-          [-.5, .5, 0],
-          [.5, .5, 0],
-        ];
-        const faces = [
-          0,
-          1,
-          5,
-          0,
-          5,
-          4,
-          4,
-          5,
-          2,
-          4,
-          2,
-          3,
-          0,
-          4,
-          3,
-          1,
-          2,
-          5,
-          0,
-          3,
-          2,
-          0,
-          2,
-          1,
-        ];
         g.setAttribute(
           "position",
-          new Float32BufferAttribute(faces.flatMap((i) => v[i]), 3),
+          new Float32BufferAttribute(pitchedRoofPositions(), 3),
         );
         g.computeVertexNormals();
         return g;
