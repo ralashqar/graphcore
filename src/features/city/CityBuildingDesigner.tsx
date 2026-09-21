@@ -743,6 +743,25 @@ export function CityBuildingDesigner(
                     <option value="facade">Quaternius façade</option>
                   </select>
                 </label>
+                <label>
+                  Quaternius detail set<select aria-label="Quaternius detail set" value={d.detailSet ?? "matching"}
+                    onChange={(e) => commit({ ...d, detailSet: e.target.value as typeof d.detailSet, finish: d.finish === "procedural" ? "accents" : d.finish })}>
+                    <option value="matching">Match architectural style</option>
+                    <option value="brick">Brick and framed windows</option>
+                    <option value="white-brick">White brick and light trim</option>
+                    <option value="marble">Marble and broad windows</option>
+                    <option value="metal">Metal office detailing</option>
+                  </select>
+                </label>
+                <label>
+                  Detail placement<select aria-label="Detail placement" value={d.detailScope ?? "all"}
+                    onChange={(e) => update("detailScope", e.target.value as typeof d.detailScope)}>
+                    <option value="all">Entrance, roofline and facade</option>
+                    <option value="entrance">Entrance only</option>
+                    <option value="crown">Roofline only</option>
+                  </select>
+                </label>
+                <small>Accents add entrances and trim. Choose Quaternius facade for modular upper walls too. Pitched roofs omit cornices; native pieces retain their proportions.</small>
                 {d.finish !== "procedural" && (
                   <small>
                     Whole modules, uniform scale. Footprint snaps to 2 m
@@ -848,15 +867,32 @@ export function CityBuildingDesigner(
                 <label>
                   Tile styling<select
                     aria-label="Tile styling"
-                    value={d.tile}
-                    onChange={(e) =>
-                      update("tile", e.target.value as typeof d.tile)}
+                    value={d.pavingPattern && d.pavingPattern !== "classic" ? d.pavingPattern : d.tile}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (["garden", "limestone", "slate"].includes(value)) commit({ ...d, tile: value as typeof d.tile, pavingPattern: "classic" });
+                      else update("pavingPattern", value as typeof d.pavingPattern);
+                    }}
                   >
                     <option value="garden">Garden lawn</option>
                     <option value="limestone">Warm limestone</option>
                     <option value="slate">Slate plaza</option>
+                    <option value="checker">Ivory and stone checker</option>
+                    <option value="terracotta">Terracotta courtyard</option>
+                    <option value="basalt">Basalt paving</option>
+                    <option value="ribbon">Limestone ribbon walk</option>
                   </select>
                 </label>
+                <label>
+                  Boundary and entrance<select aria-label="Boundary and entrance" value={d.enclosure ?? "none"}
+                    onChange={(e) => update("enclosure", e.target.value as typeof d.enclosure)}>
+                    <option value="none">Open plot</option>
+                    <option value="garden-wall">Low stone wall and gateposts</option>
+                    <option value="brick-court">Brick courtyard and gateposts</option>
+                    <option value="open-rail">Low railings and stone entrance</option>
+                  </select>
+                </label>
+                <small>All entrances stay open. Walls and railings rotate with the building, inside the plot boundary.</small>
                 <p>
                   Decorations respect the entrance route and plot clearance. The
                   city roads stay as they are.

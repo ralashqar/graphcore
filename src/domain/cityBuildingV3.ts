@@ -1,3 +1,4 @@
+import { groundsParts, type GroundsChoices } from "./cityBuildingGrounds.ts";
 import type {
   BuildingMass,
   CityBuildingDesignV1,
@@ -35,7 +36,7 @@ export const COMPONENTS = [
   "bollards",
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
-export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & {
+export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & {
   version: 3;
   generatorRevision: "city-grammar-1";
   base: "storefront" | "lobby" | "plinth";
@@ -463,6 +464,8 @@ export function resolveV3(
     walls = exposedWalls(masses),
     parts: DesignPart[] = [],
     attachments: Attachment[] = [];
+  const detailArchitecture = ({ brick: "brick", "white-brick": "creative", marble: "boutique", metal: "glass" } as const)[d.detailSet as "brick" | "white-brick" | "marble" | "metal"] ?? d.architecture;
+  const facadeEnabled = d.finish === "facade" && (!d.detailScope || d.detailScope === "all");
   const slots = buildingSlots(d, masses), corners = classifyCorners(masses);
   const signs: DesignSign[] = slots.filter((s) =>
     s.active && (s.selected === "brand" || s.selected === "campaign")
@@ -500,7 +503,11 @@ export function resolveV3(
     rotation = 0,
     scale = 1,
     role = "accent",
-  ) => attachments.push({ asset, position: [x, y, z], rotation, scale, role });
+  ) => {
+    if (d.detailScope === "entrance" && (role === "facade" || role === "cornice")) return;
+    if (d.detailScope === "crown" && (role === "facade" || role === "door" || role === "entrance")) return;
+    attachments.push({ asset, position: [x, y, z], rotation, scale, role });
+  };
   const entrance = { x: 0, z: masses[0].z + masses[0].depth / 2 };
   const sign = {
     x: 0,
@@ -513,13 +520,14 @@ export function resolveV3(
     { garden: "#8c9d77", limestone: "#d5ceba", slate: "#7b8587" }[d.tile];
   box(0, .05, 0, 23.5, .24, 23.5, p.trim);
   box(0, .2, 0, 22.8, .1, 22.8, surface);
-  if (lod === "near" && d.tile !== "garden") {
+  if (lod === "near" && d.tile !== "garden" && (!d.pavingPattern || d.pavingPattern === "classic")) {
     for (let g = -8; g <= 8; g += 4) {
       box(g, .26, 0, .035, .01, 22.7, "#a8ada4");
       box(0, .26, g, 22.7, .01, .035, "#a8ada4");
     }
   }
   box(0, .29, (entrance.z + 11.4) / 2, 3.2, .08, 11.4 - entrance.z, p.trim);
+  parts.push(...groundsParts(d, lod));
   // Floor plates tessellate the union without overlapping faces at joined wings.
   for (const m of masses) {
     if (m.y === .65) box(m.x, .45, m.z, m.width, .4, m.depth, p.trim);
@@ -535,9 +543,9 @@ export function resolveV3(
       "WhiteBrick_Plain_3",
       "Cornice_WhiteBrick_Center",
     ],
-  }[d.architecture];
-  const bayWidth = d.finish === "facade"
-    ? (d.architecture === "boutique" || d.architecture === "creative" ? 4 : 2)
+  }[detailArchitecture];
+  const bayWidth = facadeEnabled
+    ? (detailArchitecture === "boutique" || detailArchitecture === "creative" ? 4 : 2)
     : d.architecture === "glass"
     ? 2.8
     : 1.6;
@@ -582,7 +590,7 @@ export function resolveV3(
     }
     if (lod === "far") continue;
     for (
-      const offset of fitBays(length, bayWidth, d.finish === "facade" ? 0 : .35)
+      const offset of fitBays(length, bayWidth, facadeEnabled ? 0 : .35)
     ) {
       const wx = x + (horizontal ? offset : 0),
         wz = z + (horizontal ? 0 : offset);
@@ -633,7 +641,7 @@ export function resolveV3(
         winH,
         horizontal ? .08 : bayWidth,
         p.glass,
-        d.finish === "facade" && d.rhythm !== "ribbon" && y > .65
+        facadeEnabled && d.rhythm !== "ribbon" && y > .65
           ? "facade"
           : undefined,
       );
@@ -651,13 +659,13 @@ export function resolveV3(
         }
       }
       if (
-        d.finish === "facade" && d.rhythm !== "ribbon" && lod === "near" &&
+        facadeEnabled && d.rhythm !== "ribbon" && lod === "near" &&
         y > .65
       ) {
         const plain = y > .65 &&
           ((Math.round(wx * 7 + wz * 11) + d.facadeSeed) % 5 === 0) &&
           bayWidth === 2;
-        if (plain && d.architecture === "brick") {
+        if (plain && detailArchitecture === "brick") {
           for (let row = 0; row < 3; row++) {
             attach(family[1], wx, y + row, wz, angle, 1, "facade");
           }
@@ -677,9 +685,9 @@ export function resolveV3(
     ) {
       const trimBays = fitBays(length, 2, .1, .65);
       for (const [index, off] of trimBays.entries()) {
-        const ends = d.architecture === "glass"
+        const ends = detailArchitecture === "glass"
           ? "Cornice_Metal"
-          : d.architecture === "brick"
+          : detailArchitecture === "brick"
           ? "Cornice_Brick"
           : null;
         const asset = ends && trimBays.length > 1 &&
@@ -707,7 +715,7 @@ export function resolveV3(
     }
     attach("Door_1", 0, .65, entrance.z + .14, 0, 1, "door");
     attach(
-      d.architecture === "glass" ? "DoorFrame_Metal_Single" : "DoorFrame_Trim",
+      detailArchitecture === "glass" ? "DoorFrame_Metal_Single" : "DoorFrame_Trim",
       0,
       .65,
       entrance.z + .02,

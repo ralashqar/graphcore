@@ -1,3 +1,4 @@
+import { ENCLOSURES, PAVING_PATTERNS, DETAIL_SETS, DETAIL_SCOPES } from "../../../src/domain/cityBuildingGrounds.ts";
 import { z } from "npm:zod@4";
 import {
   BLUEPRINTS,
@@ -47,6 +48,10 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
+  enclosure: z.enum(ENCLOSURES).optional(),
+  pavingPattern: z.enum(PAVING_PATTERNS).optional(),
+  detailSet: z.enum(DETAIL_SETS).optional(),
+  detailScope: z.enum(DETAIL_SCOPES).optional(),
   base: z.enum(["storefront", "lobby", "plinth"]),
   middleFloors: z.number().int().min(0).max(7),
   rhythm: z.enum(["vertical", "ribbon", "alternating"]),

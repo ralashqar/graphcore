@@ -150,11 +150,15 @@ try {
 
   await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByRole("button", { name: "Warm brick", exact: true }).click();
+  await page.getByLabel("Quaternius detail set", { exact: true }).selectOption("white-brick");
+  await page.getByLabel("Detail placement", { exact: true }).selectOption("all");
   await page.getByLabel("Building finish", { exact: true }).selectOption(
     "facade",
   );
   await page.getByRole("button", { name: "Grounds", exact: true }).click();
-  await page.getByLabel("Tile styling", { exact: true }).selectOption("slate");
+  await page.getByLabel("Tile styling", { exact: true }).selectOption("checker");
+  await page.getByLabel("Boundary and entrance", { exact: true }).selectOption("garden-wall");
+
   await page.getByRole("button", { name: "Presets", exact: true }).click();
   await page.getByText("Advanced dimensions", { exact: true }).click();
   await page.getByLabel("Building orientation", { exact: true }).selectOption(
@@ -231,6 +235,9 @@ try {
   ).waitFor();
   assert.equal(saved, 1);
   assert.equal(business.draft.buildingDesign.blueprint, "l-shape");
+  assert.equal(business.draft.buildingDesign.enclosure, "garden-wall");
+  assert.equal(business.draft.buildingDesign.pavingPattern, "checker");
+  assert.equal(business.draft.buildingDesign.detailSet, "white-brick");
   assert.equal(business.draft.buildingDesign.version, 3);
   assert.equal(business.draft.buildingDesign.crown, "penthouse");
   assert.equal(business.draft.buildingDesign.slots["brand.roof"], "brand");
@@ -356,6 +363,13 @@ try {
   await page.screenshot({
     path: "output/playwright/city-design-v3-composition.png",
   });
+  await page.getByRole("button", { name: "Presets", exact: true }).click();
+  await page.getByLabel("Quaternius detail set", { exact: true }).selectOption("metal");
+  await page.getByLabel("Detail placement", { exact: true }).selectOption("crown");
+  await page.getByRole("button", { name: "Grounds", exact: true }).click();
+  for (const style of ["terracotta", "basalt", "ribbon"]) await page.getByLabel("Tile styling", { exact: true }).selectOption(style);
+  for (const boundary of ["brick-court", "open-rail"]) await page.getByLabel("Boundary and entrance", { exact: true }).selectOption(boundary);
+  await page.screenshot({ path: "output/playwright/city-design-grounds-presets.png" });
   assert.deepEqual(errors, []);
   console.log(
     "3D designer: live presets, geometry changes, blueprint, save/reload, mobile and city rendering passed (mock API).",

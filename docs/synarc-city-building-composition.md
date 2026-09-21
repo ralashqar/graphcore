@@ -73,3 +73,11 @@ One repeat browser run reported an intermittent R3F null event-target/addEventLi
 ## Presets own footprint - 21 September 2026
 
 The independent fine-tuning footprint selector is removed. All four supported shapes already exist in the complete preset gallery, whose cards now label their footprint. Shape changes require choosing a complete preset; fine-tuning retains dimensions, floor stack, finishes and details. This supersedes the earlier independent footprint control described above. No saved recipes are modified.
+
+## Grounds and Quaternius detail choices - 21 September 2026
+
+Optional v3 choices add low stone/brick walls or railings with fixed open gateposts, plus checker, terracotta, basalt and ribbon paving. Boundaries sit outside the largest supported footprint and forecourt slots, inside the tile; the 4.4 m opening aligns with the entrance path under rotation. Paving stays below the path and foundation. Small paving/railing details drop at far LOD and reuse the existing box batches.
+
+Curated matching, brick, white-brick, marble and metal sets use existing CC0 pack assets. Placement is all compatible areas, entrance only or roofline only. Accents use entrances/cornices; facade mode also uses upper-wall modules. Native window widths follow their 2 m/4 m family; structural masses and brand palette remain unchanged. Pitched roofs omit cornices and ribbon facades retain procedural glazing. Procedural mode disables native details. No new asset download or texture is introduced.
+
+Fields enclosure, pavingPattern, detailSet and detailScope are optional strict enums shared by client and server. Omitted fields preserve older recipes. No migration is needed. Local geometry, Deno profile validation, affected endpoint/campus checks, browser mocked save/reload, TypeScript, build and dev-runtime verification cover the release. Hosted saving of the new fields requires the matching five City endpoints and world worker 2026-09-21-city-design-3.1 to be deployed with the frontend. Designated isolated staging is still unavailable, so no hosted rollout or production activation was performed.

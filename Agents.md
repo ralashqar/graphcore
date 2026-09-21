@@ -2,6 +2,10 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## City grounds and curated detail presets (September 2026)
+
+Optional v3 recipe fields `enclosure`, `pavingPattern`, `detailSet` and `detailScope` add bounded open entrances, low perimeter walls/rails, procedural paving and selected Quaternius families at entrance, crown or facade locations. Missing choices preserve existing rendering. The shared strict profile schema accepts only curated enum values; owner/revision/publication checks are unchanged. No migration or provider call is introduced. Matching City endpoints, frontend and the profile-consuming Fly world worker (`2026-09-21-city-design-3.1`) require paired isolated-staging deployment. Staging identifiers remain unavailable; no production deployment is included. See docs/synarc-city-building-composition.md.
+
 ## Composable City architecture and attachment slots (September 2026)
 
 Version-3 `buildingDesign` recipes add a pinned `city-grammar-1` generator revision, base/middle/crown composition, independent façade/grounds seeds, façade rhythms and explicit bounded attachment selections. Six complete presets and advanced stack editing share a support-clipped geometry resolver with the City renderer. Slot eligibility covers dimensions, roof compatibility, building clearance and mutual occupancy; inactive choices persist without relocation. The shared schema enforces eight floors, legal component/slot pairs and one primary brand sign plus at most one campaign panel. Approved published profile imagery/offer titles populate campaign signs; expired offers revert to branding. V1/v2 designs retain their renderers until explicit upgrade. No migration or provider generation is introduced.

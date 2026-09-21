@@ -101,3 +101,11 @@ Deno.test("shared profile parser preserves each recipe version and media ownersh
     }, uid)
   );
 });
+
+Deno.test("grounds and detail presets are bounded optional recipe choices", () => {
+  const recipe = { ...newDesign("grounds-test"), enclosure: "garden-wall", pavingPattern: "checker", detailSet: "marble", detailScope: "crown" };
+  assert.deepEqual(buildingDesignSchema.parse(recipe), recipe);
+  for (const key of ["enclosure", "pavingPattern", "detailSet", "detailScope"]) {
+    assert.throws(() => buildingDesignSchema.parse({...recipe, [key]: "custom-script"}));
+  }
+});
