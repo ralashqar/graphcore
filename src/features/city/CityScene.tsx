@@ -1,3 +1,4 @@
+import { CityDriving } from "./CityDriving";
 import { streamRadius } from "../../domain/cityStreaming";
 import { CityArrivalContext } from "./CityInstances";
 import { CityLaunchPlaza, LAUNCH_PLAZA_Z } from "./CityLaunchPlaza";
@@ -401,6 +402,7 @@ function SceneReady({ onReady }: { onReady?: () => void }) {
   return null;
 }
 function CitySceneContent({
+  driving = false, onExitDriving = () => {},
   estateDemo = false,
   properties,
   selected,
@@ -424,6 +426,8 @@ function CitySceneContent({
   launchActivity = false,
   launchFocus = false,
 }: {
+  driving?: boolean;
+  onExitDriving?: () => void;
   estateDemo?: boolean;
   launches?: LaunchItem[];
   launchActivity?: boolean;
@@ -457,13 +461,13 @@ function CitySceneContent({
   const [softwareRenderer, setSoftwareRenderer] = useState(false);
   const residents = useRef(new Map<string, number>());
   const visible = useMemo(() => {
-    const radius = streamRadius(window.innerWidth, window.innerHeight, zoom);
+    const radius = driving ? 520 : streamRadius(window.innerWidth, window.innerHeight, zoom);
     return properties.filter(p => {
       const distance = Math.hypot(position(p.x) - position(center.x), position(p.z) - position(center.z));
       return distance <= radius + (residents.current.has(p.id) ? 66 : 0) || p.id === selected?.id ||
         !!playback?.event.moves.some(m => m.id === p.id);
     });
-  }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport]);
+  }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport, driving]);
   const arrivals = useMemo(() => new Map(visible.map(p => [p.id, residents.current.get(p.id) ?? performance.now()])), [visible]);
   useEffect(() => { residents.current = arrivals; }, [arrivals]);
   const mobile = window.innerWidth < 900;
@@ -489,13 +493,13 @@ function CitySceneContent({
         }}
       >
         <ContextGuard onFailure={onFailure} />
-        <OrthographicCamera
+        {!driving && <OrthographicCamera
           makeDefault
           position={[420, 380, 420]}
           zoom={3.8}
           near={0.1}
           far={5000}
-        />
+        />}
         {!spriteMode && <CityStreetActivity
           properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
           reduced={reduced}
@@ -517,7 +521,7 @@ function CitySceneContent({
           shadow-bias={-0.0003}
         />
         {presetDemo && <directionalLight position={[125, 80, -110]} color="#c5ddff" intensity={.45} />}
-        <fog attach="fog" args={[presetDemo ? "#c8deeb" : "#e4e5dc", 850, 1500]} />
+        <fog attach="fog" args={[presetDemo ? "#c8deeb" : "#e4e5dc", driving ? 180 : 850, driving ? 420 : 1500]} />
         {!spriteMode && pavilion && <CityPavilion {...pavilion} />}
         {!spriteMode && (launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
         {!living.storefronts && !markers &&
@@ -587,7 +591,7 @@ function CitySceneContent({
             paused={!!playback}
           />
         )}
-        <CameraRig
+        {driving ? <CityDriving capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
           launchFocus={launchFocus}
           central={central}
           viewport={viewport}
@@ -602,7 +606,7 @@ function CitySceneContent({
             );
             onRegion(x, z);
           }}
-        />
+        />}
       </Canvas>
     </SceneBoundary>
   );

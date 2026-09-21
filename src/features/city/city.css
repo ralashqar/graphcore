@@ -1519,3 +1519,7 @@ body:has(.city-app) {
 .city-ad-choice { padding: 10px 12px; border: 1px solid #d4d9cf; border-radius: 8px; gap: 6px; }
 .city-ad-choice span { display: flex; align-items: center; gap: 8px; }
 .city-ad-choice input[type="checkbox"] { width: auto; }
+
+.city-drive-controls { pointer-events: auto; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); width: min(620px, calc(100vw - 24px)); box-sizing: border-box; padding: 12px; border-radius: 12px; background: #f5f5eefa; color: #243b31; box-shadow: 0 5px 24px #0002; text-align: center; }
+.city-drive-controls span {display: block; font-size: 12px; margin: 5px 0;}
+.city-drive-controls button {touch-action: none; padding: 9px; margin: 3px; background: #e0e9df; border: 1px solid #aebbac; border-radius: 6px;}

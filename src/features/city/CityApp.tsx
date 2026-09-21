@@ -155,6 +155,7 @@ export function CityApp() {
     [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(true),
     [directory, setDirectory] = useState(false),
+    [driving, setDriving] = useState(false),
     [home, setHome] = useState(0),
     [claim, setClaim] = useState<{ code: string; url: string } | null>(null),
     [sort, setSort] = useState("rank");
@@ -792,7 +793,7 @@ export function CityApp() {
               >
                 <div
                   className="city-canvas"
-                  aria-label="Interactive city map. Drag to pan, scroll to zoom, or use arrow keys."
+                  aria-label={driving ? "Drive the city. WASD or arrow keys to drive, Space to brake, Escape to return to map." : "Interactive city map. Drag to pan, scroll to zoom, or use arrow keys."}
                   tabIndex={0}
                 >
                   {loading
@@ -811,7 +812,7 @@ export function CityApp() {
                           </div>
                         }
                       >
-                        <CityScene
+                        <CityScene driving={driving} onExitDriving={()=>setDriving(false)}
                           estateDemo={demo.current}
                           launches={plazaItems}
                           launchActivity={!!snapshot.activityEnabled}
@@ -925,6 +926,7 @@ export function CityApp() {
                     onClose={() => setLastMarketEvent(null)}
                     onReplay={() => {
                       if (launchBrowse || richLaunchRoute) navigate("/city");
+                      setDriving(false);
                       setSelected(null);
                       setHome((h) => h + 1);
                       setMarketPlayback({
@@ -1210,9 +1212,12 @@ export function CityApp() {
                   </aside>
                 )}
                 <div className="city-map-tools">
+                  {!directory && <button aria-pressed={driving} onClick={()=>{setDriving(v=>!v);explore();}}>{driving?"Map mode":"Drive mode"}</button>}
+
                   <button
                     aria-label="Return to Central Plaza"
                     onClick={() => {
+                      setDriving(false);
                       setSelected(null);
                       setHome((h) => h + 1);
                       navigate("/city");
@@ -1223,13 +1228,13 @@ export function CityApp() {
                   </button>
                   <button
                     aria-pressed={directory}
-                    onClick={() => setDirectory((v) => !v)}
+                    onClick={() => {setDriving(false);setDirectory((v) => !v);}}
                   >
                     <List size={20} />
                     <span>{directory ? "3D map" : "Directory"}</span>
                   </button>
                 </div>
-                <div className="city-map-caption">
+                <div className="city-map-caption" hidden={driving}>
                   <span>EXPLORE AT YOUR OWN PACE</span>
                   <p>
                     Drag to explore <span>·</span> Scroll to get closer

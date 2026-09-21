@@ -160,3 +160,8 @@ Verification: all presets and rotations are checked for visible normals and plot
 The shared profile schema and world worker version city-design-3.4 must ship with matching City endpoints and frontend to designated staging. Staging identifiers are still unspecified, so hosted saving of the new field is not activated. No database migration, production activation or provider spending.
 
 TypeScript, production build and fresh dev-runtime checks passed. Existing large-chunk, landing-atlas and public-office-manifest warnings remain. Final schema checks include entrance-structure collision envelopes.
+
+
+### Road driving preview (September 2026)
+
+Explore now offers Drive mode: a procedural car with a ground-level perspective follow camera, WASD/arrow steering, Space braking, right-drag look, touch hold controls and Escape/back-to-map restoration. Movement is bounded to the road grid; blur clears held inputs. Map mode remains the default. This is a frontend-only preview without traffic simulation or vehicle physics. Movement/boundary tests, browser movement/braking/look/return/re-entry/mobile viewport checks, TypeScript and production build passed. Physical mobile performance remains unverified.
