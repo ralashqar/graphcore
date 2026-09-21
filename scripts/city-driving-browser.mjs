@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 const browser=await chromium.launch({headless:true,args:["--use-angle=d3d11"]});
 try {
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+ page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
  page.on("pageerror",e=>{errors.push(e.message);console.log("pageerror",e.message);});
  await page.goto(`${process.env.CITY_TEST_ORIGIN||"http://localhost:5183"}/city?demo=1`);
  await page.locator("canvas").waitFor();

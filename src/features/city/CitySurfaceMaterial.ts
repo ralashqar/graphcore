@@ -11,11 +11,23 @@ export function citySurfaceMaterial(glass = false) {
    #endif
    citySurfacePosition = (modelMatrix * cityPoint).xyz;
    #include <project_vertex>`);
-  shader.fragmentShader = "varying vec3 citySurfacePosition;\n" + shader.fragmentShader;
+  shader.fragmentShader = `varying vec3 citySurfacePosition;
+   float cityHash(vec3 p) {
+    p=fract(p*0.1031);p+=dot(p,p.yzx+33.33);
+    return fract((p.x+p.y)*p.z);
+   }
+   float cityGrain(vec3 p) {
+    vec3 cell=floor(p),f=fract(p);
+    f=f*f*f*(f*(f*6.0-15.0)+10.0);
+    return mix(mix(mix(cityHash(cell),cityHash(cell+vec3(1,0,0)),f.x),
+     mix(cityHash(cell+vec3(0,1,0)),cityHash(cell+vec3(1,1,0)),f.x),f.y),
+     mix(mix(cityHash(cell+vec3(0,0,1)),cityHash(cell+vec3(1,0,1)),f.x),
+     mix(cityHash(cell+vec3(0,1,1)),cityHash(cell+vec3(1,1,1)),f.x),f.y),f.z);
+   }
+  ` + shader.fragmentShader;
   if (glass) shader.fragmentShader = shader.fragmentShader.replace("#include <roughnessmap_fragment>", `
    #include <roughnessmap_fragment>
-   float paneVariation = fract(sin(dot(floor(citySurfacePosition / 3.0),vec3(12.9898,78.233,37.719)))*43758.5453);
-   roughnessFactor = 0.1 + paneVariation * 0.12;
+   roughnessFactor = 0.16;
   `);
   shader.fragmentShader = shader.fragmentShader.replace("#include <color_fragment>", `
    #include <color_fragment>
@@ -23,11 +35,12 @@ export function citySurfaceMaterial(glass = false) {
     float facing = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);
     diffuseColor.rgb = mix(diffuseColor.rgb * 0.72, vec3(0.52, 0.69, 0.78), 0.22 + facing * 0.48);
    ` : `
-    float grain = sin(citySurfacePosition.x*8.0 + sin(citySurfacePosition.z*5.0)) * sin(citySurfacePosition.y*11.0 + citySurfacePosition.z*7.0);
+    float grain = cityGrain(citySurfacePosition*3.7+vec3(13.2,7.1,2.6))-.5;
     float fade = 1.0-smoothstep(25.0,85.0,length(vViewPosition));
-    diffuseColor.rgb *= 0.97 + grain * 0.035 * fade;
+    float pixelFade=1.0-smoothstep(.15,.6,length(fwidth(citySurfacePosition*3.7)));
+    diffuseColor.rgb *= 1.0 + grain * 0.025 * fade * pixelFade;
    `}`);
  };
- material.customProgramCacheKey = () => glass ? "city-glass-2" : "city-mineral-1";
+ material.customProgramCacheKey = () => glass ? "city-glass-3" : "city-mineral-2";
  return material;
 }
