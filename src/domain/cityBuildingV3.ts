@@ -590,6 +590,8 @@ export function resolveV3(
     const { x, z, nx, nz, y, height, length } = wall,
       angle = Math.atan2(nx, nz),
       horizontal = nz !== 0;
+    const wallIndex = parts.length;
+    const openings: {offset:number;height:number}[] = [];
     box(
       x - nx * .075,
       y + height / 2,
@@ -697,13 +699,14 @@ export function resolveV3(
           ? height - .75
           : 1.7,
       );
+      openings.push({offset,height:winH});
       box(
-        wx + nx * .04,
+        wx - nx * .14,
         y + height * .5,
-        wz + nz * .04,
-        horizontal ? bayWidth : .08,
+        wz - nz * .14,
+        horizontal ? bayWidth : .04,
         winH,
-        horizontal ? .08 : bayWidth,
+        horizontal ? .04 : bayWidth,
         p.glass,
         facadeEnabled && d.rhythm !== "ribbon" && y > .65
           ? "facade"
@@ -722,6 +725,25 @@ export function resolveV3(
           );
         }
       }
+    }
+    if (openings.length) {
+      // Replace the solid backing with wall strips around real openings.
+      parts.splice(wallIndex,1);
+      const strip=(along:number,w:number,cy:number,h:number)=>{
+        if(w<=.0001 || h<=.0001)return;
+        box(x+(horizontal?along:0)-nx*.15,cy,z+(horizontal?0:along)-nz*.15,
+          horizontal?w:.3,h,horizontal?.3:w,p.wall);
+      };
+      let cursor=-length/2;
+      for(const opening of openings.sort((a,b)=>a.offset-b.offset)) {
+        const left=opening.offset-bayWidth/2,right=opening.offset+bayWidth/2;
+        strip((cursor+left)/2,left-cursor,y+height/2,height-.36);
+        const band=(height-.36-opening.height)/2;
+        strip(opening.offset,bayWidth,y+.18+band/2,band);
+        strip(opening.offset,bayWidth,y+height-.18-band/2,band);
+        cursor=right;
+      }
+      strip((cursor+length/2)/2,length/2-cursor,y+height/2,height-.36);
     }
   }
   box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);

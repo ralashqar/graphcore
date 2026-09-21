@@ -191,3 +191,14 @@ test("optional attachment groups remain within declared envelopes and actual nat
     }
   }
 });
+
+test("procedural recessed panes have no solid wall overlapping their opening",()=>{
+ const d=newDesign("recess-test");d.finish="procedural";
+ const parts=resolveV3(d,"#506b58","near").parts;
+ const panes=parts.filter(p=>p.color===d.palette.glass && Math.min(p.size[0],p.size[2])===.04);
+ assert.ok(panes.length>0);
+ for(const pane of panes) {
+  const walls=parts.filter(p=>p.color===d.palette.wall);
+  for(const wall of walls) assert.ok(![0,1,2].every(axis=>Math.abs(wall.position[axis]-pane.position[axis])<(wall.size[axis]+pane.size[axis])/2-.001));
+ }
+});
