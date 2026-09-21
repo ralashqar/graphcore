@@ -152,7 +152,11 @@ export function CityDesignBuildings(
           if (kit && "fallback" in part && part.fallback &&
             ("fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
-          let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : part.kind;
+          // Unit-box chamfers grow with instance length and pull long rail/trim ends
+          // away from their adjoining pieces. Keep slender connectors square-ended.
+          const dimensions = [...part.size].sort((a, b) => b - a);
+          const connector = part.kind === "box" && dimensions[0] > dimensions[1] * 10;
+          let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : connector ? "joinedBox" : part.kind;
           const texture = d.version === 3 && key !== "glassBox" ? (part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
           if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
@@ -224,7 +228,7 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [{...pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])], ...(kind.split("|")[3] ? {material:textureMaterial(kind.split("|")[3])} : {})}]
             : [{
-              geometry: kind === "glassBox" ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
+              geometry: (kind === "glassBox" || kind.split("|")[0] === "joinedBox") ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
               material: kind === "glassBox" ? resources.glass : kind.includes("|") ? textureMaterial(kind.split("|")[1]) : resources.material,
             }]}
           instances={items}
