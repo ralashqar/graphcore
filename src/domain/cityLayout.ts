@@ -46,7 +46,7 @@ export function buildingMassing(tier: number, id: string) {
   const variant = buildingVariant(id);
   const width = tier < 2 ? 12 : 16;
   const height = recipe.floors * 3;
-  const frontageHeight = height * (tier >= 3 ? 0.65 : 1);
+  const frontageHeight = (tier >= 3 ? Math.max(1, Math.round(recipe.floors * 0.65)) : recipe.floors) * 3;
   const wings = [
     { x: 0, z: 4.5, width, depth: 6, height: frontageHeight },
     { x: width / 2 - 3, z: -3, width: 6, depth: 9, height },

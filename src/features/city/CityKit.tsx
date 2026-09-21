@@ -1,3 +1,4 @@
+import { createCityArchitecture } from "./CityArchitecture";
 import { useMarketMotion } from "./CityMarketMotion";
 import { Batch, type Instance, type Piece } from "./CityInstances";
 import { CityBillboards } from "./CityBillboards";
@@ -17,7 +18,6 @@ import type { CityProperty } from "../../domain/city";
 import {
   BUILDING_RECIPES,
   buildingVariant,
-  buildingMassing,
   billboardEnvelope,
   plotAxis,
   roadNetwork,
@@ -65,6 +65,7 @@ export function CityKit({
     for (const root of scene.children) {
       const key = root.userData.assetKey || root.name,
         pieces: Piece[] = [];
+      if (String(key).startsWith("Building_")) continue;
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         const original = child.material as MeshStandardMaterial;
@@ -112,6 +113,7 @@ export function CityKit({
       });
       result.set(key, pieces);
     }
+    for (const [key, pieces] of createCityArchitecture()) result.set(key, pieces);
     return result;
   }, [scene]);
   useEffect(
@@ -182,16 +184,11 @@ export function CityKit({
         near ? "near" : "far"
       }`;
       const list = groups.get(asset) || [];
-      const recipe = BUILDING_RECIPES[p.tier];
-      buildingMassing(p.tier, p.id).wings.forEach((wing, index) => list.push({
-        key: `${p.id}:wing:${index}`,
-        x: plotAxis(p.x) + wing.x,
-        z: plotAxis(p.z) + wing.z,
-        scale: [wing.width / recipe.width, wing.height / (recipe.floors * 3), wing.depth / recipe.depth],
-        property: p,
-        color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id
-          ? "#767d76" : "#ffffff",
-      }));
+      list.push({
+        key: p.id,
+        x: plotAxis(p.x), z: plotAxis(p.z), property: p,
+        color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id ? "#767d76" : "#ffffff",
+      });
       groups.set(asset, list);
     }
     return groups;
