@@ -12,5 +12,13 @@ def fetch(asset):
   name=next(n for n in z.namelist() if n.endswith('_'+role+'.jpg'))
   out=root/f'{asset}-{role}.webp';Image.open(io.BytesIO(z.read(name))).resize((512,512),Image.Resampling.LANCZOS).save(out,quality=87)
   files[role]={'file':out.name,'sha256':hashlib.sha256(out.read_bytes()).hexdigest()}
+ # Pack linear height and roughness together: no extra runtime texture sampler.
+ height_name=next(n for n in z.namelist() if '_Displacement.' in n)
+ rough_name=next(n for n in z.namelist() if n.endswith('_Roughness.jpg'))
+ height=Image.open(io.BytesIO(z.read(height_name))).convert('L').resize((512,512),Image.Resampling.LANCZOS)
+ rough=Image.open(io.BytesIO(z.read(rough_name))).convert('L').resize((512,512),Image.Resampling.LANCZOS)
+ out=root/f'{asset}-Surface.webp'
+ Image.merge('RGB',(height,rough,Image.new('L',(512,512),0))).save(out,lossless=True)
+ files['Surface']={'file':out.name,'sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'channels':{'r':'displacement','g':'roughness','b':'unused'}}
  return {'id':asset,'source':f'https://ambientcg.com/view?id={asset}','download':url,'license':'CC0-1.0','sourceSha256':hashlib.sha256(data).hexdigest(),'files':files}
 results=list(ThreadPoolExecutor(max_workers=3).map(fetch,ids));(root/'sources.json').write_text(json.dumps(results,indent=2),encoding='utf-8');print([r['id'] for r in results])

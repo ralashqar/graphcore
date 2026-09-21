@@ -13,6 +13,15 @@
       "Roughness": {
         "file": "Bricks051-Roughness.webp",
         "sha256": "ecbbbd4d41423ce2d5da03301864fbee13bc335dc47eb9ceb0ccf0f0dbb0d9be"
+      },
+      "Surface": {
+        "file": "Bricks051-Surface.webp",
+        "sha256": "e0c2159030b04dc84b89ddc807e0fa8cd59ce909b0c417488fdc4435cfec3370",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -30,6 +39,15 @@
       "Roughness": {
         "file": "PaintedPlaster017-Roughness.webp",
         "sha256": "27d6f5801b46bb4a0b60d64f100e768f185f5bf4c832da19cce27ca78e6b7d8b"
+      },
+      "Surface": {
+        "file": "PaintedPlaster017-Surface.webp",
+        "sha256": "267f34e58d246a0c4e5e6107ab459cd913afe8e898c860d906176a8499139af5",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -47,6 +65,15 @@
       "Roughness": {
         "file": "Concrete034-Roughness.webp",
         "sha256": "f092f76825c84f8c82f9108c21b1401ab7389d63d1eea772704ecb9912e0479c"
+      },
+      "Surface": {
+        "file": "Concrete034-Surface.webp",
+        "sha256": "da1a832460893341163097c5ebf3cdb69ece80a4a3a35f785b4331f8c1387616",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -64,6 +91,15 @@
       "Roughness": {
         "file": "RoofingTiles012A-Roughness.webp",
         "sha256": "5dff8612dc8e3e396a7ace05030c2b575a725fb3e89fb569d8ac525b01ca7a1e"
+      },
+      "Surface": {
+        "file": "RoofingTiles012A-Surface.webp",
+        "sha256": "f0aa8931aed1e47ebaaca45c605e1cdac000009b5684b343a91654bc77bc088d",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -81,6 +117,15 @@
       "Roughness": {
         "file": "Metal032-Roughness.webp",
         "sha256": "58b2911921ed4b90ad56ce89e73ad8cbd1e47a1a8c3d807a0032352d0ceec06e"
+      },
+      "Surface": {
+        "file": "Metal032-Surface.webp",
+        "sha256": "8e5723e0df9e76ea5a720d7f384eee429eb5c3dd840681e9695d16ae9353669c",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -98,6 +143,15 @@
       "Roughness": {
         "file": "WoodSiding005-Roughness.webp",
         "sha256": "645cef906130489e456be16c85fbbf50eead6b6065777529c75be616fdc539ed"
+      },
+      "Surface": {
+        "file": "WoodSiding005-Surface.webp",
+        "sha256": "b64b49f5d3c0efa0c797505dd1c608cddbde21c86a707eec767d285bd92557d6",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -115,6 +169,15 @@
       "Roughness": {
         "file": "PavingStones036-Roughness.webp",
         "sha256": "8c085a1c11beed7e4ff6854f1f1b98ae46bf0a66c851761d793bf5387e84ebc8"
+      },
+      "Surface": {
+        "file": "PavingStones036-Surface.webp",
+        "sha256": "8b3f394af7c16f16a1cd9b8d1c857f757bc76084b3c7da8416663eccdec65db5",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   },
@@ -132,6 +195,15 @@
       "Roughness": {
         "file": "Tiles074-Roughness.webp",
         "sha256": "ffb81cf3ab37201ba0499aa1fccfd35ceb645f98c98923283ad48c0f3c208df6"
+      },
+      "Surface": {
+        "file": "Tiles074-Surface.webp",
+        "sha256": "cec9697c077048dab4f286e600b137cdc32a7f492dcada15643758c5dff26307",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
       }
     }
   }

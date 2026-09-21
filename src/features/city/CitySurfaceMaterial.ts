@@ -1,11 +1,11 @@
 import { CITY_TEXTURES, type CityTextureId } from "../../domain/cityTexturePresets";
 import { MeshStandardMaterial, TextureLoader, RepeatWrapping, SRGBColorSpace } from "three";
-/** Shared instancing-compatible surfaces; no image downloads or shadow maps. */
+/** Shared instancing-compatible surfaces; packed local maps, no shadow maps. */
 export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "none", onReady?:()=>void) {
- const material = new MeshStandardMaterial({color:"#ffffff",roughness:glass?.08:.85,metalness:glass?.05:0});
+ const material = new MeshStandardMaterial({color:"#ffffff",roughness:glass?.08:.85,metalness:glass?.05:textureId==="metal"?.65:0});
  const preset=CITY_TEXTURES[textureId];
  const ready={value:0};let loaded=0,disposed=false;
- const textures=preset.asset ? ["Color","Roughness"].map(role=>{
+ const textures=preset.asset ? ["Color","Surface"].map(role=>{
   const texture=new TextureLoader().load(`/city/textures/${preset.asset}-${role}.webp`,()=>{if(!disposed && ++loaded===2){ready.value=1;onReady?.();}},undefined,()=>{});
   texture.wrapS=texture.wrapT=RepeatWrapping;texture.anisotropy=4;
   if(role==="Color")texture.colorSpace=SRGBColorSpace;
@@ -42,12 +42,25 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    `+shader.fragmentShader;
    shader.fragmentShader=shader.fragmentShader.replace("#include <color_fragment>",`#include <color_fragment>
     vec3 cityWeights=pow(abs(inverseTransformDirection(normalize(vNormal),viewMatrix)),vec3(8.0));cityWeights/=max(.0001,cityWeights.x+cityWeights.y+cityWeights.z);
+    vec4 citySurfaceData=citySample(cityRoughness,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights);
     diffuseColor.rgb=mix(diffuseColor.rgb,citySample(cityAlbedo,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights).rgb*diffuseColor.rgb,cityTextureReady);
    `);
    shader.fragmentShader=shader.fragmentShader.replace("#include <roughnessmap_fragment>",`#include <roughnessmap_fragment>
-    roughnessFactor=mix(roughnessFactor,clamp(citySample(cityRoughness,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights).g,.15,1.0),cityTextureReady);
+    roughnessFactor=mix(roughnessFactor,clamp(citySurfaceData.g,.15,1.0),cityTextureReady);
    `);
   }
+  if(textures.length) shader.fragmentShader=shader.fragmentShader.replace("#include <normal_fragment_maps>", `
+   #include <normal_fragment_maps>
+   // Screen-space surface gradients perturb lighting only, preserving instancing and silhouettes.
+   vec3 cityDx=dFdx(-vViewPosition),cityDy=dFdy(-vViewPosition);
+   vec3 cityR1=cross(cityDy,normal),cityR2=cross(normal,cityDx);
+   float cityDet=dot(cityDx,cityR1);
+   float cityDetailFade=(1.0-smoothstep(20.0,65.0,length(vViewPosition)))
+     *(1.0-smoothstep(.025,.15,length(fwidth(citySurfacePosition/${preset.meters.toFixed(2)}))));
+   float cityHeight=citySurfaceData.r*${({brick:.08,plaster:.015,concrete:.025,terracotta:.07,metal:.025,timber:.04,pavers:.07,checker:.025,none:0}[textureId]).toFixed(3)};
+   vec3 cityGradient=sign(cityDet)*(dFdx(cityHeight)*cityR1+dFdy(cityHeight)*cityR2);
+   normal=normalize(normal-cityGradient/max(abs(cityDet),.00001)*cityDetailFade*cityTextureReady);
+  `);
   if (glass) shader.fragmentShader = shader.fragmentShader.replace("#include <roughnessmap_fragment>", `
    #include <roughnessmap_fragment>
    roughnessFactor = 0.08;
@@ -75,6 +88,6 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    #include <opaque_fragment>
   `);
  };
- material.customProgramCacheKey = () => glass ? "city-glass-4" : "city-mineral-3-"+textureId;
+ material.customProgramCacheKey = () => glass ? "city-glass-4" : "city-mineral-4-"+textureId;
  return material;
 }
