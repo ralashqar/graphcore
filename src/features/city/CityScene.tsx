@@ -12,6 +12,7 @@ import { Html } from "@react-three/drei";
 import type { CityProfile } from "../../domain/city";
 import {
   Component,
+  useCallback,
   type ComponentRef,
   type ReactNode,
   useEffect,
@@ -57,10 +58,43 @@ function CameraRig({
     destination = useRef<Vector3 | null>(null),
     last = useRef(""),
     timer = useRef(0);
-  const { camera, size } = useThree();
+  const { camera, size, gl } = useThree();
   const restore = useRef(true);
   const previousCamera = useRef(savedCityCamera);
   const manual = useRef(false), lastFocus = useRef("");
+  const exploreRef = useRef(onExplore);
+  exploreRef.current = onExplore;
+  // Drei reconnects MapControls when event callbacks change. Never detach mid-drag.
+  const startNavigation = useCallback(() => {
+    destination.current = null;
+    manual.current = true;
+    exploreRef.current?.();
+  }, []);
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const pointers = new Map<number, string>();
+    const down = (event: PointerEvent) => pointers.set(event.pointerId, event.pointerType);
+    const end = (event: PointerEvent) => pointers.delete(event.pointerId);
+    const cancel = () => {
+      for (const [pointerId, pointerType] of [...pointers]) {
+        canvas.dispatchEvent(new PointerEvent("pointercancel", { pointerId, pointerType, bubbles: true }));
+      }
+      pointers.clear();
+    };
+    const visibility = () => { if (document.hidden) cancel(); };
+    canvas.addEventListener("pointerdown", down, true);
+    document.addEventListener("pointerup", end, true);
+    document.addEventListener("pointercancel", end, true);
+    window.addEventListener("blur", cancel);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      canvas.removeEventListener("pointerdown", down, true);
+      document.removeEventListener("pointerup", end, true);
+      document.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("blur", cancel);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [gl]);
   const selection = useRef(target?.id || "");
   selection.current = target?.id || "";
   useEffect(
@@ -186,6 +220,7 @@ function CameraRig({
     timer.current += delta;
     if (timer.current > 1) {
       timer.current = 0;
+      gl.domElement.dataset.cityCamera = JSON.stringify({ x: camera.position.x, z: camera.position.z, zoom: camera.zoom });
       onZoom(Math.round(camera.zoom * 2) / 2);
       const x = logicalAxis(control.target.x),
         z = logicalAxis(control.target.z),
@@ -214,9 +249,7 @@ function CameraRig({
       const step = movement[e.key];
       if (step) {
         e.preventDefault();
-        destination.current = null;
-        manual.current = true;
-        onExplore?.();
+        startNavigation();
         const offset = new Vector3(step[0], 0, step[1]);
         camera.position.add(offset);
         controls.current.target.add(offset);
@@ -225,7 +258,7 @@ function CameraRig({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [camera]);
+  }, [camera, startNavigation]);
   return (
     <MapControls
       ref={controls}
@@ -234,11 +267,7 @@ function CameraRig({
       maxZoom={18}
       enableDamping={!reduced}
       dampingFactor={0.12}
-      onStart={() => {
-        destination.current = null;
-        manual.current = true;
-        onExplore?.();
-      }}
+      onStart={startNavigation}
       mouseButtons={{ LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }}
       touches={{ ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_PAN }}
     />
