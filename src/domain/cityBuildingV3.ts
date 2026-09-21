@@ -495,7 +495,7 @@ export function resolveV3(
     parts: DesignPart[] = [],
     attachments: Attachment[] = [];
   const detailArchitecture = ({ brick: "brick", "white-brick": "creative", marble: "boutique", metal: "glass" } as const)[d.detailSet as "brick" | "white-brick" | "marble" | "metal"] ?? d.architecture;
-  const facadeEnabled = d.finish === "facade" && (!d.detailScope || d.detailScope === "all");
+  const facadeEnabled = d.finish === "facade";
   const slots = buildingSlots(d, masses), corners = classifyCorners(masses);
   const signs: DesignSign[] = slots.filter((s) =>
     s.active && (s.selected === "brand" || s.selected === "campaign")
@@ -534,8 +534,8 @@ export function resolveV3(
     scale = 1,
     role = "accent",
   ) => {
-    if (d.detailScope === "entrance" && (role === "facade" || role === "cornice")) return;
-    if (d.detailScope === "crown" && (role === "facade" || role === "door" || role === "entrance")) return;
+    if (d.detailScope === "entrance" && role === "cornice") return;
+    if (d.detailScope === "crown" && (role === "door" || role === "entrance")) return;
     attachments.push({ asset, position: [x, y, z], rotation, scale, role });
   };
   const entrance = { x: 0, z: masses[0].z + masses[0].depth / 2 };
@@ -619,6 +619,33 @@ export function resolveV3(
       );
     }
     if (lod === "far") continue;
+    if (facadeEnabled) {
+      // A family uses one uniform scale on every elevation. Modules sit above the
+      // slab and forward of the closed structural shell, never coplanar with it.
+      const moduleScale = Math.min(1, (Math.min(d.groundHeight, 3) - .36) / 3);
+      const nativeWidth = detailArchitecture === "boutique" || detailArchitecture === "creative" ? 4 : 2;
+      const width = nativeWidth * moduleScale;
+      for (const offset of fitBays(length, width, 0, .25)) {
+        const wx = x + (horizontal ? offset : 0), wz = z + (horizontal ? 0 : offset);
+        const door = y === .65 && nz === 1 && Math.abs(wz-entrance.z)<.01 && Math.abs(wx)<width/2+1.4;
+        const reserved = slots.some(s => s.active && (s.selected === "brand" || s.selected === "campaign") && overlaps({position:[wx+nx*.2,y+height/2,wz+nz*.2],size:[horizontal?width:.6,height,horizontal?.6:width]},s));
+        const plain = (y === .65 && d.base === "plinth") || (y > .65 && d.rhythm === "alternating" && (Math.round(offset/width)+d.facadeSeed)%2===0);
+        // Keep the actual entrance unobstructed; its procedural surround fills the bay.
+        if (door || reserved) continue;
+        const asset = plain ? family[1] : family[0];
+        const columns = plain ? nativeWidth/2 : 1;
+        const rows = plain && detailArchitecture === "brick" ? 3 : 1;
+        for(let col=0;col<columns;col++) for(let row=0;row<rows;row++) {
+          const along = (col-(columns-1)/2)*2*moduleScale;
+          attach(asset, wx+(horizontal?along:0)+nx*.025, y+.18+row*moduleScale, wz+(horizontal?0:along)+nz*.025, angle,moduleScale,"facade");
+        }
+        if (!plain) {
+          box(wx+nx*.04,y+.18+1.5*moduleScale,wz+nz*.04,horizontal?width:.08,2.25*moduleScale,horizontal?.08:width,p.glass,"facade");
+          parts.at(-1)!.fallbackAsset = asset;
+        }
+      }
+      continue;
+    }
     for (
       const offset of fitBays(length, bayWidth, facadeEnabled ? 0 : .35)
     ) {
@@ -687,52 +714,6 @@ export function resolveV3(
             p.trim,
           );
         }
-      }
-      if (
-        facadeEnabled && d.rhythm !== "ribbon" && lod === "near" &&
-        y > .65
-      ) {
-        const plain = y > .65 &&
-          ((Math.round(wx * 7 + wz * 11) + d.facadeSeed) % 5 === 0) &&
-          bayWidth === 2;
-        if (plain && detailArchitecture === "brick") {
-          for (let row = 0; row < 3; row++) {
-            attach(family[1], wx, y + row, wz, angle, 1, "facade");
-          }
-        } else {attach(
-            plain ? family[1] : family[0],
-            wx,
-            y,
-            wz,
-            angle,
-            1,
-            "facade",
-          );}
-      }
-    }
-    if (
-      d.finish !== "procedural" && lod === "near" && top && d.roof !== "pitched" && (!d.roofVariant || d.roofVariant === "standard")
-    ) {
-      const trimBays = fitBays(length, 2, .1, .65);
-      for (const [index, off] of trimBays.entries()) {
-        const ends = detailArchitecture === "glass"
-          ? "Cornice_Metal"
-          : detailArchitecture === "brick"
-          ? "Cornice_Brick"
-          : null;
-        const asset = ends && trimBays.length > 1 &&
-            (index === 0 || index === trimBays.length - 1)
-          ? ends + (index === 0 ? "_L" : "_R")
-          : family[2];
-        attach(
-          asset,
-          x + (horizontal ? off : 0),
-          y + height,
-          z + (horizontal ? 0 : off),
-          angle,
-          1,
-          "cornice",
-        );
       }
     }
   }
@@ -811,9 +792,10 @@ export function resolveV3(
           .5,
           w,
           p.trim,
-          d.finish !== "procedural" && !terrace ? "props" : undefined,
+          d.finish !== "procedural" && !terrace && lod === "near" ? "props" : undefined,
         );
         if (lod === "near" && d.finish !== "procedural" && !terrace) {
+          parts.at(-1)!.fallbackAsset = "Prop_Planter_Single";
           attach("Prop_Planter_Single", x, .25, z - 1, 0, 1, "props");
         }
         for (

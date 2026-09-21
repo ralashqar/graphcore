@@ -163,6 +163,18 @@ try {
     await browser.close();
     process.exit(0);
   }
+  if (process.env.CITY_FACADE_AUDIT === "1") {
+    await page.getByRole("button", {name:/^Glass headquarters /}).click();
+    await page.getByLabel("Building finish", {exact:true}).selectOption("facade");
+    for (const family of ["brick","white-brick","marble","metal"]) {
+      await page.getByLabel("Quaternius detail set", {exact:true}).selectOption(family);
+      await page.waitForTimeout(600);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-facade-${family}.png`});
+    }
+    assert.deepEqual(errors, []);
+    console.log("Four native facade families rendered without page errors.");
+    await browser.close(); process.exit(0);
+  }
   const before = await page.locator(".city-design-canvas").screenshot();
   await page.getByRole("button", { name: "Corner showroom L-shaped footprint", exact: true }).click();
   await page.getByLabel("Floors", { exact: true }).fill("5");

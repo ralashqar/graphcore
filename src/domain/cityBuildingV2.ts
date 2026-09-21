@@ -233,7 +233,7 @@ export type Attachment = {
   scale: number;
   role: string;
 };
-export type DesignPart = BuildingPart & { fallback?: "facade" | "props" };
+export type DesignPart = BuildingPart & { fallback?: "facade" | "props"; fallbackAsset?: string };
 export type ResolvedDesign = {
   parts: DesignPart[];
   attachments: Attachment[];

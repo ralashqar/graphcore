@@ -117,3 +117,18 @@ The customised demo uses the preview's warm sunlight, hemisphere sky/ground fill
 TypeScript passed. D3D11 browser verification rendered 72 residents and completed right-drag navigation without page errors. Software rendering displayed the initial scene but timed out capturing the post-pan screenshot; physical-mobile performance remains unverified. Fresh Vite started with the existing public-office-manifest warning.
 
 Production build passed with existing landing-atlas and chunk-size warnings.
+
+
+## Reliable modular facade coverage (2026-09-21)
+
+V3 facade mode now assembles native wall/window modules on all eligible floors and elevations, including ground floors and ribbon patterns. Accent scope controls entrances rather than disabling facade coverage. Modules use a uniform family scale, whole bays and balanced plain corner fillers; door/sign reservations remain clear. Plain modules fill alternating/plinth bays. Tiles sit forward of the closed structural shell and above floor slabs.
+
+Oversized open source cornice strips are no longer placed along V3 roof edges; closed procedural parapets and floor bands provide restrained solid trim. This fixes the visible open-ended crown pieces without double-sided material workarounds. V1/V2 geometry remains unchanged.
+
+Native facade tiles persist at medium detail; small accents remain near-only. Per-asset fallback keeps other valid assets visible if one module is missing, and missing packs leave procedural windows intact. No asset export, schema, provider or migration changes. Shared validators still import the renderer module, but no server contract/execution behavior changes; this is a frontend rendering correction.
+
+Verification: 19 focused geometry tests, seven Deno schema tests, TypeScript and the mocked save/reload/mobile/failed-pack browser suite passed. Four native facade families were rendered and visually reviewed on the same office preset. Physical-mobile and 400-property frame-time benchmarking remain unverified for the wider medium-detail native coverage.
+
+The 72-property customised demo also rendered and panned without browser page errors. All 14 preset thumbnails were regenerated; procedural preset defaults produced unchanged preview files.
+
+Production build passed with the existing landing-atlas and chunk-size warnings.

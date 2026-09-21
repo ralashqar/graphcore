@@ -56,7 +56,7 @@ export function CityDesignBuildings(
     ), [properties, center?.x, center?.z, zoom, selectedId]);
   const [pack, setPack] = useState<DecoratorPack | null>(null);
   const needsPack = properties.some((p) =>
-    nearby.has(p.id) && !p.profile.buildingArt &&
+    !p.profile.buildingArt &&
     p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
     p.profile.buildingDesign.finish !== "procedural"
   );
@@ -125,13 +125,12 @@ export function CityDesignBuildings(
       const resolved = d.version !== 1
         ? resolveCurrent(d, p.profile.color, lod)
         : null;
-      const kit = pack && lod === "near" && d.version !== 1 &&
-        d.finish !== "procedural" && resolved?.attachments.every((a) =>
-          pack.has(a.asset)
-        );
+      const kit = pack && d.version !== 1 && (lod === "near" || (d.version === 3 && lod === "medium")) && d.finish !== "procedural";
+      const legacyComplete = kit && resolved?.attachments.every(a => pack.has(a.asset));
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {
-          if (kit && "fallback" in part && part.fallback) return;
+          if (kit && "fallback" in part && part.fallback &&
+            ("fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
           out[part.kind].push({
             key: `${p.id}:${index}`,

@@ -764,14 +764,14 @@ export function CityBuildingDesigner(
                   </select>
                 </label>
                 <label>
-                  Detail placement<select aria-label="Detail placement" value={d.detailScope ?? "all"}
+                  Accent placement<select aria-label="Detail placement" value={d.detailScope ?? "all"}
                     onChange={(e) => update("detailScope", e.target.value as typeof d.detailScope)}>
-                    <option value="all">Entrance, roofline and facade</option>
+                    <option value="all">Entrance and roofline</option>
                     <option value="entrance">Entrance only</option>
                     <option value="crown">Roofline only</option>
                   </select>
                 </label>
-                <small>Accents add entrances and trim. Choose Quaternius facade for modular upper walls too. Pitched roofs omit cornices; native pieces retain their proportions.</small>
+                <small>Accents add entrances with solid architectural trim. Façade mode tiles all eligible floors and walls; accent placement does not limit wall coverage. Modules retain uniform proportions, with plain corner fillers and reserved door/sign bays.</small>
                 {d.finish !== "procedural" && (
                   <small>
                     Whole modules, uniform scale. Footprint snaps to 2 m
