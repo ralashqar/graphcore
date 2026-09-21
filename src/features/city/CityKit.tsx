@@ -331,7 +331,7 @@ export function CityKit({
         reduced={reduced}
       />
       </>}
-      {!emptyMode && <CityDesignBuildings properties={properties} selectedId={selected?.id} matchIds={matchIds} reduced={reduced} onSelect={onSelect}/> }
+      {!emptyMode && <CityDesignBuildings center={center} zoom={zoom} properties={properties} selectedId={selected?.id} matchIds={matchIds} reduced={reduced} onSelect={onSelect}/> }
       {!emptyMode && properties.filter(p=>p.profile.buildingArt).map(p=><CityGeneratedBuilding key={p.id} property={p} dimmed={!!matchIds&&!matchIds.has(p.id)&&p.id!==selected?.id} reduced={reduced} onSelect={onSelect} />)}
       {spriteMode && !emptyMode && <CitySpriteBuildings properties={properties.filter(p=>!p.profile.buildingArt&&!p.profile.buildingDesign)} selected={selected} matchIds={matchIds} onSelect={onSelect} reduced={reduced} />}
       {properties
@@ -344,7 +344,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              p.profile.buildingDesign && !p.profile.buildingArt ? (p.profile.buildingDesign.floors*2.25+3)*plotSize/24 : spriteMode || p.profile.buildingArt ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
+              p.profile.buildingDesign && !p.profile.buildingArt ? (p.profile.buildingDesign.version===2 ? (p.profile.buildingDesign.floors-1)*3+p.profile.buildingDesign.groundHeight+3 : p.profile.buildingDesign.floors*2.25+3)*plotSize/24 : spriteMode || p.profile.buildingArt ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center

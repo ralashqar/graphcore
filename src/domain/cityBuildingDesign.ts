@@ -1,3 +1,4 @@
+import { massesV2, resolveDesign, type CityBuildingDesignV2 } from "./cityBuildingV2.ts";
 /** Versioned, bounded geometry recipe. No executable content or asset URLs. */
 export const BLUEPRINTS = [
   "office",
@@ -7,7 +8,8 @@ export const BLUEPRINTS = [
 ] as const;
 export const FACADES = ["ribbon", "grid", "piers"] as const;
 export const TILE_STYLES = ["garden", "limestone", "slate"] as const;
-export type CityBuildingDesign = {
+export type CityBuildingDesign = CityBuildingDesignV1 | CityBuildingDesignV2;
+export type CityBuildingDesignV1 = {
   version: 1;
   blueprint: typeof BLUEPRINTS[number];
   floors: number;
@@ -18,7 +20,7 @@ export type CityBuildingDesign = {
   landscaping: boolean;
   rotation: number;
 };
-export const DEFAULT_BUILDING_DESIGN: CityBuildingDesign = {
+export const DEFAULT_BUILDING_DESIGN: CityBuildingDesignV1 = {
   version: 1,
   blueprint: "terraces",
   floors: 4,
@@ -32,7 +34,7 @@ export const DEFAULT_BUILDING_DESIGN: CityBuildingDesign = {
 export const BUILDING_PRESETS: {
   name: string;
   description: string;
-  design: CityBuildingDesign;
+  design: CityBuildingDesignV1;
 }[] = [
   {
     name: "Modern office",
@@ -80,6 +82,7 @@ export type BuildingMass = {
   height: number;
 };
 export function buildingMasses(d: CityBuildingDesign): BuildingMass[] {
+  if(d.version===2)return massesV2(d);
   const w = d.width, floorHeight = 2.25, masses: BuildingMass[] = [];
   for (let floor = 0; floor < d.floors; floor++) {
     const step = d.blueprint === "terraces"
@@ -139,7 +142,7 @@ export function buildingMasses(d: CityBuildingDesign): BuildingMass[] {
   return masses;
 }
 export type BuildingPart = {
-  kind: "box" | "tree";
+  kind: "box" | "tree" | "roof";
   position: [number, number, number];
   size: [number, number, number];
   color: string;
@@ -148,6 +151,7 @@ export function buildingParts(
   d: CityBuildingDesign,
   brand: string,
 ): BuildingPart[] {
+  if(d.version===2)return resolveDesign(d,brand).parts;
   const parts: BuildingPart[] = [];
   const box = (
     x: number,

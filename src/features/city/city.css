@@ -1489,3 +1489,18 @@ body:has(.city-app) {
 .city-design-studio .city-art-controls .city-checkbox { display:flex; flex-direction:row; justify-content:flex-start; }
 .city-design-studio .city-art-controls .city-checkbox input { flex:0 0 auto; margin:0; }
 .city-design-studio input[type=range], .city-design-studio input[type=checkbox] { accent-color:#446b56; }
+
+.city-design-fields { border:0; padding:0; margin:18px 0; min-width:0; }
+.city-design-tabs { display:flex; flex-wrap:wrap; gap:5px; }
+.city-design-tabs button { font-size:12px; padding:9px 11px; }
+.city-design-fields:disabled { opacity:.5; }
+.city-design-fields details { border-top:1px solid #cdd3c6; padding-top:14px; }
+.city-design-fields summary { cursor:pointer; padding-bottom:14px; }
+.city-preset-thumb { display:block; width:62px; height:62px; margin-bottom:10px; }
+.city-style-picker { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.city-style-picker button { display:block; text-align:left; padding:10px; font-size:12px; }
+.city-facade-swatch { display:block; height:52px; margin-bottom:8px; background:repeating-linear-gradient(90deg,transparent 0 22px,#eee8da 22px 25px),repeating-linear-gradient(0deg,#69939b 0 17px,#eee8da 17px 21px); }
+.city-facade-brick { border:7px solid #a97663; background:repeating-linear-gradient(90deg,#65858a 0 10px,#a97663 10px 19px); }
+.city-facade-boutique { border:6px solid #e0cfb0; background:#698b90; border-top:12px solid #bd9874; }
+.city-facade-creative { border:6px solid #d6ded0; background:repeating-linear-gradient(90deg,#649292 0 14px,#d6ded0 14px 17px); }
+.city-design-upgrade { padding:14px; background:#e6ebdf; margin-bottom:16px; border-radius:10px; }
