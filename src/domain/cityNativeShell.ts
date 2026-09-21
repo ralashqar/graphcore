@@ -1,11 +1,3 @@
-// Exported straight panels use rear Z=0; native L returns use outer X=-1/Z=2.
-// Match the corner's INNER plane to the straight panel's rear plane.
-export const NATIVE_WALL_BACK = .025;
-export function nativeCornerJoin(height:number) {
- const scale=height/3;
- const outer=NATIVE_WALL_BACK+.2*scale;
- return {scale,outer,inset:2*scale-outer};
-}
 /** Exact rectangular wall partition. Window proportions stay uniform; solid panels fill remainders. */
 export type ShellRect = {left:number;right:number;bottom:number;top:number;kind:"window"|"solid"|"door"};
 export function partitionNativeWall(length:number,height:number,bays:{center:number;width:number}[],doors:{left:number;right:number;bottom:number;top:number}[]):ShellRect[]{

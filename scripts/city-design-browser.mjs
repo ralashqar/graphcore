@@ -227,6 +227,12 @@ try {
   if (process.env.CITY_FACADE_AUDIT === "1") {
     await page.getByRole("button", {name:/^Glass headquarters /}).click();
     await page.getByLabel("Building finish", {exact:true}).selectOption("facade");
+    const canvas=page.locator(".city-design-canvas canvas");
+    await canvas.scrollIntoViewIfNeeded();
+    const bounds=await canvas.boundingBox();
+    await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+    for(let i=0;i<10;i++){await page.mouse.wheel(0,-120);await page.waitForTimeout(35);}
+    await page.waitForTimeout(400);
     for (const family of ["brick","white-brick","marble","metal"]) {
       await page.getByLabel("Quaternius detail set", {exact:true}).selectOption(family);
       await page.waitForTimeout(600);

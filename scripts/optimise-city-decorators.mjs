@@ -22,3 +22,6 @@ await io.write(path, doc);
 console.log("Decorator GLB bytes:", (await stat(path)).size);
 
 execFileSync("python", ["scripts/resize-city-decorator-textures.py"], {stdio:"inherit"});
+
+// Freeze measured mounting planes, packing cells and doorway apertures with the pack.
+execFileSync(process.execPath, ["scripts/measure-city-native-modules.mjs"], {stdio:"inherit"});

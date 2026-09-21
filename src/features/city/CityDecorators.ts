@@ -1,3 +1,5 @@
+import { closeNativePanel } from "./CityNativePanelGeometry";
+import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import {
   Float32BufferAttribute,
@@ -41,7 +43,7 @@ export function loadDecorators(): Promise<DecoratorPack> {
                 : "wall";
             materials.set(original, material);
           }
-          const geometry = child.geometry.clone();
+          let geometry = child.geometry.clone();
           for (const name of ["position", "normal"]) {
             const a = geometry.getAttribute(name);
             if (!a) continue;
@@ -52,6 +54,11 @@ export function loadDecorators(): Promise<DecoratorPack> {
             geometry.setAttribute(name, new Float32BufferAttribute(values, 3));
           }
           geometry.applyMatrix4(child.matrixWorld);
+          const module=NATIVE_MODULES[root.userData.assetKey || root.name];
+          if(module && !root.name.startsWith("Stairs_") && !/glass|interior/i.test(original.name)){
+            const closed=closeNativePanel(geometry,module);
+            if(closed!==geometry){geometry.dispose();geometry=closed;}
+          }
           geometry.computeBoundingBox();
           pieces.push({ geometry, material });
         });
