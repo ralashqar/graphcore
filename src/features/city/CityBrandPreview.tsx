@@ -1,10 +1,11 @@
 import {
   Component,
-  Suspense,
-  useMemo,
-  useEffect,
-  useRef,
   type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
 } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
@@ -26,14 +27,16 @@ class PreviewBoundary extends Component<
     return { failed: true };
   }
   render() {
-    return this.state.failed ? (
-      <p>
-        3D preview is unavailable on this device. You can still edit and save
-        your branding.
-      </p>
-    ) : (
-      this.props.children
-    );
+    return this.state.failed
+      ? (
+        <p>
+          3D preview is unavailable on this device. You can still edit and save
+          your branding.
+        </p>
+      )
+      : (
+        this.props.children
+      );
   }
 }
 
@@ -46,6 +49,9 @@ export function CityBrandPreview({
   tier: number;
   id?: string;
 }) {
+  const [zoom, setZoom] = useState(1);
+  const [guides, setGuides] = useState(false);
+  const [context, setContext] = useState(false);
   const property = useMemo<CityProperty>(
     () => ({
       id: id || "brand-preview",
@@ -68,45 +74,119 @@ export function CityBrandPreview({
       aria-label="Live building preview"
     >
       <span className="city-eyebrow">LIVE BUILDING PREVIEW</span>
-      {profile.buildingArt ? <img src={profile.buildingArt} alt={`${profile.name} building preview`} width={512} height={512} style={{width:"100%",height:"auto",background:"#e8e5da"}} /> : <div className="city-brand-canvas">
-        <PreviewBoundary>
-          <Canvas
-            key={tier}
-            dpr={[1, 1.5]}
-            camera={{ position: [7 + height, height * 0.8 + 6, -9], fov: 40 }}
-            gl={{ antialias: true }}
-          >
-            <color attach="background" args={["#e8e5da"]} />
-            <ambientLight intensity={1.8} />
-            <directionalLight position={[20, 40, 15]} intensity={2.2} />
-            <Suspense fallback={null}>
-              <CityKit
-                properties={[property]}
-                selected={property}
-                capacity={4}
-                center={{ x: -1, z: -1 }}
-                zoom={20}
-                reduced
-                labels={false}
-                onSelect={() => {}}
-              />
-            </Suspense>
-            <OrbitControls
-              target={[-21, height / 2, -21]}
-              enablePan={false}
-              minDistance={18}
-              maxDistance={95}
-              maxPolarAngle={Math.PI / 2.1}
-            />
-          </Canvas>
-        </PreviewBoundary>
-      </div>}
+      {profile.buildingArt
+        ? (
+          <>
+            <div className="city-studio-toolbar">
+              <button
+                type="button"
+                aria-pressed={context}
+                onClick={() => setContext(!context)}
+              >
+                Street backdrop
+              </button>
+              <button
+                type="button"
+                aria-pressed={guides}
+                onClick={() => setGuides(!guides)}
+              >
+                Plot guides
+              </button>
+              <label>
+                Preview zoom<input
+                  aria-label="Preview zoom"
+                  type="range"
+                  min="0.6"
+                  max="1.4"
+                  step="0.1"
+                  value={zoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                />
+              </label>
+              <button type="button" onClick={() => setZoom(1)}>
+                Reset zoom
+              </button>
+            </div>
+            <div
+              className={`city-art-viewport ${
+                context ? "city-art-street" : ""
+              }`}
+            >
+              <div
+                className="city-art-image-frame"
+                style={{ transform: `scale(${zoom})` }}
+              >
+                <img
+                  src={profile.buildingArt}
+                  alt={`${profile.name} building preview`}
+                  width={512}
+                  height={512}
+                />
+                {guides && (
+                  <svg
+                    viewBox="0 0 512 512"
+                    aria-label="Fixed plot footprint"
+                    role="img"
+                  >
+                    <path d="M32 360 L256 240 L480 360 L256 480 Z" />
+                  </svg>
+                )}
+              </div>
+            </div>
+            {context && (
+              <small>
+                Illustrative street backdrop. Preview at 60% to check
+                small-scale readability.
+              </small>
+            )}
+          </>
+        )
+        : (
+          <div className="city-brand-canvas">
+            <PreviewBoundary>
+              <Canvas
+                key={tier}
+                dpr={[1, 1.5]}
+                camera={{
+                  position: [7 + height, height * 0.8 + 6, -9],
+                  fov: 40,
+                }}
+                gl={{ antialias: true }}
+              >
+                <color attach="background" args={["#e8e5da"]} />
+                <ambientLight intensity={1.8} />
+                <directionalLight position={[20, 40, 15]} intensity={2.2} />
+                <Suspense fallback={null}>
+                  <CityKit
+                    properties={[property]}
+                    selected={property}
+                    capacity={4}
+                    center={{ x: -1, z: -1 }}
+                    zoom={20}
+                    reduced
+                    labels={false}
+                    onSelect={() => {}}
+                  />
+                </Suspense>
+                <OrbitControls
+                  target={[-21, height / 2, -21]}
+                  enablePan={false}
+                  minDistance={18}
+                  maxDistance={95}
+                  maxPolarAngle={Math.PI / 2.1}
+                />
+              </Canvas>
+            </PreviewBoundary>
+          </div>
+        )}
       <h2>{profile.name || "Your next address."}</h2>
       <p>{profile.tagline || "Add a logo and image to make it yours."}</p>
       <small>
         {profile.buildingArt
           ? "Isometric building artwork · Draft preview only."
-          : `${CITY_TIERS[tier].name} · Drag to rotate. Scroll to zoom. Draft preview only.`}
+          : `${
+            CITY_TIERS[tier].name
+          } · Drag to rotate. Scroll to zoom. Draft preview only.`}
       </small>
     </section>
   );

@@ -59,3 +59,12 @@ Implemented locally; **not migrated, deployed, activated or tested with fresh pa
 5. Verify a real authenticated logo-reference generation on staging, credit debit/recovery, rejection UX, apply/review/publish, and alignment in the actual City before broad activation. Existing prototypes and mock API tests do not substitute for that acceptance.
 
 Provider schema references: [Nano Banana 2 edit](https://fal.ai/models/fal-ai/nano-banana-2/edit/api), [GPT Image 2 edit](https://fal.ai/models/openai/gpt-image-2/edit/api). Long-running generation remains on Fly rather than depending on [Edge background execution limits](https://supabase.com/docs/guides/functions/background-tasks).
+
+
+## Building studio layout (September 21)
+
+The merchant workspace places the building preview beside five curated architectural presets, shape, proportions, branding, landscaping and personality controls. These compose the existing bounded subject-direction input; the server's camera, footprint, reference and style contract is unchanged. Controls do not submit generation automatically or change City Value/tier. Proportions describe the next image rather than stretching existing artwork.
+
+Candidates can be selected and compared with the current draft. Preview zoom preserves aspect ratio; optional plot guides use the pipeline's canonical footprint. The street backdrop is illustrative, not a live map render. Business details, verification, payments and performance remain accessible below through section navigation. On mobile the preview precedes controls. Generation remains subject to existing server activation and credit configuration; no provider inference or deployment is part of this UI update.
+
+Verification: TypeScript, production build, fresh Vite startup, desktop/mobile artwork flow and existing merchant onboarding through checkout. Browser API/provider responses are fixtures; no paid inference was submitted. Existing landing-atlas, office-manifest development and bundle-size warnings remain outside this change.

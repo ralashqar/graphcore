@@ -14,7 +14,7 @@ try {
  await context.route('**/auth/v1/**',r=>r.fulfill({json:r.request().url().includes('/user')?user:session}));
  await context.route('**/functions/v1/city-*',async r=>{const p=r.request().postDataJSON(),url=r.request().url();const reply=json=>r.fulfill({json});
   if(url.endsWith('city-building-art')) {
-   if(p.action==='generate'){assert.equal(p.model,'nano');assert.equal(p.direction,'A creative studio with a welcoming entrance');assert.equal(p.prompt,undefined);calls.push(p);jobs=[{id:p.jobId,status:'completed',preview:`${origin}/output/playwright/city-art-validated.png`,error:null,phase:'completed',credits:10,version:1,createdAt:new Date().toISOString()}];}
+   if(p.action==='generate'){assert.equal(p.model,'nano');assert.match(p.direction,/Business premises: Modern office/);assert.match(p.direction,/Architectural character: Courtyard/);assert.match(p.direction,/A creative studio with a welcoming entrance/);assert.equal(p.prompt,undefined);calls.push(p);jobs=[{id:p.jobId,status:'completed',preview:`${origin}/output/playwright/city-art-validated.png`,error:null,phase:'completed',credits:10,version:1,createdAt:new Date().toISOString()}];}
    if(p.action==='apply'){calls.push(p);business.draft={...business.draft,buildingArt:`${userId}/${p.jobId}.png`};business.preview={...business.draft,buildingArt:jobs[0].preview};business.draft_version++;}
    return reply({enabled:true,prices:{nano:10,gpt:20},jobs});
   }
@@ -24,14 +24,23 @@ try {
  });
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});await page.goto(`${origin}/city/manage`);
  await page.getByRole('heading',{name:'A place that looks like your business'}).waitFor();
+ await page.getByRole('button',{name:'Modern office',exact:true}).click();
+ await page.getByLabel('Building shape',{exact:true}).selectOption('Courtyard');
+ assert.equal(calls.length,0);
  await page.getByLabel('Business direction',{exact:true}).fill('A creative studio with a welcoming entrance');
  await page.getByRole('button',{name:'Generate building · 10 credits',exact:true}).click();
  await page.getByAltText('Generated building for Fieldwork',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Preview candidate',exact:true}).click();
+ await page.getByRole('button',{name:'Compare with draft',exact:true}).click();
+ assert.equal(await page.getByRole('region',{name:'Live building preview',exact:true}).count(),2);
+ await page.getByRole('button',{name:'Compare with draft',exact:true}).click();
+ await page.getByRole('button',{name:'Plot guides',exact:true}).click();
+ await page.getByRole('img',{name:'Fixed plot footprint',exact:true}).waitFor();
  await page.getByRole('button',{name:'Use in property draft',exact:true}).click();
  await page.getByAltText('Fieldwork building preview',{exact:true}).waitFor();assert.equal(business.published,null);assert.equal(calls.length,2);assert.equal(calls[1].jobId,calls[0].jobId);
- await page.getByRole('region',{name:'Building artwork'}).scrollIntoViewIfNeeded();await page.screenshot({path:'output/playwright/city-art-editor.png'});
- await page.reload();await page.getByAltText('Fieldwork building preview',{exact:true}).waitFor();await page.setViewportSize({width:390,height:844});await page.getByRole('region',{name:'Building artwork'}).scrollIntoViewIfNeeded();
- assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'output/playwright/city-art-editor-mobile.png'});
+ await page.getByRole('region',{name:'Building artwork'}).evaluate(el=>el.scrollIntoView({block:'start'}));await page.screenshot({path:'output/playwright/city-art-editor.png'});
+ await page.reload();await page.getByAltText('Fieldwork building preview',{exact:true}).waitFor();await page.setViewportSize({width:390,height:844});await page.getByRole('region',{name:'Building artwork'}).evaluate(el=>el.scrollIntoView({block:'start'}));
+ assert.ok(await page.getByAltText('Fieldwork building preview',{exact:true}).isVisible());assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'output/playwright/city-art-editor-mobile.png'});
  business.published=business.draft;await page.setViewportSize({width:1440,height:960});await page.goto(`${origin}/city`);await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.cityCamera);await page.waitForTimeout(1600);await page.screenshot({path:'output/playwright/city-art-map.png'});await page.mouse.click(886,520);await page.getByRole('complementary',{name:'Fieldwork property',exact:true}).waitFor();
  assert.deepEqual(errors,[]);console.log('City art browser: business input, generation, preview, draft apply, reload and mobile passed (mock API, no paid inference).');
 } finally {await browser.close();}

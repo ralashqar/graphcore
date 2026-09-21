@@ -1,4 +1,4 @@
-import { CityBuildingArt } from './CityBuildingArt';
+import { CityBuildingArt } from "./CityBuildingArt";
 import { MerchantLiving } from "./CityLiving";
 import { marketQuote, MerchantPosition, QuotePreview } from "./CityMarket";
 import type { CityQuote } from "../../domain/cityMarket";
@@ -166,7 +166,9 @@ export function CityManage({
   const dirty = JSON.stringify(profile) !== JSON.stringify(business?.draft);
   const previewProfile: CityProfile = {
     ...profile,
-    buildingArt: profile.buildingArt === business?.draft.buildingArt ? business?.preview?.buildingArt : undefined,
+    buildingArt: profile.buildingArt === business?.draft.buildingArt
+      ? business?.preview?.buildingArt
+      : undefined,
     logo: profile.logo
       ? previews.logo ||
         (profile.logo === business?.draft.logo ? business.preview?.logo : "") ||
@@ -191,7 +193,33 @@ export function CityManage({
         <p className="city-eyebrow">BUSINESS STUDIO</p>
         <h1>Your place in the city.</h1>
         <p>Bring your brand to life. Build a home people want to discover.</p>
-        {business && <div className="city-actions"><button onClick={()=>document.getElementById('city-next-move')?.scrollIntoView()}>Increase City Value</button>{snapshot?.dealsEnabled&&<button onClick={()=>document.getElementById('city-create-deal')?.scrollIntoView()}>Create Deal</button>}{snapshot?.discoveryEnabled&&<button onClick={()=>document.getElementById('city-create-launch')?.scrollIntoView()}>Create Launch</button>}</div>}
+        {business && (
+          <div className="city-actions">
+            <button
+              onClick={() =>
+                document.getElementById("city-next-move")?.scrollIntoView()}
+            >
+              Increase City Value
+            </button>
+            {snapshot?.dealsEnabled && (
+              <button
+                onClick={() =>
+                  document.getElementById("city-create-deal")?.scrollIntoView()}
+              >
+                Create Deal
+              </button>
+            )}
+            {snapshot?.discoveryEnabled && (
+              <button
+                onClick={() =>
+                  document.getElementById("city-create-launch")
+                    ?.scrollIntoView()}
+              >
+                Create Launch
+              </button>
+            )}
+          </div>
+        )}
       </header>
       {message && (
         <p className="city-message" role="status">
@@ -213,7 +241,30 @@ export function CityManage({
           revision={snapshot.revision}
         />
       )}
-      <div className="city-management-grid">
+      <div id="city-building-studio">
+        {business
+          ? (
+            <CityBuildingArt
+              key={business.id}
+              business={business}
+              profile={previewProfile}
+              tier={buildingTier(Number(business.land_value || 0))}
+              dirty={dirty}
+              onRefresh={onRefresh}
+            />
+          )
+          : <CityBrandPreview profile={previewProfile} tier={0} />}
+      </div>
+      <nav
+        className="city-studio-navigation"
+        aria-label="Business workspace sections"
+      >
+        <a href="#city-building-studio">Building studio</a>
+        <a href="#city-business-details">Business details</a>
+        <a href="#city-next-move">Position & payments</a>
+        <a href="#city-business-performance">Performance</a>
+      </nav>
+      <div className="city-management-grid" id="city-business-details">
         <form onSubmit={save} className="city-editor">
           <div className="city-section-heading">
             <span>01 / YOUR BUSINESS</span>
@@ -522,11 +573,6 @@ export function CityManage({
           )}
         </form>
         <aside className="city-business-aside">
-          <CityBrandPreview
-            id={business?.id}
-            tier={buildingTier(nextValue)}
-            profile={previewProfile}
-          />
           {business && (
             <section className="city-business-section">
               <h2>Verify & publish</h2>
@@ -722,20 +768,24 @@ export function CityManage({
       )}
       {business && snapshot?.dealsEnabled && (
         <div id="city-deal-studio">
-          <div id="city-create-deal"><CityDealStudio businessId={business.id} /></div>
+          <div id="city-create-deal">
+            <CityDealStudio businessId={business.id} />
+          </div>
         </div>
       )}
-      {business && <CityBuildingArt business={business} dirty={JSON.stringify(profile)!==JSON.stringify(business.draft)} onRefresh={onRefresh} />}
+
       {business && snapshot?.campusEnabled && (
         <CityCampusEditor business={business} onRefresh={onRefresh} />
       )}
       {business?.published && snapshot?.discoveryEnabled && (
         <div id="city-launch-studio">
-          <div id="city-create-launch"><CityDiscoveryStudio businessId={business.id} /></div>
+          <div id="city-create-launch">
+            <CityDiscoveryStudio businessId={business.id} />
+          </div>
         </div>
       )}
       {business && (
-        <section className="city-analytics">
+        <section className="city-analytics" id="city-business-performance">
           <div className="city-section-heading">
             <span>03 / YOUR PROPERTY IN NUMBERS</span>
             <small>
