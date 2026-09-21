@@ -15,13 +15,23 @@ NAMES={
 'shell':['Brick_Window_Square_Single','Brick_RedWhite_DoubleWindow','WhiteBrick_Window_Center','Marble_Window_Single','Marble_ShopWindow','Metal_Window','Metal_FirstFloor_Wall','DoorFrame_Marble','DoorFrame_WhiteBrick','Prop_EntranceArch','Prop_ColumnArch','Roof_2x2','Floor_4x4','WhiteBrick_Corner_Plain','Marble_Corner_Plain'],
 'facadeChoices':['WhiteBrick_Window_L','WhiteBrick_Window_R','Trim_BayWindow','WornBrick_WindowLarge_Top','Brick_Plain_3_noWear','Brick_Inset','Metal_FirstFloor_Wall_1','Trim_FirstFloor_Wall','WornBrick_Inset_Plain','Concrete_Plain_4','Brick_Window_CurvedDouble','Brick_Inset_Window','Brick_Inset_Window_Curved','Brick_Inset_Window_Curved_Small','Brick_BayWindow','Marble_WindowTriple','Metal_FullWindow','Metal_Panel_4','Metal_Panel_Window_4','Metal_BayWindow_Bottom','Trim_Window','Trim_Plain_3','Trim_FirstFloor_Window_Columns','WornBrick_WindowLarge','WornBrick_WindowTriple','WornBrick_Plain_3','DoorFrame_WornBrick','Cornice_WornBrick_Center','Floor_BayWindow','Floor_Inset','Trim_BayWindow_Top','Trim_BayWindow_Corner_L','Trim_BayWindow_Corner_R'],
 'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble'],
+'architecturalCorners':['Brick_CornerColumn_Bottom', 'Brick_CornerColumn_Center', 'Brick_CornerColumn_Top', 'Brick_CornerColumn_Cap', 'Marble_BevelColumn_Bottom', 'Marble_BevelColumn_Top', 'Metal_Column_Bottom', 'Metal_Column_Center', 'Metal_Column_Top'],
+'connectedCornices':['Cornice_Brick_Center', 'Cornice_Brick_L', 'Cornice_Brick_R', 'Cornice_Brick_90Angle_L', 'Cornice_Brick_90Angle_R', 'Cornice_Marble_Center', 'Cornice_Marble_L', 'Cornice_Marble_R', 'Cornice_Marble_90Angle_L', 'Cornice_Marble_90Angle_R', 'Cornice_Metal_Center', 'Cornice_Metal_L', 'Cornice_Metal_R', 'Cornice_Metal_90Angle_L', 'Cornice_Metal_90Angle_R', 'Cornice_Small_Metal_Center', 'Cornice_Small_Metal_L', 'Cornice_Small_Metal_R', 'Cornice_Small_Metal_90Angle_L', 'Cornice_Small_Metal_90Angle_R', 'Cornice_WhiteBrick_Center', 'Cornice_WhiteBrick_L', 'Cornice_WhiteBrick_R', 'Cornice_WhiteBrick_90Angle_L', 'Cornice_WhiteBrick_90Angle_R', 'Cornice_Trim_Center', 'Cornice_Trim_L', 'Cornice_Trim_R', 'Cornice_Trim_90Angle_L', 'Cornice_Trim_90Angle_R'],
+'entrancePresets':['Door_2', 'Door_3', 'Door_4', 'DoorFrame_Wooden', 'DoorFrame_MetalBrick', 'Entrance_Concrete_2x2', 'Entrance_Marble_2x2'],
+'frontage':['Prop_Awning_Long'],
+'roofAssembly':['Roof_Slate_Center', 'Roof_Slate_Corner', 'Roof_Slate_InnerCorner', 'Roof_Slate_Window_1'],
+'secondary':['Prop_Planter_Center', 'Prop_Planter_Side_L', 'Prop_Planter_Side_R', 'Stairs_Rails_Concrete', 'Stairs_Rails_Marble', 'Prop_Ornament_1', 'Prop_Ornament_2', 'Prop_ACUnit'],
+
 'ground':['Floor_2x2','Prop_Awning','Prop_Planter_Single','Prop_Bollard'],
 }
 bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
 C=Matrix(((1,0,0,0),(0,0,-1,0),(0,1,0,0),(0,0,0,1)))
 exports=[];manifest={};mats={}
+seen=set()
 for kind,names in NAMES.items():
  for name in names:
+  if name in seen:continue
+  seen.add(name)
   file=SOURCE/'Exports/glTF'/(name+'.gltf')
   bpy.ops.import_scene.gltf(filepath=str(file))
   objects=[o for o in bpy.context.selected_objects if o.type=='MESH' and 'convcolonly' not in o.name and not o.name.upper().startswith('UCX_')]
@@ -59,7 +69,7 @@ bpy.ops.object.select_all(action='DESELECT')
 for o in exports:o.hide_set(False);o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'decorators.glb'),export_format='GLB',use_selection=True,export_yup=True,export_extras=True)
 for entry in manifest.values():
- entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension','shell':'shell.module','facadeChoices':'facade.bay'}[entry['kind']]
+ entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension','shell':'shell.module','facadeChoices':'facade.bay','architecturalCorners':'facade.corner','connectedCornices':'roof.edge','entrancePresets':'entrance','frontage':'frontage','roofAssembly':'roof.assembly','secondary':'plot.decoration'}[entry['kind']]
  entry['clearanceSize']=entry['size']
  entry['detailLevel']='near'
 (OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','sourceDirectory':'Exports/glTF','assets':manifest},indent=2)+'\n')

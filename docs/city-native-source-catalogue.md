@@ -52,3 +52,5 @@ Staging rollout remains pending: matching City endpoints and the shared-profile-
 Verification: all 39 UI choices, mocked save/reload, undo/redo, mobile layout and driving controls pass. All 11 shared Deno profile tests pass. Actual GLB ray coverage identified and corrected the trim bay overhang/structural-span mismatch; the targeted trim-bay regression passes. TypeScript and fresh Vite runtime checks pass, with the existing public-manifest import warning. No physical-mobile benchmark was performed.
 
 Final verification: the complete 21-test geometry/assembly/demo suite passes, including every new module across the supported footprints. Production build passes with existing large-chunk and landing-atlas warnings.
+
+Architectural assembly update (2026-09-22): pack v8 now contains 142 curated nodes (9,203,212 bytes), including the connected corner/cornice, entrance, slate-roof and grounds sets described in [city-architectural-assemblies.md](city-architectural-assemblies.md). The 39 facade choices remain unchanged. Matching staged worker revision is city-design-3.10.

@@ -64,6 +64,10 @@ if (process.env.CITY_PRESET_THUMBNAILS === "1") {
   business.draft = {...profile, buildingDesign:newDesign("preset-gallery-v1")};
   business.preview = business.draft;
 }
+if(process.env.CITY_KIT_AUDIT === "1"){
+ const {newDesign,normalizeV3}=await import("../src/domain/cityBuildingV3.ts");
+ profile.buildingDesign=normalizeV3({...newDesign("kit-browser"),blueprint:"office",width:14,depth:10,middleFloors:1,crown:"none",finish:"facade",nativeFacade:"brick-classic",architecturalKit:{corners:"matching",roofline:"classical",entrance:"wood",frontage:"cafe",roof:"slate-dormers",connectedPlanters:true,stairRails:true,ornaments:true},textures:{wall:"none",wallBorder:"none"},stairExtension:"concrete"});
+}
 if(process.env.CITY_ENTRANCE_AUDIT === "1"){
  const {demoBuildingDesign}=await import("../src/domain/cityDemoDesign.ts");
  business.draft={...profile,buildingDesign:demoBuildingDesign(63,"#c6a262")};business.preview=business.draft;
@@ -149,6 +153,44 @@ try {
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if(process.env.CITY_KIT_AUDIT === "1"){
+    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    await page.waitForTimeout(2200);
+    const cv=page.locator(".city-design-canvas canvas");await cv.scrollIntoViewIfNeeded();const cb=await cv.boundingBox();await page.mouse.move(cb.x+cb.width/2,cb.y+cb.height/2);for(let i=0;i<5;i++)await page.mouse.wheel(0,-120);await page.waitForTimeout(500);
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-kit-slate.png"});
+    for(const entrance of ["wood","metal","grand-marble","grand-concrete"]){
+      await page.getByLabel("Entrance assembly",{exact:true}).selectOption(entrance);
+      await page.waitForTimeout(350);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-kit-${entrance}.png`});
+    }
+    await page.getByLabel("Entrance steps (native entrance presets)",{exact:true}).uncheck();
+    for(const frontage of ["cafe","boutique","department"])await page.getByLabel("Storefront assembly",{exact:true}).selectOption(frontage);
+    await page.getByLabel("Native roof assembly",{exact:true}).selectOption("existing");
+    await page.getByLabel("Connected roofline",{exact:true}).selectOption("industrial");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.architecturalKit.entrance,"grand-concrete");
+    assert.equal(business.draft.buildingDesign.architecturalKit.roofline,"industrial");
+    await page.reload();
+    await page.getByLabel("Entrance assembly",{exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="Entrance assembly"]')?.value==="grand-concrete");
+    assert.equal(await page.getByLabel("Entrance assembly",{exact:true}).inputValue(),"grand-concrete");
+    await page.getByLabel("Entrance assembly",{exact:true}).selectOption("wood");
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await page.getByLabel("Entrance assembly",{exact:true}).inputValue(),"grand-concrete");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    const fallback=await context.newPage();
+    await fallback.route("**/city/decorators/decorators.glb*",route=>route.abort());
+    fallback.on("pageerror",e=>errors.push(e.message));
+    await fallback.goto(`${origin}/city/manage`);
+    await fallback.getByLabel("Entrance assembly",{exact:true}).waitFor();
+    await fallback.waitForTimeout(900);
+    assert.ok(await fallback.locator(".city-design-canvas canvas").isVisible());
+    await fallback.locator(".city-design-canvas").screenshot({path:"output/playwright/city-kit-loading-fallback.png"});
+    await fallback.close();
+    assert.deepEqual(errors,[]);console.log("Architectural kit presets, native rendering, save/reload, undo and mobile passed.");await browser.close();process.exit(0);
+  }
   if(process.env.CITY_ENTRANCE_AUDIT === "1"){
    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
    await page.waitForTimeout(1800);

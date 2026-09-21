@@ -1,3 +1,4 @@
+import { KIT_CORNERS, KIT_ROOFLINES, KIT_ENTRANCES, KIT_FRONTAGES, KIT_ROOFS } from "../../domain/cityArchitecturalKit";
 import { NATIVE_FACADES, type NativeFacadeId } from "../../domain/cityNativeFacades";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { CITY_TEXTURES, TEXTURE_IDS } from "../../domain/cityTexturePresets";
@@ -293,6 +294,7 @@ export function CityBuildingDesigner(
     setShowSlots(true);
   };
   const slots = useMemo(() => buildingSlots(d), [d]);
+  const assemblyStatus = useMemo(() => resolveV3(d, profile.color), [d, profile.color]);
   const entranceReason = useMemo(() => {
     const base = buildingMasses(d)[0];
     return frontStructure(d.entranceStyle, d.blueprint, base.z + base.depth / 2, base.width, d.groundHeight, d.palette.wall, d.palette.trim).reason;
@@ -805,6 +807,26 @@ export function CityBuildingDesigner(
                 {NATIVE_FACADES.filter(p=>p.id===d.nativeFacade).map(p=><small key={p.id}>
                   {p.relief}. Native module {NATIVE_MODULES[p.asset].span.toFixed(1)} x {NATIVE_MODULES[p.asset].height.toFixed(1)} m, {NATIVE_MODULES[p.asset].depth.toFixed(2)} m model depth. Frames keep their proportions; exposed panel edges receive inward returns.
                 </small>)}
+                <fieldset>
+                  <legend>Architectural assemblies</legend>
+                  <small>Coordinated Quaternius parts with measured connections. Existing preserves your current design.</small>
+                  {([
+                    ["corners", "Corner assemblies", KIT_CORNERS, ["Existing corners", "Continuous matching columns"]],
+                    ["roofline", "Connected roofline", KIT_ROOFLINES, ["Existing trim", "Restrained metal edge", "Classical masonry cornice", "Industrial metal cornice"]],
+                    ["entrance", "Entrance assembly", KIT_ENTRANCES, ["Existing entrance", "Wood frame / Door 2", "Metal-brick frame / Door 3", "Grand marble / Door 4", "Grand concrete / Door 3"]],
+                    ["frontage", "Storefront assembly", KIT_FRONTAGES, ["Existing frontage", "Cafe / recessed bays and awning", "Boutique / broad display glazing", "Department store / long canopy"]],
+                    ["roof", "Native roof assembly", KIT_ROOFS, ["Existing roof", "Slate perimeter roof", "Slate roof with dormers"]],
+                  ] as const).map(([key,label,values,labels])=><label key={key}>{label}<select aria-label={label} value={d.architecturalKit?.[key] ?? "existing"}
+                    onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,[key]:e.target.value},finish:key==="frontage"?"facade":d.finish==="procedural"?"accents":d.finish,...(key==="frontage"&&e.target.value!=="existing"?{base:"storefront" as const}: {})})}>
+                    {values.map((value,index)=><option key={value} value={value}>{labels[index]}</option>)}
+                  </select></label>)}
+                  <label><input type="checkbox" checked={d.architecturalKit?.entranceSteps ?? !!d.architecturalKit?.entrance?.startsWith("grand-")} onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,entranceSteps:e.target.checked}})}/>Entrance steps (native entrance presets)</label>
+                  {([["connectedPlanters","Connected planter runs"],["stairRails","Matching side-stair railings"],["ornaments","Restrained facade ornaments"],["rooftopUnits","Small rooftop AC unit"]] as const).map(([key,label])=><label key={key}>
+                    <input type="checkbox" checked={!!d.architecturalKit?.[key]} onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,[key]:e.target.checked},finish:d.finish==="procedural"?"accents":d.finish})}/>{label}
+                  </label>)}
+                  <small>Details appear close up; structural roof and frontage remain at medium distance. Unsupported slate roofs keep the ordinary roof and retain your selection. Side-stair railings require a fitted side-stair extension. AC units fit flat, clear roofs only.</small>
+                  {assemblyStatus.kitNotes.map(note=><small key={note}>{note}</small>)}
+                </fieldset>
                 <label>
                   Accent placement<select aria-label="Detail placement" value={d.detailScope ?? "all"}
                     onChange={(e) => update("detailScope", e.target.value as typeof d.detailScope)}>
@@ -817,7 +839,7 @@ export function CityBuildingDesigner(
                 <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,finish:d.finish==="procedural"?"accents":d.finish})}>
                   <option value="none">None</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
                 </select></label>
-                {d.stairExtension && d.stairExtension!=="none" && <small>{resolveV3(d,"#547364").extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
+                {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
                 <small>Accents add entrances with solid architectural trim. Façade mode builds a native panel shell with connected corners, floor tiles and door openings; accent placement does not limit structural coverage. Windows retain uniform proportions; plain infill panels fit the remaining spans. Unsupported roof shapes retain generated geometry.</small>
                 {d.finish !== "procedural" && (
                   <small>

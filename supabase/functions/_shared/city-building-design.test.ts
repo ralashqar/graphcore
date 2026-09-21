@@ -159,3 +159,12 @@ Deno.test("curated native facade selections survive profile validation and rejec
  const legacy={...newDesign("catalogue")};delete legacy.nativeFacade;
  assert.equal("nativeFacade" in buildingDesignSchema.parse(legacy),false);
 });
+
+Deno.test("architectural kit choices survive public recipe validation and reject executable or unknown data",()=>{
+ const owner="11111111-1111-4111-8111-111111111111";
+ const recipe={...newDesign("architecture"),architecturalKit:{corners:"matching" as const,roofline:"classical" as const,entrance:"grand-marble" as const,frontage:"cafe" as const,roof:"slate-dormers" as const,connectedPlanters:true,stairRails:true,ornaments:true,rooftopUnits:false}};
+ assert.deepEqual(buildingDesignSchema.parse(recipe),recipe);
+ const profile=parseProfile({...emptyCityProfile(),name:"Kit",website:"https://example.com",description:"Architectural assemblies",buildingDesign:recipe},owner);
+ assert.deepEqual(profile.buildingDesign && "architecturalKit" in profile.buildingDesign ? profile.buildingDesign.architecturalKit : undefined,recipe.architecturalKit);
+ for(const kit of [{roof:"external-url"},{entrance:"Door_99"},{script:"alert(1)"},{rooftopUnits:1}])assert.equal(buildingDesignSchema.safeParse({...recipe,architecturalKit:kit}).success,false);
+});

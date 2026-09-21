@@ -2,6 +2,10 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## City native architectural assemblies (September 2026)
+
+Optional v3 `architecturalKit` settings add matched storey columns, three connected cornice styles, measured frame/leaf entrances with optional native steps, three unbranded storefronts, rectangular slate roofs/dormers, connected planters, matching stair rails and bounded ornaments/AC units. Existing recipes retain their renderer behavior. Native assets remain offline prepared CC0 modules, lazy loaded and instanced; no generation provider is called. Strict shared profile validation accepts only curated settings. The City endpoints and world worker `2026-09-22-city-design-3.10` consume this boundary and require paired designated-staging rollout with the frontend. No migration, production activation or spending is included; staging remains undesignated. See [docs/city-architectural-assemblies.md](docs/city-architectural-assemblies.md) for fitting rules, verification and limitations.
+
 ## Distinct City archetypes and roof compositions (September 2026)
 
 Optional v3 archetype, massing and roofVariant choices deepen six business types, add a supported central hall with lower wings, and constrain hip/shed/sawtooth roof compatibility. The gallery uses locally rendered WebP thumbnails from the same recipes, with Food & Retail, Workspaces, Civic and Hospitality filters. Older recipes omit these fields and retain their geometry. Shared strict profile validation changes require paired isolated-staging deployment of the City endpoints, frontend and world worker `2026-09-21-city-design-3.3`. No migration, paid generation or production deployment is introduced. Staging remains undesignated.

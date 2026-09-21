@@ -1,3 +1,4 @@
+import { KIT_CORNERS,KIT_ROOFLINES,KIT_ENTRANCES,KIT_FRONTAGES,KIT_ROOFS } from "../../../src/domain/cityArchitecturalKit.ts";
 import { NATIVE_FACADE_IDS } from "../../../src/domain/cityNativeFacades.ts";
 import { TEXTURE_IDS } from "../../../src/domain/cityTexturePresets.ts";
 import { AD_PLACEMENTS } from "../../../src/domain/cityAdvertising.ts";
@@ -53,6 +54,7 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
+  architecturalKit: z.object({corners:z.enum(KIT_CORNERS).optional(),roofline:z.enum(KIT_ROOFLINES).optional(),entrance:z.enum(KIT_ENTRANCES).optional(),frontage:z.enum(KIT_FRONTAGES).optional(),roof:z.enum(KIT_ROOFS).optional(),entranceSteps:z.boolean().optional(),connectedPlanters:z.boolean().optional(),stairRails:z.boolean().optional(),ornaments:z.boolean().optional(),rooftopUnits:z.boolean().optional()}).strict().optional(),
   nativeFacade: z.enum(NATIVE_FACADE_IDS).optional(),
   solidSideWalls: z.boolean().optional(),
   stairExtension: z.enum(["none","concrete","marble"]).optional(),

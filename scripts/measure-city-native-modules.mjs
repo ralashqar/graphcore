@@ -3,10 +3,14 @@ import {BufferGeometry,Float32BufferAttribute,Mesh,MeshBasicMaterial,DoubleSide,
 import {writeFileSync} from "node:fs";
 const doc=await new NodeIO().read("public/city/decorators/decorators.glb");
 const records={};
+const dimensions={};
 for(const node of doc.getRoot().listNodes()){
  const name=node.getName();
- if(!/^(Brick|WhiteBrick|Marble|Metal|Concrete|WornBrick|Trim)_(Window|RedWhite|ShopWindow|FirstFloor|Plain|Inset|BayWindow|FullWindow|Panel)|^Door(Frame)?_|^Stairs_Entrance_/.test(name))continue;
  const primitives=node.getMesh()?.listPrimitives()||[];
+ if(!primitives.length)continue;
+ const all=primitives.flatMap(p=>{const a=p.getAttribute("POSITION");return Array.from({length:a.getCount()},(_,i)=>a.getElement(i,[]));});
+ dimensions[name]=[0,1,2].map(i=>Math.max(...all.map(p=>p[i]))-Math.min(...all.map(p=>p[i])));
+ if(!/^(Brick|WhiteBrick|Marble|Metal|Concrete|WornBrick|Trim)_(Window|RedWhite|ShopWindow|FirstFloor|Plain|Inset|BayWindow|FullWindow|Panel)|^Door(Frame)?_|^Stairs_Entrance_/.test(name))continue;
  const points=primitives.flatMap(p=>{const a=p.getAttribute("POSITION");return Array.from({length:a.getCount()},(_,i)=>a.getElement(i,[]));});
  const lo=[0,1,2].map(i=>Math.min(...points.map(p=>p[i]))),hi=[0,1,2].map(i=>Math.max(...points.map(p=>p[i])));
  const edge=[];
@@ -51,3 +55,5 @@ for(const node of doc.getRoot().listNodes()){
 }
 writeFileSync("src/domain/cityNativeModules.ts","// Generated from the exported GLB by scripts/measure-city-native-modules.mjs.\n// face is the opaque perimeter plane, not the decorative bounding-box rear.\nexport const NATIVE_MODULES: Record<string,{width:number;span:number;center:number;height:number;depth:number;face:number;opening?:{left:number;right:number;top:number}}> = "+JSON.stringify(records,null,2)+";\n");
 
+
+writeFileSync("src/domain/cityKitDimensions.ts", "// Generated from decorators.glb; rear-bottom-centre mounting.\nexport const KIT_DIMENSIONS: Record<string, readonly [number,number,number]> = "+JSON.stringify(dimensions,null,2)+";\n");

@@ -1,3 +1,5 @@
+import { architecturalDetails, kitEntrance, kitRoofReason, type ArchitecturalKit } from "./cityArchitecturalKit.ts";
+import { KIT_DIMENSIONS } from "./cityKitDimensions.ts";
 import { nativeFacadeChoice, type NativeFacadeId } from "./cityNativeFacades.ts";
 import { NATIVE_MODULES } from "./cityNativeModules.ts";
 import { partitionNativeWall } from "./cityNativeShell.ts";
@@ -44,6 +46,7 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  architecturalKit?: ArchitecturalKit;
   nativeFacade?: NativeFacadeId;
   textures?: CityTextureChoices;
   solidSideWalls?: boolean;
@@ -87,6 +90,7 @@ export type Corner = {
   kind: "convex" | "concave" | "end";
 };
 export type ResolvedV3 = ResolvedDesign & {
+  kitNotes: string[];
   extensionReason: string | null;
   slots: Slot[];
   signs: DesignSign[];
@@ -513,6 +517,11 @@ export function resolveV3(
   const nativeChoice=nativeFacadeChoice(d.nativeFacade,requestedArchitecture);
   const detailArchitecture=nativeChoice?.family ?? requestedArchitecture;
   const facadeEnabled = d.finish === "facade";
+  const kit=d.finish!=="procedural"?d.architecturalKit:undefined;
+  const roofReason=kitRoofReason(kit,d.blueprint,d.massing);
+  const roofActive=!!kit?.roof && kit.roof!=="existing" && !roofReason;
+  const chosenEntry=kitEntrance(kit?.entrance);
+  const entryLeaf=chosenEntry?.leaf || "Door_1";
   const slots = buildingSlots(d, masses), corners = classifyCorners(masses);
   const signs: DesignSign[] = slots.filter((s) =>
     s.active && (s.selected === "brand" || s.selected === "campaign")
@@ -565,11 +574,14 @@ export function resolveV3(
     width: 3.2,
     height: .55,
   };
-  const entryAsset=nativeChoice?.entry ?? ({glass:"DoorFrame_Metal_Single",creative:"DoorFrame_WhiteBrick",boutique:"DoorFrame_Marble",brick:"DoorFrame_Trim"} as const)[detailArchitecture];
+  const entryAsset=chosenEntry?.frame ?? nativeChoice?.entry ?? ({glass:"DoorFrame_Metal_Single",creative:"DoorFrame_WhiteBrick",boutique:"DoorFrame_Marble",brick:"DoorFrame_Trim"} as const)[detailArchitecture];
   const entryModule=NATIVE_MODULES[entryAsset];
   const entryWall=walls.find(w=>w.y===.65 && w.nz===1 && Math.abs(w.z-entrance.z)<.001 && Math.abs(w.x)<w.length/2);
   const entryClearWidth=entryWall?2*(entryWall.length/2-Math.abs(entryWall.x))-.12:masses[0].width-.12;
-  const entryScale=Math.min(d.groundHeight/entryModule.height,entryClearWidth/entryModule.span);
+  const entryStep=chosenEntry && kit?.entranceSteps!==false ? ("steps" in chosenEntry ? chosenEntry.steps : kit?.entranceSteps ? "Entrance_Concrete_2x2" : undefined) : undefined;
+  const stepSize=entryStep ? KIT_DIMENSIONS[entryStep] : undefined;
+  const entryScale=Math.min((d.groundHeight+(stepSize ? .4 : 0))/(entryModule.height+(stepSize?.[1]||0)),entryClearWidth/entryModule.span,stepSize?(11.3-entrance.z)/stepSize[2]:Infinity);
+  const entryBase=stepSize?.length ? .25+stepSize[1]*entryScale : .65;
   const entryWidth=entryModule.span*entryScale;
   let stairLanding=1.26;
   let extensionWall: typeof walls[number] | undefined;
@@ -589,6 +601,9 @@ export function resolveV3(
         extensionWall=wall;extensionReason=null;
         if(lod!=="far") {
           attach(d.stairExtension==="marble"?"Stairs_Entrance_Marble":"Stairs_Entrance_Concrete",wall.x,.25,wall.z,Math.atan2(wall.nx,0),1,"stairs");
+          if(kit?.stairRails){
+            attach(d.stairExtension==="marble"?"Stairs_Rails_Marble":"Stairs_Rails_Concrete",wall.x,.25,wall.z,Math.atan2(wall.nx,0),1,"rails");
+          }
           // A raised service door gives the decorative landing a coherent destination.
           attach("Door_1",wall.x-wall.nx*NATIVE_MODULES.Door_1.face,stairLanding,wall.z,Math.atan2(wall.nx,0),1,"door");
         }
@@ -663,6 +678,7 @@ export function resolveV3(
         scale=Math.min(scale,(Math.abs(c.x)-entryWidth/2-.06)/2);
       if(extensionWall===w)scale=Math.min(scale,(w.length-NATIVE_MODULES.Door_1.width-.12)/4);
     }
+    if(kit?.frontage && kit.frontage!=="existing" && adjacent.some(w=>w.y===.65&&w.nz===1&&Math.abs(w.z-entrance.z)<.01))scale=Math.min(scale,.25);
     if(scale>.025)nativeCorners.set(c,scale);
   }
   for(const [c,scale] of nativeCorners){
@@ -708,7 +724,7 @@ export function resolveV3(
       x - nx * .1 < m.x + m.width / 2 && z - nz * .1 > m.z - m.depth / 2 &&
       z - nz * .1 < m.z + m.depth / 2
     );
-    if (top && d.roof === "parapet" && (!d.roofVariant || d.roofVariant === "standard")) {
+    if (!roofActive && top && d.roof === "parapet" && (!d.roofVariant || d.roofVariant === "standard")) {
       box(
         x,
         y + height + .24,
@@ -741,10 +757,10 @@ export function resolveV3(
       // Paired narrow pilasters finish both faces of convex corners, not courtyard elbows.
       for (const direction of [-1,1]) {
         const endX=x+(horizontal?direction*length/2:0),endZ=z+(horizontal?0:direction*length/2);
-        if (corners.some(c=>!nativeCorners.has(c) && c.kind==="convex" && c.y===y && Math.abs(c.x-endX)<.01 && Math.abs(c.z-endZ)<.01))
+        if (kit?.corners!=="matching" && corners.some(c=>!nativeCorners.has(c) && c.kind==="convex" && c.y===y && Math.abs(c.x-endX)<.01 && Math.abs(c.z-endZ)<.01))
           addDetail(column[0],direction*(length/2-columnWidth/2),columnBottom,columnScale,[column[1],column[2],column[3]],"column");
       }
-      if (top && d.roof==="parapet" && (!d.roofVariant || d.roofVariant==="standard")) {
+      if ((!kit?.roofline || kit.roofline==="existing") && !roofActive && top && d.roof==="parapet" && (!d.roofVariant || d.roofVariant==="standard")) {
         // A single curated crown course, never the old cornice on every storey edge.
         const crownScale=.4, crownWidth=.8;
         for(const offset of fitBays(length,crownWidth,0,.45))
@@ -754,7 +770,8 @@ export function resolveV3(
     if (facadeEnabled) {
       // Centre-only WhiteBrick sections require proprietary neighbours. Use its
       // complete perimeter module for standalone cells and measured native fillers.
-      const windowAsset = nativeChoice?.asset ?? (detailArchitecture === "brick" ? (d.facadeSeed%3===0 ? "Brick_RedWhite_DoubleWindow" : "Brick_Window_Square_Single")
+      const frontAsset = y===.65 && nz===1 && kit?.frontage && kit.frontage!=="existing" ? ({cafe:"Brick_Inset_Window",boutique:"Marble_ShopWindow",department:"Trim_FirstFloor_Window"} as const)[kit.frontage] : undefined;
+      const windowAsset = frontAsset ?? nativeChoice?.asset ?? (detailArchitecture === "brick" ? (d.facadeSeed%3===0 ? "Brick_RedWhite_DoubleWindow" : "Brick_Window_Square_Single")
         : detailArchitecture === "boutique" ? (y===.65 && d.base==="storefront" ? "Marble_ShopWindow" : "Marble_Window_Single")
         : detailArchitecture === "creative" ? "WhiteBrick_Window"
         : y===.65 ? "Metal_FirstFloor_Window" : "Metal_Window");
@@ -766,10 +783,15 @@ export function resolveV3(
       // proportions, then use native head/sill infill rather than dropping it.
       const projection=Math.max(0,module.depth-module.face);
       const projectionRoom=11.5-Math.abs(horizontal?z:x);
-      const windowScale=Math.min(height/nativeH,Math.max(.01,usable-.2)/nativeW,projection>0?projectionRoom/projection:Infinity);
+      const frontageClearWidth=frontAsset?Math.max(entryWidth,...slots.filter(s=>s.active&&(s.selected==="brand"||s.selected==="campaign")&&s.rotation===0&&Math.abs(s.position[0])<.01&&Math.abs(s.position[2]-z)<.6&&s.position[1]-s.size[1]/2<y+height).map(s=>s.size[0]+.2)):entryWidth;
+      const leftRoom=(-x-frontageClearWidth/2)-(-length/2+leftInset),rightRoom=(length/2-rightInset)-(-x+frontageClearWidth/2);
+      const frontScale=frontAsset?Math.max(.01,Math.min(leftRoom,rightRoom)-.3)/nativeW:Infinity;
+      const windowScale=Math.min(height/nativeH,Math.max(.01,usable-.2)/nativeW,projection>0?projectionRoom/projection:Infinity,frontScale);
       const width=nativeW*windowScale,windowHeight=nativeH*windowScale;
       const windowBottom=y===.65?0:(height-windowHeight)/2;
-      const offsets=fitBays(usable,width,gap,.1).map(offset=>offset+shift);
+      const offsets=frontAsset && Math.min(leftRoom,rightRoom)>.5
+        ? [-x-frontageClearWidth/2-.15-width/2,-x+frontageClearWidth/2+.15+width/2]
+        : fitBays(usable,width,gap,.1).map(offset=>offset+shift);
       const bays=offsets.filter((offset,index)=>{
         if(extensionWall===wall && Math.abs(offset)<width/2+1.1)return false;
         if((d.solidSideWalls && nx!==0)||(y===.65 && d.base==="plinth")||(y>.65 && d.rhythm==="alternating" && (index+d.facadeSeed)%2===0))return false;
@@ -778,12 +800,12 @@ export function resolveV3(
       }).map(center=>({center,width,bottom:windowBottom,top:windowBottom+windowHeight}));
       const doors:{left:number;right:number;bottom:number;top:number}[]=[];
       if(y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2)
-        doors.push({left:-x-entryWidth/2,right:-x+entryWidth/2,bottom:0,top:entryModule.height*entryScale});
+        doors.push({left:-x-entryWidth/2,right:-x+entryWidth/2,bottom:0,top:entryBase-.65+entryModule.height*entryScale});
       if(extensionWall===wall)doors.push({left:-NATIVE_MODULES.Door_1.width/2,right:NATIVE_MODULES.Door_1.width/2,bottom:stairLanding-y,top:stairLanding-y+NATIVE_MODULES.Door_1.height});
       const rects=partitionNativeWall(usable,height,bays.map(b=>({...b,center:b.center-shift})),doors.map(r=>({...r,left:r.left-shift,right:r.right-shift}))).map(r=>({...r,left:r.left+shift,right:r.right+shift}));
       const dependencies=new Set<string>([family[1],...(leftInset||rightInset?[cornerAsset]:[])]);
       for(const rect of rects){
-        if(rect.kind==="door"){dependencies.add("Door_1");if(extensionWall!==wall)dependencies.add(entryAsset);continue;}
+        if(rect.kind==="door"){dependencies.add(extensionWall===wall?"Door_1":entryLeaf);if(extensionWall!==wall)dependencies.add(entryAsset);continue;}
         const offset=(rect.left+rect.right)/2, asset=rect.kind==="window"?windowAsset:family[1];
         const depthScale=rect.kind==="window"?windowScale:height/3;
         const rear=-NATIVE_MODULES[asset].face*depthScale;
@@ -806,7 +828,7 @@ export function resolveV3(
       parts[wallIndex+1].fallbackAsset=family[1];
       parts[wallIndex].fallback="facade";
       parts[wallIndex].fallbackAssets=[...dependencies];
-      if(detailAllowed && lod==="near")for(let i=1;i<offsets.length;i++)
+      if(detailAllowed && lod==="near" && kit?.corners!=="matching")for(let i=1;i<offsets.length;i++)
         addDetail(column[0],(offsets[i-1]+offsets[i])/2,columnBottom,columnScale,[column[1],column[2],column[3]],"column");
       continue;
     }
@@ -886,8 +908,8 @@ export function resolveV3(
     }
   }
   box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);
-  if(d.finish!=="procedural"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=[entryAsset,"Door_1"];}
-  const frontAssembly=frontStructure(d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim);
+  if(d.finish!=="procedural"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=[entryAsset,entryLeaf];}
+  const frontAssembly=frontStructure(chosenEntry?"standard":d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim);
   if(facadeEnabled && lod!=="far" && d.entranceStyle==="portico" && !frontAssembly.reason && frontAssembly.envelope){
     const archScale=Math.min(d.groundHeight/4.44324,frontAssembly.envelope.size[0]/4.04074,frontAssembly.envelope.size[2]/1.22758);
     attach("Prop_EntranceArch",0,.25,entrance.z+.05,0,archScale,"entrance");
@@ -895,7 +917,10 @@ export function resolveV3(
   }
   parts.push(...frontAssembly.parts);
   const canopy = slots.find((s) => s.id === "canopy.entrance")!;
-  if (canopy.active) box(...canopy.position, ...canopy.size, brand);
+  if (canopy.active) {
+    box(...canopy.position, ...canopy.size, brand);
+    if(kit?.frontage && kit.frontage!=="existing"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAsset="Prop_Awning_Long";}
+  }
   if (d.finish !== "procedural" && lod !== "far") {
     for (let z = entrance.z + .3; z + 2 <= 11.4; z += 2) {
       attach("Floor_2x2", 0, .3, z, 0, 1, "paving");
@@ -904,23 +929,24 @@ export function resolveV3(
       // One measured native entrance owns both accents and full-facade modes.
       // Accents sit in front of the procedural wall; facade mode has a real opening.
       const entryFace=entrance.z+(facadeEnabled?0:.3);
-      attach(entryAsset,-entryModule.center*entryScale,.65,entryFace-entryModule.face*entryScale,0,entryScale,"door");
+      if(entryStep)attach(entryStep,0,.25,entrance.z,0,entryScale,"steps");
+      attach(entryAsset,-entryModule.center*entryScale,entryBase,entryFace-entryModule.face*entryScale,0,entryScale,"door");
       const opening=entryModule.opening;
       if(opening){
-        const door=NATIVE_MODULES.Door_1;
+        const door=NATIVE_MODULES[entryLeaf];
         const openingWidth=(opening.right-opening.left)*entryScale,openingHeight=opening.top*entryScale;
         const count=Math.max(1,Math.round(openingWidth/(door.width*openingHeight/door.height)));
         // Uniformly fit native leaves to the measured frame aperture. The tiny
         // seating overlap is behind its reveal, not coplanar with the wall.
         const leafScale=Math.max(openingWidth/count/door.width,openingHeight/door.height)*1.002;
-        for(let i=0;i<count;i++)attach("Door_1",((opening.left-entryModule.center)*entryScale)+(i+.5)*openingWidth/count,.65,entryFace-door.face*leafScale-.012,0,leafScale,"door");
+        for(let i=0;i<count;i++)attach(entryLeaf,((opening.left-entryModule.center)*entryScale)+(i+.5)*openingWidth/count,entryBase,entryFace-door.face*leafScale-.012,0,leafScale,"door");
       }
     }
   }
   const entranceWall = walls.find(w => w.y === .65 && w.nz === 1 && Math.abs(w.z - entrance.z) < .001 && Math.abs(w.x) < w.length / 2);
   const frontage = entranceWall ? 2 * Math.min(entranceWall.length / 2 - entranceWall.x, entranceWall.length / 2 + entranceWall.x) : masses[0].width;
-  parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod, d.finish!=="procedural" ? [entryAsset,"Door_1"] : undefined));
-  if (d.roofVariant && d.roofVariant !== "standard") {
+  parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod, d.finish!=="procedural" ? [entryAsset,entryLeaf] : undefined));
+  if (!roofActive && d.roofVariant && d.roofVariant !== "standard") {
     const tops = masses.filter(m => !masses.some(upper => Math.abs(upper.y-m.y-m.height)<.001 && Math.abs(upper.x-m.x)<upper.width/2 && Math.abs(upper.z-m.z)<upper.depth/2));
     for (const m of tops) {
       const count = d.roofVariant === "sawtooth" ? 3 : 1;
@@ -928,7 +954,7 @@ export function resolveV3(
     }
   }
   const lastY = masses.at(-1)!.y;
-  if (d.roof === "pitched" && (!d.roofVariant || d.roofVariant === "standard")) {
+  if (!roofActive && d.roof === "pitched" && (!d.roofVariant || d.roofVariant === "standard")) {
     const m = masses.at(-1)!;
     parts.push({
       kind: "roof",
@@ -937,7 +963,7 @@ export function resolveV3(
       color: p.roof,
     });
   }
-  if ((!d.roofVariant || d.roofVariant === "standard") && (d.roof === "planted" || d.crown === "terrace")) {
+  if (!roofActive && (!d.roofVariant || d.roofVariant === "standard") && (d.roof === "planted" || d.crown === "terrace")) {
     for (const m of masses.filter((m) => m.y === lastY)) {
       box(
         m.x,
@@ -1014,6 +1040,15 @@ export function resolveV3(
       }
     }
   }
+  const kitResult=kit ? architecturalDetails({kit,family:detailArchitecture,walls,corners,masses,entrance:{z:entrance.z,width:entryWidth},slots,signs,lod,roofActive,equipmentAllowed:!roofActive && (d.roof==="flat"||d.roof==="parapet") && (!d.roofVariant||d.roofVariant==="standard") && d.crown!=="terrace",seed:d.facadeSeed,clearances:extensionWall?[{position:[extensionWall.x,stairLanding+NATIVE_MODULES.Door_1.height/2,extensionWall.z],size:[.8,NATIVE_MODULES.Door_1.height+.2,NATIVE_MODULES.Door_1.width+.3]}]:[]}) : {parts:[],attachments:[],notes:[]};
+  // Connected planters replace their single-piece counterpart only when the run fits.
+  for(const a of kitResult.attachments.filter(a=>a.role==="planter-run"&&a.asset==="Prop_Planter_Center")){
+    const index=attachments.findIndex(old=>old.asset==="Prop_Planter_Single"&&Math.abs(old.position[0]-a.position[0])<.01);
+    if(index>=0)attachments.splice(index,1);
+    for(const part of parts)if(part.fallbackAsset==="Prop_Planter_Single"&&Math.abs(part.position[0]-a.position[0])<.01)part.fallbackAssets=["Prop_Planter_Side_L","Prop_Planter_Center","Prop_Planter_Side_R"];
+  }
+  parts.push(...kitResult.parts);
+  attachments.push(...kitResult.attachments);
   parts.push(...advertising.parts);
   return {
     parts,
@@ -1022,6 +1057,7 @@ export function resolveV3(
     masses,
     entrance,
     sign,
+    kitNotes:[...(roofReason?[roofReason]:[]),...kitResult.notes],
     extensionReason,
     slots,
     signs,
