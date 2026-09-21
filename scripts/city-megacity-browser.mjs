@@ -21,6 +21,27 @@ try {
   await page.waitForTimeout(2500);
   await page.screenshot({ path: "output/playwright/megacity-collection.png" });
   await page.getByLabel("Sample billboards").uncheck();
+  await page.getByRole("button", { name: /01.*Office 01/ }).click();
+  await page.waitForTimeout(1400);
+  await page.screenshot({ path: "output/playwright/megacity-office.png" });
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Building presets" })
+    .getByRole("button", { name: /Office 11/ })
+    .click();
+  await page.getByLabel("Collection").selectOption("skyscrapers");
+  await page
+    .getByRole("navigation", { name: "Building presets" })
+    .getByRole("button", { name: /Skyscraper 04/ })
+    .click();
+  await page.waitForTimeout(1400);
+  await page.screenshot({ path: "output/playwright/megacity-skyscraper.png" });
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Building presets" })
+    .getByRole("button", { name: /Skyscraper 06/ })
+    .click();
+  await page.getByLabel("Collection").selectOption("shops");
   await page.getByRole("button", { name: /01.*Corner shop/ }).click();
   await page.waitForTimeout(1400);
   await page.screenshot({ path: "output/playwright/megacity-corner-shop.png" });
@@ -38,8 +59,9 @@ try {
       path: `output/playwright/megacity-decor-${i + 1}.png`,
     });
   }
-  await page.getByRole("combobox").selectOption("far");
+  await page.getByLabel("Detail", { exact: true }).selectOption("far");
   await page.waitForTimeout(600);
+  await page.getByLabel("Collection").selectOption("skyscrapers");
   await page.getByLabel("400-building stress scene").check();
   await page.waitForTimeout(1800);
   const benchmark = await page.evaluate(
@@ -70,7 +92,8 @@ try {
     JSON.stringify(benchmark, null, 2),
   );
   await page.getByRole("button", { name: "Show collection" }).click();
-  await page.getByRole("combobox").selectOption("near");
+  await page.getByLabel("Collection").selectOption("shops");
+  await page.getByLabel("Detail", { exact: true }).selectOption("near");
   await page.getByLabel("Sample billboards").check();
   await page.getByLabel("Quaternius comparison").uncheck();
   await page.setViewportSize({ width: 390, height: 844 });

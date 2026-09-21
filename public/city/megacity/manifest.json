@@ -12,6 +12,11 @@
       "depth": 8.825002193450928,
       "height": 5.056966297328017,
       "uniformScale": 1,
+      "sourceDimensions": [
+        9.399999618530273,
+        8.825002193450928,
+        5.056966297328017
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -34,6 +39,11 @@
       "depth": 9.600000381469727,
       "height": 5.689558506011963,
       "uniformScale": 1,
+      "sourceDimensions": [
+        9.599998474121094,
+        9.600000381469727,
+        5.689558506011963
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -55,6 +65,11 @@
       "depth": 6.57477068901062,
       "height": 3.89383147058129,
       "uniformScale": 1,
+      "sourceDimensions": [
+        8.450687408447266,
+        6.57477068901062,
+        3.89383147058129
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -72,11 +87,16 @@
       "tier": 3,
       "sourceMeshes": 2,
       "triangles": 5916,
-      "farTriangles": 2365,
+      "farTriangles": 2200,
       "width": 6.428570985794067,
       "depth": 6.200000047683716,
       "height": 7.359012085199311,
       "uniformScale": 1,
+      "sourceDimensions": [
+        6.428570985794067,
+        6.200000047683716,
+        7.359012085199311
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -94,15 +114,20 @@
       "tier": 4,
       "sourceMeshes": 3,
       "triangles": 13516,
-      "farTriangles": 5404,
+      "farTriangles": 2198,
       "width": 11.259369850158691,
       "depth": 11.717607498168945,
       "height": 12.688745491206646,
       "uniformScale": 1,
+      "sourceDimensions": [
+        11.259369850158691,
+        11.717607498168945,
+        12.688745491206646
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
-        "bottom": 13.188745491206646,
+        "bottom": 8,
         "front": 6.508803749084473
       },
       "materials": [
@@ -121,6 +146,11 @@
       "depth": 1.732504665851593,
       "height": 1.2794481842378502,
       "uniformScale": 1,
+      "sourceDimensions": [
+        1.3672233819961548,
+        1.732504665851593,
+        1.2794481842378502
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -142,6 +172,11 @@
       "depth": 0.07742713764309883,
       "height": 0.6030462384223938,
       "uniformScale": 1,
+      "sourceDimensions": [
+        0.6030462384223938,
+        0.07742713764309883,
+        0.6030462384223938
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -163,6 +198,11 @@
       "depth": 1.9975860118865967,
       "height": 0.4828830219925493,
       "uniformScale": 1,
+      "sourceDimensions": [
+        1.0579755306243896,
+        1.9975860118865967,
+        0.4828830219925493
+      ],
       "billboard": {
         "width": 12,
         "height": 6,
@@ -171,6 +211,438 @@
       },
       "materials": [
         "M_MegaCity_01"
+      ]
+    },
+    {
+      "key": "office-01",
+      "label": "Office 01",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 11006,
+      "farTriangles": 2199,
+      "width": 12.758454322814941,
+      "depth": 12.6343355178833,
+      "height": 16.648634869390662,
+      "uniformScale": 1,
+      "sourceDimensions": [
+        12.758454322814941,
+        12.6343355178833,
+        16.648634869390662
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 6.967167758941651
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-02",
+      "label": "Office 02",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 11953,
+      "farTriangles": 2200,
+      "width": 13.991492925756496,
+      "depth": 14,
+      "height": 30.19470962670129,
+      "uniformScale": 0.7381921451468503,
+      "sourceDimensions": [
+        18.95372772216797,
+        18.965251922607422,
+        40.90359105716925
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-03",
+      "label": "Office 03",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 6320,
+      "farTriangles": 2200,
+      "width": 14,
+      "depth": 13.317248899329353,
+      "height": 35.59194153136211,
+      "uniformScale": 0.8662832691452489,
+      "sourceDimensions": [
+        16.160995483398438,
+        15.372857093811035,
+        41.085800452408876
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.308624449664677
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-04",
+      "label": "Office 04",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 11064,
+      "farTriangles": 2199,
+      "width": 14,
+      "depth": 13.999996646087018,
+      "height": 22.64106148451234,
+      "uniformScale": 0.879208165101158,
+      "sourceDimensions": [
+        15.923418998718262,
+        15.923415184020996,
+        25.75165061383086
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-05",
+      "label": "Office 05",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 6712,
+      "farTriangles": 2200,
+      "width": 13.993502616882324,
+      "depth": 13.893500328063965,
+      "height": 25.662734439900305,
+      "uniformScale": 1,
+      "sourceDimensions": [
+        13.993502616882324,
+        13.893500328063965,
+        25.662734439900305
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.596750164031983
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-06",
+      "label": "Office 06",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 8202,
+      "farTriangles": 2199,
+      "width": 13.958253940618516,
+      "depth": 14,
+      "height": 23.01897478309381,
+      "uniformScale": 0.7425474709843759,
+      "sourceDimensions": [
+        18.7977933883667,
+        18.854013442993164,
+        31.000004286026524
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-07",
+      "label": "Office 07",
+      "tier": 3,
+      "sourceMeshes": 5,
+      "triangles": 5756,
+      "farTriangles": 2200,
+      "width": 10.312088966369629,
+      "depth": 10.186235904693604,
+      "height": 18.587164097523782,
+      "uniformScale": 1,
+      "sourceDimensions": [
+        10.312088966369629,
+        10.186235904693604,
+        18.587164097523782
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 5.743117952346802
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-08",
+      "label": "Office 08",
+      "tier": 3,
+      "sourceMeshes": 7,
+      "triangles": 7612,
+      "farTriangles": 2200,
+      "width": 13.8422865199301,
+      "depth": 14,
+      "height": 22.18569676680769,
+      "uniformScale": 0.9382182463160474,
+      "sourceDimensions": [
+        14.753802299499512,
+        14.921901226043701,
+        23.64662684180439
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-09",
+      "label": "Office 09",
+      "tier": 3,
+      "sourceMeshes": 7,
+      "triangles": 4637,
+      "farTriangles": 1854,
+      "width": 13.916471686579454,
+      "depth": 14,
+      "height": 19.047662373715674,
+      "uniformScale": 0.9506605750830295,
+      "sourceDimensions": [
+        14.638738632202148,
+        14.72660207748413,
+        20.036238877426968
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "office-11",
+      "label": "Office 11",
+      "tier": 3,
+      "sourceMeshes": 3,
+      "triangles": 13005,
+      "farTriangles": 2199,
+      "width": 11.81331205368042,
+      "depth": 11.5,
+      "height": 17.41647139005363,
+      "uniformScale": 1,
+      "sourceDimensions": [
+        11.81331205368042,
+        11.5,
+        17.41647139005363
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 6.4
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_02"
+      ]
+    },
+    {
+      "key": "skyscraper-01",
+      "label": "Skyscraper 01",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 34155,
+      "farTriangles": 2200,
+      "width": 12.904615337018157,
+      "depth": 14,
+      "height": 80.29218132132392,
+      "uniformScale": 0.8379607583203561,
+      "sourceDimensions": [
+        15.400023460388184,
+        16.707226276397705,
+        95.81854582577944
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "skyscraper-02",
+      "label": "Skyscraper 02",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 61918,
+      "farTriangles": 2199,
+      "width": 13.00447176333617,
+      "depth": 14,
+      "height": 62.532016387405214,
+      "uniformScale": 0.8246334694347117,
+      "sourceDimensions": [
+        15.770002365112305,
+        16.97723960876465,
+        75.83007324486971
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_02"
+      ]
+    },
+    {
+      "key": "skyscraper-03",
+      "label": "Skyscraper 03",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 63080,
+      "farTriangles": 2200,
+      "width": 14,
+      "depth": 14,
+      "height": 74.04561779057404,
+      "uniformScale": 0.8855012648196405,
+      "sourceDimensions": [
+        15.810254096984863,
+        15.810254096984863,
+        83.62000228837132
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "skyscraper-04",
+      "label": "Skyscraper 04",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 68746,
+      "farTriangles": 2200,
+      "width": 13.372943433324963,
+      "depth": 14,
+      "height": 101.24906304190874,
+      "uniformScale": 0.9014453151145562,
+      "sourceDimensions": [
+        14.835002422332764,
+        15.530614852905273,
+        112.31858588010073
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "skyscraper-05",
+      "label": "Skyscraper 05",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 45783,
+      "farTriangles": 2200,
+      "width": 13.719998971939233,
+      "depth": 14,
+      "height": 94.89251902448858,
+      "uniformScale": 0.6999998998642111,
+      "sourceDimensions": [
+        19.600001335144043,
+        20.00000286102295,
+        135.56076085567474
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
+      ]
+    },
+    {
+      "key": "skyscraper-06",
+      "label": "Skyscraper 06",
+      "tier": 5,
+      "sourceMeshes": 5,
+      "triangles": 28614,
+      "farTriangles": 2199,
+      "width": 14,
+      "depth": 13.999997189171001,
+      "height": 64.32045131260186,
+      "uniformScale": 0.7368419573247895,
+      "sourceDimensions": [
+        19.000003814697266,
+        19,
+        87.29205859303465
+      ],
+      "billboard": {
+        "width": 12,
+        "height": 6,
+        "bottom": 8,
+        "front": 7.6
+      },
+      "materials": [
+        "M_MegaCity_01",
+        "M_MegaCity_Glass_01"
       ]
     }
   ],
@@ -220,10 +692,124 @@
     "Models\\BuildingsDecor\\SM_BuildingsDecor_02.fbx.meta": "1ffabcd33fa408b3092e29732cbcb439b37e5ca0fec3cf72059326643c408b28",
     "Prefabs\\BuildingsDecor\\SM_BuildingsDecor_03.prefab": "d767731ed4303f27aa70e05273ab1ab57729a963785f07fc81e2d705ce023b7a",
     "Models\\BuildingsDecor\\SM_BuildingsDecor_03.fbx": "3ea8630585a27ff0e492d66984bfed317ac4359cdfc741ecb2a0ed940e0aa7bf",
-    "Models\\BuildingsDecor\\SM_BuildingsDecor_03.fbx.meta": "9936c8c5bf982d849ab71b344d225e320348d7a616a219582cdc3acca5c68590"
+    "Models\\BuildingsDecor\\SM_BuildingsDecor_03.fbx.meta": "9936c8c5bf982d849ab71b344d225e320348d7a616a219582cdc3acca5c68590",
+    "Prefabs\\Buildings\\SM_Buildings_Office_01.prefab": "762ae1777f5798b5831539a7946be3076dd9560225f18d41a3d82ddfb76cb811",
+    "Models\\Buildings\\SM_Buildings_Office_01_Door_L.fbx": "1aaeb3de869d8f38ea57891c99b3c74c6c3cc28d101e8853929be7c6c97465ed",
+    "Models\\Buildings\\SM_Buildings_Office_01_Door_L.fbx.meta": "3de1a28c8d0346b36dc61fb19a57aceb787532450a3931f86277f3d1a9d8c7b1",
+    "Models\\Buildings\\SM_Buildings_Office_01_Door_R.fbx": "d11d51387eaf70573d172d1430513a8d2b375a9ae8597ff99512d9950ee80454",
+    "Models\\Buildings\\SM_Buildings_Office_01_Door_R.fbx.meta": "507ab51f8c4c369b8902a109f9dff6753ed442c51ed779b18e8a2a278f0038e8",
+    "Models\\Buildings\\SM_Buildings_ElevatorDoor_L.fbx": "11f558ac6b2cf1e5ea77c6ee5ca49936994a5448f5dba45ee831ea8d7ae5c2cf",
+    "Models\\Buildings\\SM_Buildings_ElevatorDoor_L.fbx.meta": "0d820ed4b4c88a2372131a630a53bf0779e1cf50347bc898b1d4b2022ca6f3a5",
+    "Models\\Buildings\\SM_Buildings_ElevatorDoor_R.fbx": "3282ebb186d06e046bda139ed4119c067367d22501fd25868db78f5a15ecb8bf",
+    "Models\\Buildings\\SM_Buildings_ElevatorDoor_R.fbx.meta": "3ac8cc34d46bfb23a1bdae476e3915b1913606993218b06284c3ed1b722a309e",
+    "Models\\Buildings\\SM_Buildings_Office_01.fbx": "3f553a3040174493dc1b9a60c365183649e2d3775dce4114ef420613f833a384",
+    "Models\\Buildings\\SM_Buildings_Office_01.fbx.meta": "3d345de4c3a884134a42ec5879d90d10c444baeeaaca242ec462602bf3d6bfbc",
+    "Prefabs\\Buildings\\SM_Buildings_Office_02.prefab": "873a2db641b99a096d36371e95948d46b84e22cc185747d8647d9197e083e6a3",
+    "Models\\Buildings\\SM_Buildings_Office_02.fbx": "25e89e234c7f98433948ee00aa011e7f213393ff63726b908efa1688c99660d5",
+    "Models\\Buildings\\SM_Buildings_Office_02.fbx.meta": "5db24c1b69e28a68b35b681470db13d6f496ac888ced41b4473c784ba51551f2",
+    "Models\\Buildings\\SM_Buildings_Office_02_Door_L.fbx": "cf69cd8df91de683579afb71253598f38100b60c05bd72dad9d69a694b1beeea",
+    "Models\\Buildings\\SM_Buildings_Office_02_Door_L.fbx.meta": "8e0eb5aeae4e61893a0732f26613fb4f90d0c890d98d48cd07a836f9be66859f",
+    "Models\\Buildings\\SM_Buildings_Office_02_Door_R.fbx": "2e6bff6aaf659564e12db106535a526cf7966b2cb7ebeacead23d1e9e0831f2f",
+    "Models\\Buildings\\SM_Buildings_Office_02_Door_R.fbx.meta": "1a2be4e08c4a1b93b0f131f832018250d8bcf2b0234e6ec7c7e730a7297c413c",
+    "Prefabs\\Buildings\\SM_Buildings_Office_03.prefab": "e09fc3c0024a89104c314639b3d9ec61525d3c0ae922f353f7a723ea55681dc9",
+    "Models\\Buildings\\SM_Buildings_Office_03_Door_L.fbx": "6e6f7167b89a8c6f501e3c341892c88f66f2ac50fd9288a8a878d4a8a7bfd66b",
+    "Models\\Buildings\\SM_Buildings_Office_03_Door_L.fbx.meta": "3a069c877762db465fb27b12d404fa18593fd82ebc03015c4dd5ac2f7f2519c9",
+    "Models\\Buildings\\SM_Buildings_Office_03.fbx": "3176d571c44bec249b4a057b1728253fd00778ef450ef3a3d725301371139045",
+    "Models\\Buildings\\SM_Buildings_Office_03.fbx.meta": "d91206c70bc71d3b47dd1c7de75ed25d627bdf636cf56d788c1e26adf766f3b0",
+    "Models\\Buildings\\SM_Buildings_Office_03_Door_R.fbx": "ea17aaf4a8313d828ff14611d078f6e18ee59ec375a02fa3c1d2bb04e213ca35",
+    "Models\\Buildings\\SM_Buildings_Office_03_Door_R.fbx.meta": "92b6dded62b49b3512f461eece14c473f694966e99f10856203df81e9d7bbf0e",
+    "Prefabs\\Buildings\\SM_Buildings_Office_04.prefab": "16eec566a95c0687b87389ffeabb80514a73e671d6b599001230c3d8f5ccbbf7",
+    "Models\\Buildings\\SM_Buildings_Office_04_Door_R.fbx": "0bfd4ec32db36a0768b9ed5b22b9645201b47209e5e73497f563da5359fd138a",
+    "Models\\Buildings\\SM_Buildings_Office_04_Door_R.fbx.meta": "b5c513e3334e5f4498e9d0775583748f431a36974881dd685e154b515287cf43",
+    "Models\\Buildings\\SM_Buildings_Office_04.fbx": "010f506e5cf115453c2b0813886772b212f040863e6c4bdaea662284723c0147",
+    "Models\\Buildings\\SM_Buildings_Office_04.fbx.meta": "780ff36c763fe8f4e81678be279a48e4ddaeb8cc2f6c4178ea3470ad020e2b24",
+    "Models\\Buildings\\SM_Buildings_Office_04_Door_L.fbx": "d35dd30857b362eec86792437bddb48acc62317855083efdea8e49ecceacd9bf",
+    "Models\\Buildings\\SM_Buildings_Office_04_Door_L.fbx.meta": "d0dbcf304beb5ec382a139d76b2f23c58eff6db7c5975406175e44bbd3da5bff",
+    "Prefabs\\Buildings\\SM_Buildings_Office_05.prefab": "b65fc4582dbf05f9349efae33fd32eda4700b0d15ad3a2a8c57f175dc51ea42c",
+    "Models\\Buildings\\SM_Buildings_Office_05.fbx": "a744889ef25c24b4c2585d4f6582a812549c760106b0237d7e0f922efc55e8aa",
+    "Models\\Buildings\\SM_Buildings_Office_05.fbx.meta": "2ca17aa5b3a5d7c922d7b5fb22dbd4c35e2cb35b214ef0a293f6d727a42b4ca9",
+    "Models\\Buildings\\SM_Buildings_Office_05_Door.fbx": "5757d5289df5db33d94974dc38050762af030a570474a7f090d709a57b7470b4",
+    "Models\\Buildings\\SM_Buildings_Office_05_Door.fbx.meta": "27956dea539bd62cbb539979d0cac1e0a6314d1e7901cdbee4a5bb183cbe3ccc",
+    "Prefabs\\Buildings\\SM_Buildings_Office_06.prefab": "d31e7db92a9dec545dffed4c9a546f42af2fd0685b668c5f14766d4fc292b33d",
+    "Models\\Buildings\\SM_Buildings_Office_06_Door_L.fbx": "ab5f82464e4fd11da84ab4893bbafac320c9a752671856501be89bd3855825c9",
+    "Models\\Buildings\\SM_Buildings_Office_06_Door_L.fbx.meta": "8fbec7d286c1eecb88f2d6f264dcd2b7a244b802a2f5cf22f78d1d3f9a60163d",
+    "Models\\Buildings\\SM_Buildings_Office_06.fbx": "a9fa7aedb432adfe284138010dd368fa5374e9be590b6b5bd096647150d04cec",
+    "Models\\Buildings\\SM_Buildings_Office_06.fbx.meta": "c228e9e3ba5cc74107d5b2d4b17e8e839524a9536ef0f6c85aded38671a07eea",
+    "Models\\Buildings\\SM_Buildings_Office_06_Door_R.fbx": "2e47bfc2debc0fa6c4651f61368c2aa334e4ecd3c2bab69782df72486ed98741",
+    "Models\\Buildings\\SM_Buildings_Office_06_Door_R.fbx.meta": "16b80986d1b505a5048cba193fb58559289b1b1353f84c7794b0059b8e6fb6b2",
+    "Prefabs\\Buildings\\SM_Buildings_Office_07.prefab": "20e57e0b92c3d1d226163790fd5458d6cef5e8fad8b7edd01500607be93166b9",
+    "Models\\Buildings\\SM_Buildings_Office_07_Door_L.fbx": "d9137d8759615282103db029300ac174ae9becfcdaddf77dafbd292fa8ede296",
+    "Models\\Buildings\\SM_Buildings_Office_07_Door_L.fbx.meta": "52e924f5c20fec045027a8be451c98dbb8ac602d44e3d81ffbaebac5c82afa6f",
+    "Models\\Buildings\\SM_Buildings_Office_07.fbx": "cfe4e29b654a51fe30c9cbdf0c4374354be4d424b20e3c3c52f83aa0b372f203",
+    "Models\\Buildings\\SM_Buildings_Office_07.fbx.meta": "6e7022b34e65d16f5e542cedf84dad8ee6af05a085ca47554d0986752727fc09",
+    "Models\\Buildings\\SM_Buildings_Office_07_Door_R.fbx": "ca0ea6d8c2f27763c79c38abda9f423a6efad91b81e6ddb317802d6e19905df1",
+    "Models\\Buildings\\SM_Buildings_Office_07_Door_R.fbx.meta": "32d7ce1afbe51517c44df6a5701e5d07a3e518b876a11bc17e3a945c8c2f2792",
+    "Prefabs\\Buildings\\SM_Buildings_Office_08.prefab": "4acfceebce55793588fc8d08c0060083e1f690b5c551788368e254502bc087f6",
+    "Models\\Buildings\\SM_Buildings_Office_08_Door_R.fbx": "61911bc946563bad614f3b7e5956773442c06f47e7251e5358ab84de7a3c6bbd",
+    "Models\\Buildings\\SM_Buildings_Office_08_Door_R.fbx.meta": "58c95d66c82bc7afa9389db54a794c52a4f79d1c2b92e6e13f80e7e8f46fea55",
+    "Models\\Buildings\\SM_Buildings_Office_08_Door_L.fbx": "b02d921440014b1e23a531cb413ccf679697f20856db322ce958115a0a93f5a0",
+    "Models\\Buildings\\SM_Buildings_Office_08_Door_L.fbx.meta": "7a79d017779c1377f33a42466a392b424ec7cec5ffede79089c987aeed5d4204",
+    "Models\\Buildings\\SM_Buildings_Office_08.fbx": "bf401e014f420c9aa4d5e9a58acc738626075e966d1350c5f32f677f89424cf4",
+    "Models\\Buildings\\SM_Buildings_Office_08.fbx.meta": "37221afb64e26c0aa4544542c5aa42e35ba49b4fbfee00fb39239f448221d6fd",
+    "Prefabs\\Buildings\\SM_Buildings_Office_09.prefab": "c62de5726a440b553e4082d3b4e6050d67c91c9399346d67feeb87f7d8ae833b",
+    "Models\\Buildings\\SM_Buildings_Office_09_Door_L.fbx": "83886d357fa89e4c7593970643220d2e2bb521a8323c5d7fd6515eea2c026f9d",
+    "Models\\Buildings\\SM_Buildings_Office_09_Door_L.fbx.meta": "81c1970d4743f3e96871d6ec10c2ac4ab02b61412ad9f3b6e9d949b09afa94d7",
+    "Models\\Buildings\\SM_Buildings_Office_09_Door_R.fbx": "0106cea461a1bcf2d8c27723ef1d96f70e8747fb0d3ef8abd2daf676e1155f7d",
+    "Models\\Buildings\\SM_Buildings_Office_09_Door_R.fbx.meta": "0d0acae4c69bdb4b28a9d294c3540f7fb4669429a36a2f4ab0b9bb09cabce892",
+    "Models\\Buildings\\SM_Buildings_Office_09.fbx": "e6766dca732d37e666f1ab67008b2b939dc25353aaa056722fa4b15120fb737b",
+    "Models\\Buildings\\SM_Buildings_Office_09.fbx.meta": "0803d66eafb6cb4a8c5df848a1dee991118b090170050c54d508d523838a6b28",
+    "Prefabs\\Buildings\\SM_Buildings_Office_11.prefab": "a2d4eb0e9ae1afd493567a5cb4e23c102e94285ca343caede2b56b78889d08fe",
+    "Models\\Buildings\\SM_Buildings_Office_11_Door_R.fbx": "4484d9bae0fd0a9cb50ef1b0ad14f2b3b7bb4ca3e6a5f169b8d61dbc501a52ab",
+    "Models\\Buildings\\SM_Buildings_Office_11_Door_R.fbx.meta": "cce234a45d2d1e8dba577c8cfdc752acfceed59bfe915b6aa42bc4245c22d001",
+    "Models\\Buildings\\SM_Buildings_Office_11.fbx": "f250739ee8332e5678eebdc3e7b49a25275a8d26845b1bc39eee1f69555744ba",
+    "Models\\Buildings\\SM_Buildings_Office_11.fbx.meta": "18c41c76761d31fca0aae507c17310fc65212ae5bbb0a2dae7fdbcf6f227ae3e",
+    "Models\\Buildings\\SM_Buildings_Office_11_Door_L.fbx": "3e326115f2a2041c98d065b72f8962f5d2fbb2b4a5404a3b75ad19f9262f1aa7",
+    "Models\\Buildings\\SM_Buildings_Office_11_Door_L.fbx.meta": "95257f1f705d0de44baa0ad753bb3898ebb9813749e38f7f6490041baa71a811",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_01.prefab": "efb48a9cf606706166982e44a2daa2b34f194da6c239203a31306fb706112175",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01_Door_L.fbx": "868e2824adb5bb3b0379c8a6e1838e1b7081f7ee87b5171c930bc2062aab03af",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01_Door_L.fbx.meta": "081c900798c29f31cc1a173e9db3fe3451af93bb085139240071227d3b29163d",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01_Door_R.fbx": "07f2ebcee917c81920dd7db13b9b1ff5b764cc928b6b6d18df97adfeb11527fa",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01_Door_R.fbx.meta": "2408c59c53b978a9a968081a17c271588d8f7292be52ed0b783b9e8db2cee446",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01.fbx": "1432b01ac10b4ed496a038095f4ad1e62fb621f8322f313f802fa192bc1372e6",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_01.fbx.meta": "8ead17b2dc9658b201c91d507f82dbc6d8fc6776ccf20c3da732306aad6002e5",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_02.prefab": "fdd77830a194901a4c488c49ba339f600d412037811aa0ebe987f090ae763900",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02_Door_L.fbx": "413f7e23c7d881bbbd9ca94581ec25379e9046dafb674938e4686d993a7b3cf3",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02_Door_L.fbx.meta": "c588ccd4fe4cd987822ee0b94a395ab87f8ba8641b672798cb61159b7838ef83",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02.fbx": "1e98e5394a93d769758046d3967c9b8106ba48379d0641edba3f55dce86ffb9c",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02.fbx.meta": "9c9411693024c4033139579d7a05a65be9fdb8f216e4ff9a5bc11793d7b18899",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02_Door_R.fbx": "8329d937b7814a3765480979ba3f625fe92798fa984e8c2163c5f0a76a149b5f",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_02_Door_R.fbx.meta": "04b9611f9577876eeb32bcd21682fa99a1450daf40bbb9c4f0b661cb00cad065",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_03.prefab": "77d325278afb95edd21442d31bd542cd78cd616c061f4419b37290bcc2ca8f75",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03_Door_L.fbx": "7952b18206bffec5fcdbf4a90207e17adb87ab97894d76d3bbd8ef47e869a21a",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03_Door_L.fbx.meta": "19f05f1937f2beb746620254d08ec5c7a49794ba9a53f9cbc3554ff290d85c71",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03_Door_R.fbx": "a1e58414cc0640da1f2b077410757b135f90484dc026b9fa7f102f86de6010cb",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03_Door_R.fbx.meta": "de7bd293ea628772a1a12c9d4859beef5fb868612048f0be6d065a0eba87fb44",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03.fbx": "d09bb268e2f5239a1755b0660ac04f5fb3c077508a7e19f15680418d00305726",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_03.fbx.meta": "57d552ca0b212ad09405079718a0069a764028f0c7c201ef26a785b56f324270",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_04.prefab": "14d9612fa9e98ed674c8b78c95f7dc3d79d99ecc25e1ea659b6b177415a4e26c",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04.fbx": "b71ba82ebc4a4d7647d780d4b1944472746f170d31debd02b8941f21d3378b8b",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04.fbx.meta": "c511128bd823261ad8d4bbefea3e233dc1a201a1b2ddfefea30c86bb9c7e1663",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04_Door_R.fbx": "553d8a5d0e74f644310c730875de58c0d84da8fe02e3fd342a89292f6a4c3ef3",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04_Door_R.fbx.meta": "2af71b00c5262835fd710f79fa86d055970448ac2862236b3566d4dad889bed6",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04_Door_L.fbx": "eb8e256026ecd75af61df70eae6307b5fc39c35c4261fcf4cf6b44d968973d0d",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_04_Door_L.fbx.meta": "f81ce0d1ecac315bd6ad16baa7c44249f463cdf9b5317c52463404586e5318f9",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_05.prefab": "8c98ddfa334e2f61566236dcde53ffc1f40cf4c082f37995f8d393b586e5c846",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05.fbx": "5cd9704abc56fdde23c8d87803fb02004c3f697063864c02d8f4cec38edf0421",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05.fbx.meta": "66a43cfba54b095183577263425b43d90b13379b7ce50ff6a061d817c9c5a686",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05_Door_R.fbx": "89a67887d9cdead25d4afdfb007776ac62d8c6155e14870682d9220c5cb950f4",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05_Door_R.fbx.meta": "1f560f85225a5ff3e8e9c8f0c0b2b46042de67c0e1b40a5346fb77c351036c15",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05_Door_L.fbx": "41b75430bcd400587e0a55289ae821f3a489706296f3e84400155a94cac029bf",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_05_Door_L.fbx.meta": "742d6f0f442c7c6fd814dd72895df5e267b1d747a9733a5c3ef4e2f7e15586bb",
+    "Prefabs\\Buildings\\SM_Buildings_Skyscraper_06.prefab": "7e2cfa90f04774efb2def964d32ee9749e103fae969e459e9d52e84dcb7ac08b",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06_Door_L.fbx": "0f650c8bd7fa8e69912cfcad6d7c0f80d2165d646ad61a1703591f9439b35929",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06_Door_L.fbx.meta": "4a535cd50014d9ca7b2bd8d1b1baad20171c84cda4fe1f620c0b48bf73de5831",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06_Door_R.fbx": "61c78960934390013cc70f70ffb311797e18dc8b5b10b5a181f6abd96e9b4f71",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06_Door_R.fbx.meta": "24f5c3360cf6eb88dbb44a7ac8e107241bdbfa051af7c0b7081f67b274d74ffc",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06.fbx": "64469248ff7320f564be0a0ac36b78ba38f7df29b44656c35b16c974f54f581e",
+    "Models\\Buildings\\SM_Buildings_Skyscraper_06.fbx.meta": "78c886404eb4f72e69741cb06d2e1020903a8bd4f69f94dd9095220d1c9922fd"
   },
   "materialPolicy": "Shared base-color atlas; opaque glass; Unity lighting and scripts omitted",
-  "bytes": 512524,
+  "bytes": 4878340,
   "materials": 4,
   "textures": 1
 }

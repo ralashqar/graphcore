@@ -27,13 +27,13 @@ import { Batch, type Instance, type Piece } from "./CityInstances";
 import { billboardEnvelope, buildingVariant } from "../../domain/cityLayout";
 import manifest from "../../../public/city/megacity/manifest.json";
 import "./CityAssetShowcase.css";
-const buildings = manifest.assets.filter((a) => a.tier !== null);
+const allBuildings = manifest.assets.filter((a) => a.tier !== null);
 const decorations = manifest.assets.filter((a) => a.tier === null);
 const box = new BoxGeometry(1, 1, 1);
 const ground = new MeshLambertMaterial({ color: "#b4bca4" });
 const frame = new MeshLambertMaterial({ color: "#354139" });
-const position = (i: number): [number, number, number] => [
-  (i - 2) * 27,
+const position = (i: number, count = 5): [number, number, number] => [
+  (i - (count - 1) / 2) * 27,
   0,
   -16,
 ];
@@ -158,10 +158,12 @@ function Sign({
   );
 }
 function Camera({
+  buildings,
   focus,
   stress,
   reduced,
 }: {
+  buildings: typeof allBuildings;
   focus: number | null;
   stress: boolean;
   reduced: boolean;
@@ -180,12 +182,16 @@ function Camera({
     const p =
       focus === null
         ? [0, 0, 12]
-        : focus < 5
-          ? position(focus)
-          : [(focus - 6) * 12, 0, 48];
+        : focus < buildings.length
+          ? position(focus, buildings.length)
+          : [(focus - buildings.length - 1) * 12, 0, 48];
     const target = new Vector3(
       p[0],
-      focus === null ? 0 : focus < 5 ? 4 : 0.8,
+      focus === null
+        ? Math.max(...buildings.map((a) => a.height)) * 0.3
+        : focus < buildings.length
+          ? buildings[focus].height * 0.45
+          : 0.8,
       p[2],
     );
     destination.current = {
@@ -199,9 +205,18 @@ function Camera({
             stress ? 500 : focus === null ? 115 : 42,
           ),
         ),
-      zoom: stress ? 1.3 : focus === null ? 7.2 : focus < 5 ? 14 : 55,
+      zoom: stress
+        ? 1.3
+        : focus === null
+          ? Math.min(
+              7.2,
+              600 / (Math.max(...buildings.map((a) => a.height)) + 50),
+            )
+          : focus < buildings.length
+            ? Math.min(14, 500 / (buildings[focus].height + 10))
+            : 55,
     };
-  }, [focus, stress]);
+  }, [focus, stress, buildings]);
   useFrame((_, delta) => {
     const dest = destination.current;
     if (!dest || !controls.current) return;
@@ -242,40 +257,42 @@ function Metrics() {
   return null;
 }
 function World({
+  buildings,
   stress,
   lod,
   billboards,
   reference,
   onFocus,
 }: {
+  buildings: typeof allBuildings;
   stress: boolean;
   lod: "near" | "far";
   billboards: boolean;
   reference: boolean;
   onFocus: (i: number) => void;
 }) {
-  const mega = usePieces("/city/megacity/showcase.glb?v=1");
+  const mega = usePieces("/city/megacity/showcase.glb?v=3");
   const kit = usePieces("/city/downtown/downtown.glb?v=source-v3");
   const groups = useMemo(() => {
     const out = new Map<string, Instance[]>();
-    for (let i = 0; i < (stress ? 400 : 5); i++) {
-      const asset = buildings[i % 5];
+    for (let i = 0; i < (stress ? 400 : buildings.length); i++) {
+      const asset = buildings[i % buildings.length];
       const [x, , z] = stress
         ? [((i % 20) - 9.5) * 24, 0, (Math.floor(i / 20) - 9.5) * 24]
-        : position(i);
+        : position(i, buildings.length);
       const key = `${asset.key}_${lod}`;
       const group = out.get(key) || [];
       group.push({ key: String(i), x, z });
       out.set(key, group);
     }
     return out;
-  }, [stress, lod]);
+  }, [stress, lod, buildings]);
   const plots = useMemo(
     () =>
-      Array.from({ length: stress ? 400 : 5 }, (_, i) => {
+      Array.from({ length: stress ? 400 : buildings.length }, (_, i) => {
         const [x, , z] = stress
           ? [((i % 20) - 9.5) * 24, 0, (Math.floor(i / 20) - 9.5) * 24]
-          : position(i);
+          : position(i, buildings.length);
         return {
           key: `plot-${i}`,
           x,
@@ -284,7 +301,7 @@ function World({
           scale: [23.5, 0.25, 23.5] as [number, number, number],
         };
       }),
-    [stress],
+    [stress, buildings],
   );
   return (
     <>
@@ -294,7 +311,7 @@ function World({
       ))}
       {!stress &&
         buildings.map((asset, i) => {
-          const [x, , z] = position(i);
+          const [x, , z] = position(i, buildings.length);
           return (
             <group key={asset.key} position={[x, 0, z]}>
               {billboards && <Sign label={asset.label} {...asset.billboard} />}
@@ -309,7 +326,7 @@ function World({
       {!stress &&
         reference &&
         buildings.map((asset, i) => {
-          const [x] = position(i);
+          const [x] = position(i, buildings.length);
           const variant = i % 2;
           const key = `Building_${asset.tier}_${variant}_${lod}`;
           const sample = ["preset-0", "preset-1"].find(
@@ -349,7 +366,10 @@ function World({
               instances={[{ key: asset.key, x: 0, z: 0 }]}
             />
             <Html position={[0, 0.1, 4]} center>
-              <button className="mas-label" onClick={() => onFocus(i + 5)}>
+              <button
+                className="mas-label"
+                onClick={() => onFocus(i + buildings.length)}
+              >
                 {asset.label}
               </button>
             </Html>
@@ -379,6 +399,23 @@ class SceneBoundary extends Component<
   }
 }
 export function CityAssetShowcase() {
+  const [collection, setCollection] = useState("offices");
+  const [page, setPage] = useState(0);
+  const collectionBuildings = useMemo(
+    () =>
+      allBuildings.filter((a) =>
+        collection === "offices"
+          ? a.key.startsWith("office-")
+          : collection === "skyscrapers"
+            ? a.key.startsWith("skyscraper-")
+            : !a.key.startsWith("office-") && !a.key.startsWith("skyscraper-"),
+      ),
+    [collection],
+  );
+  const buildings = useMemo(
+    () => collectionBuildings.slice(page * 5, page * 5 + 5),
+    [collectionBuildings, page],
+  );
   const [focus, setFocus] = useState<number | null>(null);
   const [stress, setStress] = useState(false);
   const [lod, setLod] = useState<"near" | "far">("near");
@@ -406,15 +443,55 @@ export function CityAssetShowcase() {
         <aside>
           <p className="mas-eyebrow">MEGACITY COLLECTION / 01</p>
           <h1>
-            A different shape{" "}
-            <br />
+            A different shape <br />
             for the city.
           </h1>
           <p>
-            Five complete storefronts, original proportions and shared
-            materials. Explore the new collection beside our current buildings.
+            Stores, offices and skyscrapers, with original proportions and
+            shared materials. Explore the new collection beside our current
+            buildings.
           </p>
           <div className="mas-controls">
+            <label>
+              Collection{" "}
+              <select
+                aria-label="Collection"
+                value={collection}
+                onChange={(e) => {
+                  setCollection(e.target.value);
+                  setPage(0);
+                  setFocus(null);
+                  setStress(false);
+                }}
+              >
+                <option value="shops">Storefronts - 5</option>
+                <option value="offices">Offices - 10</option>
+                <option value="skyscrapers">Skyscrapers - 6</option>
+              </select>
+            </label>
+            <div className="mas-pages">
+              <button
+                disabled={page === 0}
+                onClick={() => {
+                  setPage(page - 1);
+                  setFocus(null);
+                }}
+              >
+                Previous
+              </button>
+              <span>
+                {page + 1} / {Math.ceil(collectionBuildings.length / 5)}
+              </span>
+              <button
+                disabled={(page + 1) * 5 >= collectionBuildings.length}
+                onClick={() => {
+                  setPage(page + 1);
+                  setFocus(null);
+                }}
+              >
+                Next
+              </button>
+            </div>
             <button
               onClick={() => {
                 setFocus(null);
@@ -443,6 +520,7 @@ export function CityAssetShowcase() {
             <label>
               Detail{" "}
               <select
+                aria-label="Detail"
                 value={lod}
                 onChange={(e) => setLod(e.target.value as "near" | "far")}
               >
@@ -484,10 +562,10 @@ export function CityAssetShowcase() {
             {decorations.map((a, i) => (
               <button
                 key={a.key}
-                aria-pressed={focus === i + 5}
+                aria-pressed={focus === i + buildings.length}
                 onClick={() => {
                   setStress(false);
-                  setFocus(i + 5);
+                  setFocus(i + buildings.length);
                 }}
               >
                 <span>0{i + 6}</span>
@@ -505,6 +583,9 @@ export function CityAssetShowcase() {
                   footprint · {selected.height.toFixed(1)} m tall
                 </p>
                 <p>
+                  {selected.uniformScale < 0.999 && (
+                    <>Uniform plot fit: {selected.uniformScale.toFixed(2)}x. </>
+                  )}
                   {selected.sourceMeshes} assembled meshes, including prefab
                   parts. {selected.farTriangles.toLocaleString()} triangles at
                   far detail.
@@ -513,8 +594,8 @@ export function CityAssetShowcase() {
             ) : (
               <p>
                 {(manifest.bytes / 1024).toFixed(0)} KB · one shared atlas ·
-                four materials. Glass uses an opaque approximation; Unity
-                lighting and scripts are omitted.
+                {manifest.materials} materials. Glass uses an opaque
+                approximation; Unity lighting and scripts are omitted.
               </p>
             )}
             <p className="mas-note">
@@ -549,8 +630,14 @@ export function CityAssetShowcase() {
                 <color attach="background" args={["#e7e9df"]} />
                 <ambientLight intensity={1.5} />
                 <directionalLight position={[50, 90, 30]} intensity={2.1} />
-                <Camera focus={focus} stress={stress} reduced={reduced} />
+                <Camera
+                  buildings={buildings}
+                  focus={focus}
+                  stress={stress}
+                  reduced={reduced}
+                />
                 <World
+                  buildings={buildings}
                   stress={stress}
                   lod={lod}
                   billboards={billboards}

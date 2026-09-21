@@ -69,7 +69,7 @@ for (const asset of manifest.assets) {
   );
 }
 manifest.bytes = (await stat(`${folder}/showcase.glb`)).size;
-assert.ok(manifest.bytes < 4 * 1024 * 1024, "Showcase pack exceeds 4 MB");
+assert.ok(manifest.bytes < 8 * 1024 * 1024, "Showcase pack exceeds 8 MB");
 manifest.materials = doc.getRoot().listMaterials().length;
 manifest.textures = doc.getRoot().listTextures().length;
 // Keep a portable source-hash inventory; no absolute workstation paths or vendor source files.

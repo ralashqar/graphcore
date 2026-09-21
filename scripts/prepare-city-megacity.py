@@ -6,6 +6,9 @@ import yaml
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 OUT=ROOT/'output/megacity-showcase';OUT.mkdir(parents=True,exist_ok=True)
 SELECTION=[('commercial-01','Corner shop','Buildings/SM_Buildings_Commercial_01.prefab',1),('commercial-04','Compact retail','Buildings/SM_Buildings_Commercial_04.prefab',1),('commercial-10','Small storefront','Buildings/SM_Buildings_Commercial_10.prefab',1),('commercial-18','Candy kiosk','Buildings/SM_Buildings_Commercial_18.prefab',3),('bank','Civic landmark','Buildings/SM_Buildings_Bank.prefab',4),('decor-01','Air-conditioning unit','BuildingsDecor/SM_BuildingsDecor_01.prefab',None),('decor-02','Wall vent','BuildingsDecor/SM_BuildingsDecor_02.prefab',None),('decor-03','Roof vent','BuildingsDecor/SM_BuildingsDecor_03.prefab',None)]
+SELECTION += [(f'office-{i:02}', f'Office {i:02}', f'Buildings/SM_Buildings_Office_{i:02}.prefab', 3) for i in range(1,12) if i != 10]
+SELECTION += [(f'skyscraper-{i:02}', f'Skyscraper {i:02}', f'Buildings/SM_Buildings_Skyscraper_{i:02}.prefab', 5) for i in range(1,7)]
+
 def documents(path):
  text=path.read_text(encoding='utf-8-sig'); chunks=re.split(r'^--- !u!\d+ &(-?\d+)[^\n]*\n',text,flags=re.M)
  return {int(chunks[i]):yaml.safe_load(chunks[i+1]) for i in range(1,len(chunks),2)}

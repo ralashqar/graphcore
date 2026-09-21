@@ -28,6 +28,13 @@ for asset in data['assets']:
   imported=[o for o in bpy.context.selected_objects if o.type=='MESH']
   if len(imported)!=1:raise ValueError('Review multi-mesh FBX before resolving Unity file IDs: '+node['fbx'])
   obj=imported[0];world=Matrix.Identity(4)
+  # Unity's base atlas uses UV0. Drop lightmap/empty auxiliary layers before
+  # joining doors and bodies: their UV names/order differ between source FBXs.
+  if not obj.data.uv_layers:raise ValueError('Missing source UV0: '+node['name'])
+  while len(obj.data.uv_layers)>1:obj.data.uv_layers.remove(obj.data.uv_layers[-1])
+  atlas_uv=obj.data.uv_layers[0]
+  atlas_uv.name='AtlasUV';atlas_uv.active_render=True
+
   for t in node['chain']:
    p=t['m_LocalPosition'];r=t['m_LocalRotation'];s=t['m_LocalScale']
    world=world@Matrix.Translation((p['x'],p['y'],p['z']))@Quaternion((r['w'],r['x'],r['y'],r['z'])).to_matrix().to_4x4()@Matrix.Diagonal((s['x'],s['y'],s['z'],1))
@@ -53,10 +60,10 @@ for asset in data['assets']:
  bpy.context.view_layer.objects.active=parts[0];bpy.ops.object.join();near=bpy.context.object;near.name=asset['key']+'_near';near['assetKey']=near.name
  near.data.calc_loop_triangles();triangles=len(near.data.loop_triangles)
  far=near.copy();far.data=near.data.copy();bpy.context.collection.objects.link(far);far.name=asset['key']+'_far';far['assetKey']=far.name
- bpy.context.view_layer.objects.active=far;modifier=far.modifiers.new('Distant simplification','DECIMATE');modifier.ratio=.4;modifier.use_collapse_triangulate=True;bpy.ops.object.modifier_apply(modifier=modifier.name)
+ bpy.context.view_layer.objects.active=far;modifier=far.modifiers.new('Distant simplification','DECIMATE');modifier.ratio=min(.4,2200/max(1,triangles));modifier.use_collapse_triangulate=True;bpy.ops.object.modifier_apply(modifier=modifier.name)
  far.data.calc_loop_triangles();export.extend([near,far])
  dimensions=[(hi[i]-lo[i])*factor for i in range(3)]
- manifest.append({'key':asset['key'],'label':asset['label'],'tier':asset['tier'],'sourceMeshes':len(parts),'triangles':triangles,'farTriangles':len(far.data.loop_triangles),'width':dimensions[0],'depth':dimensions[1],'height':dimensions[2],'uniformScale':factor,'billboard':{'width':12,'height':6,'bottom':dimensions[2]+.5,'front':min(7.6,dimensions[1]/2+.65)},'materials':sorted(set(m.name for m in near.data.materials))})
+ manifest.append({'key':asset['key'],'label':asset['label'],'tier':asset['tier'],'sourceMeshes':len(parts),'triangles':triangles,'farTriangles':len(far.data.loop_triangles),'width':dimensions[0],'depth':dimensions[1],'height':dimensions[2],'uniformScale':factor,'sourceDimensions':[hi[i]-lo[i] for i in range(3)],'billboard':{'width':12,'height':6,'bottom':min(dimensions[2]+.5,8),'front':min(7.6,dimensions[1]/2+.65)},'materials':sorted(set(m.name for m in near.data.materials))})
 bpy.ops.object.select_all(action='DESELECT')
 for o in export:o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'showcase.gltf'),export_format='GLTF_SEPARATE',use_selection=True,export_extras=True,export_yup=True,export_animations=False)

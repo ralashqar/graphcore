@@ -236,3 +236,19 @@ body:has(.mas) {
     font-size: 28px;
   }
 }
+
+.mas-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  grid-column: 1/-1;
+  font-size: 12px;
+}
+.mas-pages button {
+  padding: 8px 12px;
+}
+.mas-pages button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
