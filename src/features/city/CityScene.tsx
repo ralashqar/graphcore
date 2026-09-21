@@ -470,13 +470,12 @@ function CitySceneContent({
   }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport, driving]);
   const arrivals = useMemo(() => new Map(visible.map(p => [p.id, residents.current.get(p.id) ?? performance.now()])), [visible]);
   useEffect(() => { residents.current = arrivals; }, [arrivals]);
-  const mobile = window.innerWidth < 900;
   return (
     <SceneBoundary onFailure={onFailure}>
       <Canvas
         data-city-resident-count={visible.length}
         dpr={softwareRenderer ? 0.75 : [1, 1.5]}
-        shadows={softwareRenderer || mobile ? false : { type: 0, autoUpdate: false }}
+        shadows={false}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
           gl.setClearColor(presetDemo ? "#c8deeb" : "#e4e5dc");
@@ -511,14 +510,7 @@ function CitySceneContent({
           position={[-120, 240, 80]}
           intensity={presetDemo ? 2.5 : 1.6}
           color={presetDemo ? "#fff0d5" : "#ffffff"}
-          castShadow
-          shadow-mapSize={[1024, 1024]}
-          shadow-camera-left={-160}
-          shadow-camera-right={160}
-          shadow-camera-top={160}
-          shadow-camera-bottom={-160}
-          shadow-camera-far={800}
-          shadow-bias={-0.0003}
+
         />
         {presetDemo && <directionalLight position={[125, 80, -110]} color="#c5ddff" intensity={.45} />}
         <fog attach="fog" args={[presetDemo ? "#c8deeb" : "#e4e5dc", driving ? 180 : 850, driving ? 420 : 1500]} />

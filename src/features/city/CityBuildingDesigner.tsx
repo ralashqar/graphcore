@@ -468,7 +468,7 @@ export function CityBuildingDesigner(
             <DesignBoundary>
               <Canvas
                 orthographic
-                shadows
+                shadows={false}
                 frameloop="demand"
                 dpr={[1, 1.5]}
                 camera={{

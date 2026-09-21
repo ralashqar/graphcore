@@ -170,3 +170,8 @@ Explore now offers Drive mode: a procedural car with a ground-level perspective 
 ### Demo advertisements and forgiving curbs
 
 Seeded demo recipes now select one or two fitting advertising placements with varied dimensions and placeholder styles. All 400 fixtures retain at least one rendered advert. Merchant recipes are unchanged. Driving projects curb contact onto the road corridor and steers away from the contact normal while retaining speed; forward, reverse and head-on recovery tests cover the behavior. Browser driving/map restoration checks passed.
+
+
+### Disable real-time shadows
+
+City and building-editor canvases now disable shadow maps. The city previously used a 1024px hard shadow map across 320m, producing coarse self-shadow artifacts in street-level views. Directional, hemisphere and ambient lighting remain. Browser driving checks and a street-level screenshot show clean sampled facade surfaces; no Quaternius assets were modified.
