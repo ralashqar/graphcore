@@ -85,12 +85,14 @@ export function drawTile(
 }
 
 export function CityBillboards({
+  envelope = billboardEnvelope,
   properties,
   selected,
   center,
   onSelect,
   reduced,
 }: {
+  envelope?: typeof billboardEnvelope;
   properties: CityProperty[];
   selected: CityProperty | null;
   center: { x: number; z: number };
@@ -235,7 +237,7 @@ export function CityBillboards({
       rects: number[] = [];
     const slots = new Map(featured.map((p, i) => [p.id, i]));
     for (const p of properties) {
-      const { width, height, front, bottom, rotation } = billboardEnvelope(p.tier, p.id);
+      const { width, height, front, bottom, rotation } = envelope(p.tier, p.id);
       const sin = Math.sin(rotation), cos = Math.cos(rotation);
       const locate = (localX: number, localZ: number) => ({
         x: plotAxis(p.x) + cos * localX + sin * localZ,
@@ -259,7 +261,7 @@ export function CityBillboards({
         1 - (Math.floor(slot / COLS) + 0.992) / ROWS, 0.992 / COLS, 0.984 / ROWS);
     }
     return { frames, posts, roofs, faces, rects };
-  }, [properties, featured]);
+  }, [properties, featured, envelope]);
   const facePiece = useMemo(() => {
     const geometry = new PlaneGeometry(1, 1);
     geometry.setAttribute(

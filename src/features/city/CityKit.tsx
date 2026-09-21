@@ -1,3 +1,4 @@
+import { officePreset, officeBillboard } from "./CityOfficePresets";
 import { useMarketMotion } from "./CityMarketMotion";
 import { Batch, type Instance, type Piece } from "./CityInstances";
 import { CityBillboards } from "./CityBillboards";
@@ -35,6 +36,7 @@ const trunk = {
 };
 
 export function CityKit({
+  officeDemo = false,
   properties,
   selected,
   capacity,
@@ -45,6 +47,7 @@ export function CityKit({
   labels = true,
   matchIds,
 }: {
+  officeDemo?: boolean;
   properties: CityProperty[];
   selected: CityProperty | null;
   capacity: number;
@@ -56,14 +59,20 @@ export function CityKit({
   matchIds?: Set<string>;
 }) {
   const playback = useMarketMotion();
-  const { scene } = useGLTF("/city/downtown/downtown.glb?v=source-v3", false, true);
+  const loaded = useGLTF(officeDemo
+    ? ["/city/downtown/downtown.glb?v=source-v3", "/city/megacity/showcase.glb?v=3"]
+    : ["/city/downtown/downtown.glb?v=source-v3"], false, true);
+  const signEnvelope = officeDemo ? officeBillboard : billboardEnvelope;
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();
+    for (const { scene } of loaded) {
     scene.updateMatrixWorld(true);
     for (const root of scene.children) {
-      const key = root.userData.assetKey || root.name,
-        pieces: Piece[] = [];
+      const key = root.userData.assetKey || root.name;
+      if (officeDemo && (key.startsWith("Building_") ||
+        (scene === loaded[1]?.scene && !key.startsWith("office-")))) continue;
+      const pieces: Piece[] = [];
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         const original = child.material as MeshStandardMaterial;
@@ -111,8 +120,9 @@ export function CityKit({
       });
       result.set(key, pieces);
     }
+    }
     return result;
-  }, [scene]);
+  }, [loaded[0].scene, loaded[1]?.scene, officeDemo]);
   useEffect(
     () => () => {
       const materials = new Set<Material>();
@@ -183,28 +193,34 @@ export function CityKit({
     const groups = new Map<string, Instance[]>();
     for (const p of properties) {
       const near = p.id === selected?.id ||
-        (BUILDING_RECIPES[p.tier].floors * 3 * zoom >= 38 &&
+        ((officeDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3) * zoom >= 38 &&
           Math.abs(p.x - center.x) <= 5 &&
           Math.abs(p.z - center.z) <= 5);
-      const asset = `Building_${p.tier}_${buildingVariant(p.id)}_${
+      const asset = `${officeDemo ? officePreset(p.id).key : `Building_${p.tier}_${buildingVariant(p.id)}`}_${
         near ? "near" : "far"
       }`;
       const list = groups.get(asset) || [];
       list.push({
         key: p.id,
         x: plotAxis(p.x), z: plotAxis(p.z), property: p,
+        rotation: officeDemo ? officeBillboard(p.tier, p.id).rotation : 0,
         color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id ? "#767d76" : "#ffffff",
       });
       groups.set(asset, list);
     }
     return groups;
-  }, [properties, selected?.id, zoom, center.x, center.z, matchIds]);
+  }, [properties, selected?.id, zoom, center.x, center.z, matchIds, officeDemo]);
   const { paths, planters } = useMemo(() => {
     const paths: Instance[] = [],
       planters: Instance[] = [];
     for (const p of properties) {
       const variant = buildingVariant(p.id),
         x = plotAxis(p.x), z = plotAxis(p.z), sign = variant ? 1 : -1;
+      if (officeDemo) {
+        paths.push({ key: p.id, x: x + (variant ? 9.5 : 0), y: 0.025, z: z + (variant ? 0 : 9.5), scale: variant ? [5, 0.05, 2] : [2, 0.05, 5] });
+        planters.push({ key: p.id, x: x - 9.5, z: z + 8 });
+        continue;
+      }
       // A two-metre walk through the open courtyard, outside both joined wings.
       paths.push({ key: p.id, x: x + (variant ? -3 : -7.5), y: 0.025,
         z: z + (variant ? -7.5 : -3), scale: variant ? [2, 0.05, 9] : [9, 0.05, 2] });
@@ -213,7 +229,7 @@ export function CityKit({
       }
     }
     return { paths, planters };
-  }, [properties, center.x, center.z]);
+  }, [properties, center.x, center.z, officeDemo]);
   const plaza = useMemo(() => {
     const paving: Instance[] = [],
       bollards: Instance[] = [],
@@ -299,6 +315,7 @@ export function CityKit({
         />
       ))}
       <CityBillboards
+        envelope={signEnvelope}
         properties={properties}
         selected={selected}
         center={center}
@@ -315,7 +332,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              Math.max(BUILDING_RECIPES[p.tier].floors * 3, billboardEnvelope(p.tier, p.id).bottom + billboardEnvelope(p.tier, p.id).height) + 2,
+              Math.max(officeDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center

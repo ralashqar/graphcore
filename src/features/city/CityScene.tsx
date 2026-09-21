@@ -399,6 +399,7 @@ function SceneReady({ onReady }: { onReady?: () => void }) {
   return null;
 }
 export default function CityScene({
+  officeDemo = false,
   properties,
   selected,
   capacity,
@@ -421,6 +422,7 @@ export default function CityScene({
   launchActivity = false,
   launchFocus = false,
 }: {
+  officeDemo?: boolean;
   launches?: LaunchItem[];
   launchActivity?: boolean;
   launchFocus?: boolean;
@@ -557,6 +559,7 @@ export default function CityScene({
         <MarketMotionContext.Provider value={playback || null}>
           <CityArrivalContext.Provider value={arrivals}>
           <CityKit
+            officeDemo={officeDemo}
             properties={visible}
             matchIds={matches ? new Set(matches) : undefined}
             selected={selected}
