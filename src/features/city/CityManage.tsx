@@ -1,3 +1,4 @@
+import { CityBuildingDesigner } from "./CityBuildingDesigner";
 import { CityBuildingArt } from "./CityBuildingArt";
 import { MerchantLiving } from "./CityLiving";
 import { marketQuote, MerchantPosition, QuotePreview } from "./CityMarket";
@@ -32,6 +33,7 @@ export function CityManage({
   onRefresh: () => Promise<void>;
 }) {
   const business = workspace.business;
+  const [buildingMode,setBuildingMode]=useState<"3d"|"art">("3d");
   const [profile, setProfile] = useState<CityProfile>(
       business?.draft || emptyCityProfile(),
     ),
@@ -242,7 +244,11 @@ export function CityManage({
         />
       )}
       <div id="city-building-studio">
-        {business
+        <div className="city-design-mode" role="group" aria-label="Building editor mode">
+          <button type="button" aria-pressed={buildingMode==="3d"} onClick={()=>setBuildingMode("3d")}>3D designer</button>
+          <button type="button" aria-pressed={buildingMode==="art"} onClick={()=>setBuildingMode("art")}>AI artwork</button>
+        </div>
+        {buildingMode==="3d" ? <CityBuildingDesigner profile={previewProfile} onChange={design=>setProfile(p=>({...p,buildingDesign:design,buildingArt:""}))}/> : business
           ? (
             <CityBuildingArt
               key={business.id}

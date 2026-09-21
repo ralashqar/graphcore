@@ -12,6 +12,7 @@ export const CITY_TIERS = [
 
 export type CityProfile = {
   buildingArt?: string;
+  buildingDesign?: import("./cityBuildingDesign.ts").CityBuildingDesign;
   campus?: import("./cityCampus.ts").CityCampus | null;
   name: string;
   tagline: string;

@@ -2,6 +2,12 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## Live City building blueprints (September 2026)
+
+The merchant studio now separates immediate 3D design from generated image artwork. Version-1 `buildingDesign` recipes contain bounded preset, floor/footprint/setback, facade, tile, planting and quarter-turn choices. The editor and public City share the same two-batch instanced geometry; existing image artwork takes precedence until a merchant explicitly edits/applies a 3D draft. The existing owner/version/publication boundary persists optional recipes inside profile JSON. City Value and allocation are unchanged. No migration or provider inference is required.
+
+The shared profile validator is imported by the City Edge entries and the existing Fly campus worker. Rollout requires city-api, city-command, city-building-art, city-reconcile and city-stripe-webhook plus the world-generation worker; no unrelated workers. This change is locally verified and remains undeployed under the existing staging-first release constraint. See [docs/synarc-city-building-designer.md](docs/synarc-city-building-designer.md).
+
 ## Overview
 
 ### City Google sign-in (September 2026)

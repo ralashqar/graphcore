@@ -1467,3 +1467,25 @@ body:has(.city-app) {
  .city-studio-comparison { grid-template-columns:1fr; }
  .city-art-viewport { min-height:0; }
 }
+
+.city-design-mode { display:flex; gap:8px; margin:28px 0; }
+.city-design-mode button[aria-pressed=true], .city-design-studio button[aria-pressed=true] { background:#263d32; color:#fff; }
+.city-design-studio { padding:24px 0 40px; }
+.city-design-studio .city-section-heading p { max-width:310px; font-size:13px; line-height:1.6; }
+.city-design-studio .city-preset-picker { display:grid; grid-template-columns:1fr 1fr; margin-top:0; }
+.city-design-studio .city-preset-picker button { text-align:left; min-height:90px; }
+.city-design-studio .city-preset-picker small { display:block; margin-top:6px; font-weight:400; line-height:1.5; opacity:.75; }
+.city-design-canvas { width:100%; height:560px; touch-action:none; }
+.city-design-blueprint { display:block; width:100%; height:560px; color:#416c60; background:#e4e9df; }
+.city-design-caption { display:flex; justify-content:space-between; gap:16px; font-size:13px; padding-top:18px; }
+.city-design-caption span { font-size:12px; }
+.city-design-studio output { float:right; }
+.city-design-studio .city-checkbox { display:flex; align-items:center; gap:10px; }
+.city-design-studio .city-checkbox input { width:auto; }
+@media(max-width:850px) { .city-design-canvas,.city-design-blueprint { height:380px; } .city-design-caption { flex-direction:column; gap:6px; } }
+
+.city-design-studio .city-preset-picker button { display:block; }
+.city-design-studio .city-preset-picker button small { color:inherit; }
+.city-design-studio .city-art-controls .city-checkbox { display:flex; flex-direction:row; justify-content:flex-start; }
+.city-design-studio .city-art-controls .city-checkbox input { flex:0 0 auto; margin:0; }
+.city-design-studio input[type=range], .city-design-studio input[type=checkbox] { accent-color:#446b56; }

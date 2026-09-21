@@ -1,3 +1,4 @@
+import { buildingDesignSchema } from "./city-building-design-schema.ts";
 import { primarySample } from "../../../src/domain/cityCampus.ts";
 import { campusSchema } from "./city-campus-schema.ts";
 import { z } from "npm:zod@4";
@@ -51,6 +52,7 @@ export const profileSchema = z
     ]),
     color: z.string().regex(/^#[\da-fA-F]{6}$/),
     buildingArt: media.optional(),
+    buildingDesign: buildingDesignSchema.optional(),
     logo: media,
     hero: media,
     billboard: media
