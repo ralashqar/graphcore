@@ -75,6 +75,8 @@ export function CityDesignBuildings(
     () => ({
       box: new BoxGeometry(1, 1, 1),
       tree: new IcosahedronGeometry(1, 1),
+      hip: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("hip"), 3)); g.computeVertexNormals(); return g; })(),
+      shed: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("shed"), 3)); g.computeVertexNormals(); return g; })(),
       column: new CylinderGeometry(.5, .5, 1, 12),
       pediment: (() => {
         const g = new BufferGeometry();
@@ -99,13 +101,15 @@ export function CityDesignBuildings(
   useEffect(() => () => {
     resources.box.dispose();
     resources.column.dispose();
+    resources.hip.dispose();
+    resources.shed.dispose();
     resources.pediment.dispose();
     resources.tree.dispose();
     resources.roof.dispose();
     resources.material.dispose();
   }, [resources]);
   const batches = useMemo(() => {
-    const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [] };
+    const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [], hip: [], shed: [] };
     for (const p of properties) {
       const d = p.profile.buildingDesign;
       if (!d || p.profile.buildingArt) continue;
@@ -192,7 +196,7 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])]]
             : [{
-              geometry: resources[kind as "box" | "tree" | "roof" | "column" | "pediment"],
+              geometry: resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
               material: resources.material,
             }]}
           instances={items}

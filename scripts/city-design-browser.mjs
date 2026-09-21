@@ -58,6 +58,12 @@ const business = {
   land_value: 1000,
   preview: profile,
 };
+if (process.env.CITY_PRESET_THUMBNAILS === "1") {
+  const {newDesign} = await import("../src/domain/cityBuildingV3.ts");
+  Object.assign(profile, {name:"SynArc", logo:"", color:"#446c60"});
+  business.draft = {...profile, buildingDesign:newDesign("preset-gallery-v1")};
+  business.preview = business.draft;
+}
 const errors = [];
 const browser = await chromium.launch({
   headless: true,
@@ -139,6 +145,24 @@ try {
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if (process.env.CITY_PRESET_THUMBNAILS === "1") {
+    const {COMPOSITIONS} = await import("../src/domain/cityBuildingV3.ts");
+    const {mkdir, writeFile} = await import("node:fs/promises");
+    const sharp = (await import("sharp")).default;
+    await mkdir("public/city/presets", {recursive:true});
+    await page.getByRole("button", {name:"City camera", exact:true}).click();
+    for (const preset of COMPOSITIONS) {
+      await page.getByRole("button", {name:new RegExp(`^${preset.name} `)}).click();
+      await page.waitForTimeout(250);
+      const shot = await page.locator(".city-design-canvas").screenshot();
+      await sharp(shot).resize(360,280,{fit:"cover"}).webp({quality:85}).toFile(`public/city/presets/${preset.name.toLowerCase().replaceAll(" ", "-")}.webp`);
+    }
+    await writeFile("public/city/presets/README.md", "# City preset previews\n\nRendered from the shared City building recipes using the mocked business editor, with a fixed camera and neutral SynArc identity. No AI generation or external asset provider. Regenerate with CITY_PRESET_THUMBNAILS=1 and CITY_TEST_ORIGIN set to the local dev server, then run node --experimental-strip-types scripts/city-design-browser.mjs.\n");
+    assert.deepEqual(errors, []);
+    console.log(`Rendered ${COMPOSITIONS.length} preset thumbnails.`);
+    await browser.close();
+    process.exit(0);
+  }
   const before = await page.locator(".city-design-canvas").screenshot();
   await page.getByRole("button", { name: "Corner showroom L-shaped footprint", exact: true }).click();
   await page.getByLabel("Floors", { exact: true }).fill("5");
@@ -382,6 +406,14 @@ try {
   await page.getByLabel("Footprint depth", { exact: true }).fill("12");
   assert.equal(await page.getByText(/Inactive: This entrance needs/).count(), 0);
   await page.screenshot({ path: "output/playwright/city-design-bank.png" });
+  await page.getByLabel("Building type", {exact:true}).selectOption("Civic");
+  assert.equal(await page.locator(".city-preset-picker button").count(), 2);
+  await page.getByRole("button", {name:/^City museum /}).click();
+  await page.getByLabel("Roof style", {exact:true}).selectOption("sawtooth");
+  await page.screenshot({path:"output/playwright/city-design-museum-sawtooth.png"});
+  const loaded = await page.locator(".city-preset-render").evaluateAll(images => images.every(i => i.complete && i.naturalWidth > 0));
+  assert.ok(loaded, "Rendered preset previews should load");
+  await page.getByLabel("Building type", {exact:true}).selectOption("All");
   assert.deepEqual(errors, []);
   console.log(
     "3D designer: live presets, geometry changes, blueprint, save/reload, mobile and city rendering passed (mock API).",

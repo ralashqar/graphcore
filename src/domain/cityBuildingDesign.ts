@@ -144,7 +144,7 @@ export function buildingMasses(d: CityBuildingDesign): BuildingMass[] {
   return masses;
 }
 export type BuildingPart = {
-  kind: "box" | "tree" | "roof" | "column" | "pediment";
+  kind: "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed";
   position: [number, number, number];
   size: [number, number, number];
   color: string;

@@ -14,7 +14,7 @@ export function frontStructure(style: typeof ENTRANCE_STYLES[number] | undefined
   box(0,.45,front+depth/2,w,.4,depth,trim);
   box(0,.35,front+depth+.15,w,.2,.3,trim);
   box(0,.3,front+depth+.45,w,.1,.3,trim);
-  for (const x of [-w/2+.55,w/2-.55]) {
+  for (const x of style === "pediment" && w >= 7 ? [-w/2+.55,-2.1,2.1,w/2-.55] : [-w/2+.55,w/2-.55]) {
     box(x,.75,front+depth-.4,.7,.2,.7,trim);
     parts.push({kind:"column", position:[x,(.85+groundHeight+.1)/2,front+depth-.4], size:[.46,groundHeight-.75,.46], color:wall});
     box(x,groundHeight+.16,front+depth-.4,.72,.13,.72,trim);

@@ -2,6 +2,10 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## Distinct City archetypes and roof compositions (September 2026)
+
+Optional v3 archetype, massing and roofVariant choices deepen six business types, add a supported central hall with lower wings, and constrain hip/shed/sawtooth roof compatibility. The gallery uses locally rendered WebP thumbnails from the same recipes, with Food & Retail, Workspaces, Civic and Hospitality filters. Older recipes omit these fields and retain their geometry. Shared strict profile validation changes require paired isolated-staging deployment of the City endpoints, frontend and world worker `2026-09-21-city-design-3.3`. No migration, paid generation or production deployment is introduced. Staging remains undesignated.
+
 ## City small-business and civic presets (September 2026)
 
 Eight additional complete presets add cafes, shops, 8 m rectangular kiosks, museum/bank porticos and a hotel. Optional v3 `entranceStyle` selects standard, wide canopy, columns or pediment. Shared validation permits 8 m dimensions only on rectangular v3 buildings; legacy bounds remain unchanged. Porticos keep the entrance clear and become inactive when their forecourt cannot fit; branding uses their front beam and conflicting slots retain inactive selections. The City profile boundary is shared with the world worker, requiring paired isolated-staging rollout of the five City endpoints, frontend and world worker `2026-09-21-city-design-3.2`. No migration, production activation or provider generation is included. Staging remains pending.

@@ -117,3 +117,9 @@ Deno.test("compact rectangular designs and bounded entrances round-trip", () => 
   assert.throws(() => buildingDesignSchema.parse({...d, entranceStyle:"upload"}));
   assert.throws(() => buildingDesignSchema.parse({...d, width:7}));
 });
+
+Deno.test("archetypes validate massing and roof compatibility", () => {
+  const d = {...newDesign("museum"), blueprint:"office", archetype:"museum", massing:"hall-wings", roofVariant:"sawtooth", roof:"flat"};
+  assert.deepEqual(buildingDesignSchema.parse(d), d);
+  for (const patch of [{width:8}, {blueprint:"courtyard"}, {archetype:"bank"}, {roof:"pitched"}, {massing:"custom"}]) assert.throws(() => buildingDesignSchema.parse({...d,...patch}));
+});

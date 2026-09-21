@@ -4,15 +4,15 @@ import { pitchedRoofPositions } from "./cityBuildingSurfaces.ts";
 import { DEFAULT_DESIGN_V2, resolveDesign } from "./cityBuildingV2.ts";
 import { newDesign, resolveV3 } from "./cityBuildingV3.ts";
 
-test("pitched roof is watertight with every triangle facing outward", () => {
-  const positions = pitchedRoofPositions();
+for (const profile of ["gable", "hip", "shed"] as const) test(`${profile} roof is watertight with every triangle facing outward`, () => {
+  const positions = pitchedRoofPositions(profile);
   const edges = new Map<string, number>();
   for (let i = 0; i < positions.length; i += 9) {
     const a = positions.slice(i, i + 3), b = positions.slice(i + 3, i + 6), c = positions.slice(i + 6, i + 9);
     const u = b.map((v, j) => v - a[j]), v = c.map((n, j) => n - a[j]);
     const normal = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
-    // Origin lies strictly inside the prism.
-    const dot = normal.reduce((sum, n, j) => sum + n * (a[j]+b[j]+c[j])/3, 0);
+    // A point below the origin lies strictly inside all three profiles.
+    const dot = normal.reduce((sum, n, j) => sum + n * ((a[j]+b[j]+c[j])/3 + (j === 1 ? .25 : 0)), 0);
     assert.ok(dot > 0, `inward or degenerate triangle ${i/9}`);
     for (const [from, to] of [[a,b],[b,c],[c,a]]) {
       const key = `${from.join(",")}>${to.join(",")}`;

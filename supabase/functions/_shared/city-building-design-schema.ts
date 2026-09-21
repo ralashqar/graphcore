@@ -1,3 +1,4 @@
+import { ARCHETYPES, ROOF_VARIANTS, roofVariants } from "../../../src/domain/cityBuildingArchetypes.ts";
 import { ENTRANCE_STYLES } from "../../../src/domain/cityBuildingEntrances.ts";
 import { ENCLOSURES, PAVING_PATTERNS, DETAIL_SETS, DETAIL_SCOPES } from "../../../src/domain/cityBuildingGrounds.ts";
 import { z } from "npm:zod@4";
@@ -50,6 +51,9 @@ const v3 = z.object({
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
   entranceStyle: z.enum(ENTRANCE_STYLES).optional(),
+  archetype: z.enum(ARCHETYPES).optional(),
+  massing: z.enum(["standard", "hall-wings"]).optional(),
+  roofVariant: z.enum(ROOF_VARIANTS).optional(),
   width: z.number().int().min(8).max(18),
   depth: z.number().int().min(8).max(18),
   enclosure: z.enum(ENCLOSURES).optional(),
@@ -66,6 +70,8 @@ const v3 = z.object({
   density: z.enum(["restrained", "full"]),
   slots: z.partialRecord(z.enum(SLOT_IDS), z.enum(COMPONENTS).nullable()),
 }).strict().superRefine((d, ctx) => {
+  if (d.massing === "hall-wings" && (d.blueprint !== "office" || d.width < 12 || d.depth < 10 || d.roof === "pitched")) ctx.addIssue({code:"custom", message:"Hall and wings require a rectangular 12 by 10 m footprint and compatible roof."});
+  if (d.roofVariant && !roofVariants(d).includes(d.roofVariant)) ctx.addIssue({code:"custom", message:"Roof variant is incompatible with this archetype."});
   if (d.blueprint !== "office" && (d.width < 12 || d.depth < 10)) ctx.addIssue({code:"custom", message:"Compact dimensions require a rectangular building."});
   if (d.roof === "pitched" && d.blueprint !== "office") {
     ctx.addIssue({ code: "custom", message: "Pitched roofs require office." });

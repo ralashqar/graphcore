@@ -89,3 +89,20 @@ The gallery now has 14 complete presets: the original six plus Terrace cafe, Gab
 Optional entranceStyle adds a wide storefront canopy or a bounded columned portico, optionally with a front-facing pediment. Columns and pediments are low-poly instanced primitives. The portico has steps, a clear central route and a front-beam sign. It is inactive when the footprint/forecourt cannot fit; its choice persists. Attachment clearances include the entrance structure. Round columns use 12 sides; the pediment reuses the outward-wound roof prism rotated to face the entrance. No textures, assets or providers are added.
 
 Tests cover compact dimensions, roof variants, preset bounds, open column spacing, inactive/restored porticos, shared schema, all preset browser previews and existing save/reload/mobile/fallback flows. TypeScript, build, dev runtime, six Deno tests and 19 geometry tests verify this change. Matching five City endpoints, frontend and profile-consuming world worker 2026-09-21-city-design-3.2 remain pending designated isolated staging; hosted activation and provider spending are excluded.
+
+
+## Distinct archetypes and roof compositions (2026-09-21)
+
+Optional v3 archetype, massing and roofVariant choices deepen the existing presets without altering recipes that omit them. Cafes add bounded seating, shops add frontage fascia and entry jambs, kiosks add serving counters, museums use a supported central hall and lower side wings, banks gain a four-column entrance, and hotels use a supported canopy and penthouse. Branding remains intact when applying presets.
+
+Rectangular buildings support hip roofs; cafe/shop/kiosk designs also support shed roofs, and museums support sawtooth roofs. Hall-and-wings massing requires at least 12 by 10 metres and excludes the legacy gabled roof. Incompatible sign/terrace slots remain inactive with their selections retained. Closed roof geometry has outward-facing normals and reuses instanced batches.
+
+The grouped preset gallery uses 14 locally rendered WebP previews (approximately 66 KB combined). Regenerate using CITY_PRESET_THUMBNAILS=1 and CITY_TEST_ORIGIN pointing at the local dev server with scripts/city-design-browser.mjs. No provider or paid generation is involved.
+
+Verification: 23 geometry tests and 7 shared schema tests passed; TypeScript and all five affected City Edge entries plus campus-worker Deno checks passed. Browser save/reload uses the existing mocked API fixture, not hosted publication. An initial browser run encountered the previously observed intermittent R3F canvas-mount null-event-target error; repeat-run results are recorded with release verification. Physical-mobile and new 400-property benchmarks were not performed for this extension.
+
+Rollout remains pending designated isolated staging. Deploy matching City endpoints, frontend and shared-profile-consuming world worker (city-design-3.3) together; no production activation, migration or provider spending is included.
+
+Repeat browser verification passed: live presets, grouped rendered previews, compatible roof controls, blueprint, mocked save/reload, mobile layout and city rendering, with no page errors on that run. The intermittent first-run canvas mount issue remains a known limitation.
+
+Production build passed; existing large-chunk and missing landing-atlas warnings remain. Fresh Vite startup and runtime checks completed; existing public-office-manifest import warnings remain.

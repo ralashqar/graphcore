@@ -1,3 +1,4 @@
+import { archetypeParts, roofVariants, type ArchetypeChoices } from "./cityBuildingArchetypes.ts";
 import { frontStructure, ENTRANCE_STYLES } from "./cityBuildingEntrances.ts";
 import { groundsParts, type GroundsChoices } from "./cityBuildingGrounds.ts";
 import type {
@@ -37,7 +38,7 @@ export const COMPONENTS = [
   "bollards",
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
-export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & {
+export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
   version: 3;
   generatorRevision: "city-grammar-1";
   entranceStyle?: typeof ENTRANCE_STYLES[number];
@@ -139,10 +140,12 @@ export function normalizeV3(d: CityBuildingDesignV3): CityBuildingDesignV3 {
     ...d,
     ...normalizeDesign({ ...d, version: 2 }),
     version: 3,
-    width: Math.max(d.blueprint === "office" ? 8 : 12, d.finish === "procedural" ? d.width : Math.round(d.width / 2) * 2),
-    depth: Math.max(d.blueprint === "office" ? 8 : 10, d.finish === "procedural" ? d.depth : Math.round(d.depth / 2) * 2),
+    width: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 12, d.finish === "procedural" ? d.width : Math.round(d.width / 2) * 2),
+    depth: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 10, d.finish === "procedural" ? d.depth : Math.round(d.depth / 2) * 2),
     floors: 1 + d.middleFloors + (d.crown === "none" ? 0 : 1),
     canopy: d.slots["canopy.entrance"] === "canopy",
+    ...(d.roofVariant && !roofVariants(d).includes(d.roofVariant) ? {roofVariant:"standard" as const} : {}),
+    ...(d.massing === "hall-wings" && d.roof === "pitched" ? {roof:"parapet" as const} : {}),
   };
 }
 export const COMPOSITIONS: {
@@ -152,6 +155,7 @@ export const COMPOSITIONS: {
   {
     name: "Retail flagship",
     patch: {
+      archetype: "shop",
       blueprint: "office",
       base: "storefront",
       middleFloors: 1,
@@ -213,6 +217,7 @@ export const COMPOSITIONS: {
   {
     name: "Corner showroom",
     patch: {
+      archetype: "shop",
       blueprint: "l-shape",
       base: "storefront",
       middleFloors: 1,
@@ -222,14 +227,14 @@ export const COMPOSITIONS: {
       roof: "parapet",
     },
   },
-  { name: "Terrace cafe", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "flat", entranceStyle: "wide-canopy", pavingPattern: "terracotta", grounds: "planted" } },
-  { name: "Gabled cafe", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "brick", roof: "pitched", entranceStyle: "wide-canopy", pavingPattern: "ribbon" } },
-  { name: "Village shop", patch: { blueprint: "office", width: 12, depth: 10, middleFloors: 1, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "checker" } },
-  { name: "Canopy kiosk", patch: { blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "creative", roof: "flat", entranceStyle: "wide-canopy", grounds: "urban" } },
-  { name: "Gabled kiosk", patch: { blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "brick", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "terracotta" } },
-  { name: "City museum", patch: { blueprint: "office", width: 16, depth: 12, middleFloors: 1, crown: "recessed", podium: true, base: "lobby", architecture: "creative", roof: "flat", entranceStyle: "portico", slots: { "canopy.entrance": null }, pavingPattern: "ribbon", grounds: "minimal" } },
-  { name: "Civic bank", patch: { blueprint: "office", width: 18, depth: 12, middleFloors: 1, crown: "none", podium: false, base: "plinth", architecture: "boutique", roof: "parapet", entranceStyle: "pediment", slots: { "canopy.entrance": null }, pavingPattern: "checker", grounds: "urban" } },
-  { name: "Boutique hotel", patch: { blueprint: "terraces", width: 14, depth: 12, middleFloors: 3, crown: "terrace", podium: true, base: "lobby", architecture: "boutique", roof: "planted", grounds: "planted", pavingPattern: "basalt" } },
+  { name: "Terrace cafe", patch: { archetype: "cafe", roofVariant: "shed", blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "flat", entranceStyle: "wide-canopy", pavingPattern: "terracotta", grounds: "planted" } },
+  { name: "Gabled cafe", patch: { archetype: "cafe", blueprint: "office", width: 12, depth: 10, middleFloors: 0, crown: "none", podium: false, base: "storefront", architecture: "brick", roof: "pitched", entranceStyle: "wide-canopy", pavingPattern: "ribbon" } },
+  { name: "Village shop", patch: { archetype: "shop", blueprint: "office", width: 12, depth: 10, middleFloors: 1, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "checker" } },
+  { name: "Canopy kiosk", patch: { archetype: "kiosk", blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "creative", roof: "flat", entranceStyle: "wide-canopy", grounds: "urban" } },
+  { name: "Gabled kiosk", patch: { archetype: "kiosk", blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "brick", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "terracotta" } },
+  { name: "City museum", patch: { archetype: "museum", massing: "hall-wings", blueprint: "office", width: 16, depth: 12, middleFloors: 1, crown: "recessed", podium: true, base: "lobby", architecture: "creative", roof: "flat", entranceStyle: "portico", slots: { "canopy.entrance": null }, pavingPattern: "ribbon", grounds: "minimal" } },
+  { name: "Civic bank", patch: { archetype: "bank", blueprint: "office", width: 18, depth: 12, middleFloors: 1, crown: "none", podium: false, base: "plinth", architecture: "boutique", roof: "parapet", entranceStyle: "pediment", slots: { "canopy.entrance": null }, pavingPattern: "checker", grounds: "urban" } },
+  { name: "Boutique hotel", patch: { archetype: "hotel", slots: { "canopy.entrance": null }, blueprint: "terraces", width: 14, depth: 12, middleFloors: 3, crown: "penthouse", podium: true, base: "lobby", architecture: "boutique", roof: "planted", grounds: "planted", pavingPattern: "basalt" } },
 ];
 export function applyComposition(d: CityBuildingDesignV3, index: number) {
   const p = COMPOSITIONS[index];
@@ -254,6 +259,14 @@ export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
     raw = massesV2({ ...n, version: 2 }),
     last = raw.at(-1)!.y,
     result: BuildingMass[] = [];
+  if (n.massing === "hall-wings" && n.blueprint === "office") {
+    const floors = [...raw]; raw.length = 0;
+    for (const m of floors) {
+      const centerWidth = m.width / 2;
+      raw.push({...m, width:centerWidth});
+      if (m.y === .65 || m.y < last) for (const side of [-1,1]) raw.push({...m, x:side*m.width*3/8, z:-m.depth*.175, width:m.width/4, depth:m.depth*.65});
+    }
+  }
   for (const y of [...new Set(raw.map((m) => m.y))]) {
     const previous = result.length
       ? result.filter((m) => m.y === result.at(-1)!.y)
@@ -381,7 +394,7 @@ export function buildingSlots(
     [Math.min(6, top.width - 1), 1, .3],
     ["brand"],
     0,
-    d.roof === "pitched" ? "A pitched roof does not support this sign." : null,
+    d.roof === "pitched" || (d.roofVariant && d.roofVariant !== "standard") ? "A pitched roof does not support this sign." : null,
   );
   const right =
     masses.filter((m) => m.y === .65).sort((a, b) =>
@@ -425,7 +438,7 @@ export function buildingSlots(
       [1.2, 1.2, 1.2],
       ["planter"],
       0,
-      d.roof === "pitched" || top.width < 5 || top.depth < 3
+      d.roof === "pitched" || (d.roofVariant && d.roofVariant !== "standard") || top.width < 5 || top.depth < 3
         ? "This roof has no clear planter area."
         : null,
     );
@@ -594,7 +607,7 @@ export function resolveV3(
       x - nx * .1 < m.x + m.width / 2 && z - nz * .1 > m.z - m.depth / 2 &&
       z - nz * .1 < m.z + m.depth / 2
     );
-    if (top && d.roof === "parapet") {
+    if (top && d.roof === "parapet" && (!d.roofVariant || d.roofVariant === "standard")) {
       box(
         x,
         y + height + .24,
@@ -698,7 +711,7 @@ export function resolveV3(
       }
     }
     if (
-      d.finish !== "procedural" && lod === "near" && top && d.roof !== "pitched"
+      d.finish !== "procedural" && lod === "near" && top && d.roof !== "pitched" && (!d.roofVariant || d.roofVariant === "standard")
     ) {
       const trimBays = fitBays(length, 2, .1, .65);
       for (const [index, off] of trimBays.entries()) {
@@ -742,8 +755,18 @@ export function resolveV3(
       "entrance",
     );
   }
+  const entranceWall = walls.find(w => w.y === .65 && w.nz === 1 && Math.abs(w.z - entrance.z) < .001 && Math.abs(w.x) < w.length / 2);
+  const frontage = entranceWall ? 2 * Math.min(entranceWall.length / 2 - entranceWall.x, entranceWall.length / 2 + entranceWall.x) : masses[0].width;
+  parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod));
+  if (d.roofVariant && d.roofVariant !== "standard") {
+    const tops = masses.filter(m => !masses.some(upper => Math.abs(upper.y-m.y-m.height)<.001 && Math.abs(upper.x-m.x)<upper.width/2 && Math.abs(upper.z-m.z)<upper.depth/2));
+    for (const m of tops) {
+      const count = d.roofVariant === "sawtooth" ? 3 : 1;
+      for (let i=0;i<count;i++) parts.push({kind:d.roofVariant === "hip" ? "hip" : "shed", position:[m.x,m.y+m.height+.7,m.z-m.depth/2+(i+.5)*m.depth/count],size:[m.width,1.4,m.depth/count],color:p.roof});
+    }
+  }
   const lastY = masses.at(-1)!.y;
-  if (d.roof === "pitched") {
+  if (d.roof === "pitched" && (!d.roofVariant || d.roofVariant === "standard")) {
     const m = masses.at(-1)!;
     parts.push({
       kind: "roof",
@@ -752,7 +775,7 @@ export function resolveV3(
       color: p.roof,
     });
   }
-  if (d.roof === "planted" || d.crown === "terrace") {
+  if ((!d.roofVariant || d.roofVariant === "standard") && (d.roof === "planted" || d.crown === "terrace")) {
     for (const m of masses.filter((m) => m.y === lastY)) {
       box(
         m.x,

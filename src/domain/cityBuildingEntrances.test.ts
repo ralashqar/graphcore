@@ -12,7 +12,7 @@ test("compact kiosks are one storey and porticos remain open and bounded", () =>
   for (const name of ["City museum", "Civic bank"]) {
     const d = applyComposition(newDesign("fixture"), COMPOSITIONS.findIndex(p => p.name === name));
     const r = resolveV3(d, "#445566");
-    assert.equal(r.parts.filter(p => p.kind === "column").length, 2);
+    assert.equal(r.parts.filter(p => p.kind === "column").length, name === "Civic bank" ? 4 : 2);
     assert.ok(r.slots.find(s => s.id === "brand.entrance")?.active);
     assert.ok(!r.slots.find(s => s.id === "canopy.entrance")?.active);
     for (const p of r.parts) {
@@ -24,7 +24,7 @@ test("compact kiosks are one storey and porticos remain open and bounded", () =>
     assert.equal(resolveV3(resized, "#445566").parts.filter(p => p.kind === "column").length, 0);
     assert.ok(frontStructure(d.entranceStyle, "office", 9, d.width, d.groundHeight, "#fff", "#fff").reason);
     assert.equal(resized.entranceStyle, d.entranceStyle);
-    assert.equal(resolveV3(d, "#445566").parts.filter(p => p.kind === "column").length, 2);
+    assert.equal(resolveV3(d, "#445566").parts.filter(p => p.kind === "column").length, name === "Civic bank" ? 4 : 2);
   }
 });
 

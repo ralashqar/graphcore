@@ -1,3 +1,4 @@
+import { presetCategory, roofVariants } from "../../domain/cityBuildingArchetypes";
 import { frontStructure } from "../../domain/cityBuildingEntrances";
 import type { OrbitControls as OrbitControlsHandle } from "three-stdlib";
 import {
@@ -262,6 +263,7 @@ export function CityBuildingDesigner(
   const design = profile.buildingDesign || initial;
   const d = design.version === 3 ? design : upgradeV3(design),
     legacy = design.version !== 3;
+  const [category, setCategory] = useState("All");
   const [lastPreset, setLastPreset] = useState<number | null>(null);
   const [showSlots, setShowSlots] = useState(false),
     [selectedSlot, setSelectedSlot] = useState<SlotId>("brand.entrance");
@@ -567,8 +569,11 @@ export function CityBuildingDesigner(
             {tab === "Presets" && (
               <div className="city-art-controls">
                 <p className="city-studio-note">Choose a complete building, then fine-tune it below. Presets set the footprint, architecture and grounds; your business identity and colours stay intact.</p>
+                <label>Building type<select aria-label="Building type" value={category} onChange={e => setCategory(e.target.value)}>
+                  {["All", "Food & Retail", "Workspaces", "Civic", "Hospitality"].map(c => <option key={c}>{c}</option>)}
+                </select></label>
                 <div className="city-preset-picker">
-                  {COMPOSITIONS.map((p, i) => (
+                  {COMPOSITIONS.map((p, i) => category !== "All" && presetCategory(p.patch.archetype) !== category ? null : (
                     <button
                       type="button"
                       key={p.name}
@@ -577,9 +582,9 @@ export function CityBuildingDesigner(
                         commit(applyComposition(d, i));
                       }}
                     >
-                      <Blueprint design={applyComposition(d, i)} mini />
+                      <img className="city-preset-render" src={`/city/presets/${p.name.toLowerCase().replaceAll(" ", "-")}.webp`} alt="" loading="lazy" width="360" height="280" />
                       <strong>{p.name}</strong>
-                      <small>{p.patch.blueprint === "office" ? "Rectangular" : p.patch.blueprint === "terraces" ? "Stepped" : p.patch.blueprint === "courtyard" ? "Courtyard" : "L-shaped"} footprint</small>
+                      <small>{p.patch.massing === "hall-wings" ? "Hall and wings" : p.patch.blueprint === "office" ? "Rectangular" : p.patch.blueprint === "terraces" ? "Stepped" : p.patch.blueprint === "courtyard" ? "Courtyard" : "L-shaped"} footprint</small>
                     </button>
                   ))}
                 </div>
@@ -590,14 +595,14 @@ export function CityBuildingDesigner(
                   {ranges(
                     "Footprint width",
                     "width",
-                    d.blueprint === "office" ? 8 : 12,
+                    d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 12,
                     18,
                     d.finish === "procedural" ? 1 : 2,
                   )}
                   {ranges(
                     "Footprint depth",
                     "depth",
-                    d.blueprint === "office" ? 8 : 10,
+                    d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 10,
                     18,
                     d.finish === "procedural" ? 1 : 2,
                   )}
@@ -777,16 +782,22 @@ export function CityBuildingDesigner(
                 <label>
                   Roof style<select
                     aria-label="Roof style"
-                    value={d.roof}
-                    onChange={(e) =>
-                      update("roof", e.target.value as typeof d.roof)}
+                    value={d.roofVariant && d.roofVariant !== "standard" ? d.roofVariant : d.roof}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (["hip", "shed", "sawtooth"].includes(value)) commit({...d, roofVariant: value as typeof d.roofVariant});
+                      else commit({...d, roof: value as typeof d.roof, roofVariant:"standard"});
+                    }}
                   >
                     <option value="flat">Flat</option>
                     <option value="parapet">Parapet</option>
                     <option value="planted">Planted terrace</option>
-                    <option value="pitched" disabled={d.blueprint !== "office"}>
+                    <option value="pitched" disabled={d.blueprint !== "office" || d.massing === "hall-wings"}>
                       Pitched (rectangular office only)
                     </option>
+                    {roofVariants(d).includes("hip") && <option value="hip">Hip roof</option>}
+                    {roofVariants(d).includes("shed") && <option value="shed">Asymmetric shed roof</option>}
+                    {roofVariants(d).includes("sawtooth") && <option value="sawtooth">Sawtooth studio roof</option>}
                   </select>
                 </label>
                 <label>
