@@ -1165,3 +1165,8 @@ City profiles accept optional `billboard` media and bounded `billboardCrop` coor
 ### City advertising placement recipes (September 2026)
 
 Optional v3 advertising choices select up to two bounded camera-facing facade, roof or fence panels with requested dimensions and placeholder style. The shared profile schema preserves them through existing owner/revision-checked drafts and publication. Rendering resolves visible surfaces, solid frames, inset preview artwork and inactive fit reasons; no business-image integration or provider calls are added. Matching City Edge endpoints, frontend and profile-consuming world worker city-design-3.4 require paired staging rollout. Hosted activation remains pending designated staging; no migration or production activation. See docs/synarc-city-building-composition.md.
+
+
+### City texture presets (September 2026)
+
+Version-3 building recipes accept optional allowlisted wall/roof/ground texture IDs. City validation and the shared-profile-consuming world worker must ship together to designated staging; no production deployment is included. Local ambientCG CC0 colour/roughness assets use shared triplanar materials. No provider generation, database migration or new secrets. See docs/city-texture-presets.md.

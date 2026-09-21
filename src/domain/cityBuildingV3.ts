@@ -1,3 +1,4 @@
+import type { CityTextureChoices } from "./cityTexturePresets.ts";
 import { advertisingLayout, type Advertising, type AdPlacement } from "./cityAdvertising.ts";
 import { archetypeParts, roofVariants, type ArchetypeChoices } from "./cityBuildingArchetypes.ts";
 import { frontStructure, ENTRANCE_STYLES } from "./cityBuildingEntrances.ts";
@@ -40,6 +41,7 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  textures?: CityTextureChoices;
   advertising?: Advertising;
   version: 3;
   generatorRevision: "city-grammar-1";

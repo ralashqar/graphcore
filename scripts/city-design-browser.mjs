@@ -145,6 +145,27 @@ try {
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if (process.env.CITY_TEXTURE_AUDIT === "1") {
+    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    await page.getByRole("button",{name:/^Glass headquarters /}).click();
+    await page.getByRole("button",{name:"Branding",exact:true}).click();
+    for(const id of ["brick","plaster","concrete","terracotta","metal","timber","pavers","checker","none"]){
+      await page.getByLabel("wall texture",{exact:true}).selectOption(id);
+      await page.waitForTimeout(150);
+    }
+    await page.getByLabel("wall texture",{exact:true}).selectOption("brick");
+    await page.getByLabel("roof texture",{exact:true}).selectOption("terracotta");
+    await page.getByLabel("ground texture",{exact:true}).selectOption("pavers");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.deepEqual(business.draft.buildingDesign.textures,{wall:"brick",roof:"terracotta",ground:"pavers"});
+    await page.reload();
+    await page.getByRole("button",{name:"Branding",exact:true}).click();
+    assert.equal(await page.getByLabel("wall texture",{exact:true}).inputValue(),"brick");
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-textures.png"});
+    assert.deepEqual(errors,[]);
+    console.log("Texture choices, shader compilation and mocked save/reload passed.");await browser.close();process.exit(0);
+  }
   if (process.env.CITY_PRESET_THUMBNAILS === "1") {
     const {COMPOSITIONS} = await import("../src/domain/cityBuildingV3.ts");
     const {mkdir, writeFile} = await import("node:fs/promises");

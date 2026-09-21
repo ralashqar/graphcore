@@ -1,0 +1,138 @@
+[
+  {
+    "id": "Bricks051",
+    "source": "https://ambientcg.com/view?id=Bricks051",
+    "download": "https://ambientcg.com/get?file=Bricks051_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "c23d3d459e1a73f3d8a0b83606571c6172e485f544ff4605d1cb37eb637bfdfd",
+    "files": {
+      "Color": {
+        "file": "Bricks051-Color.webp",
+        "sha256": "9e8eaea40b78d10eeb0a6d8f81a663ebcc3d6616ad6e36cf04de738043d1119f"
+      },
+      "Roughness": {
+        "file": "Bricks051-Roughness.webp",
+        "sha256": "ecbbbd4d41423ce2d5da03301864fbee13bc335dc47eb9ceb0ccf0f0dbb0d9be"
+      }
+    }
+  },
+  {
+    "id": "PaintedPlaster017",
+    "source": "https://ambientcg.com/view?id=PaintedPlaster017",
+    "download": "https://ambientcg.com/get?file=PaintedPlaster017_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "bae0380d82b6ccac8943b4980417cb3c9de5c896218339c108056f1dfb8e886c",
+    "files": {
+      "Color": {
+        "file": "PaintedPlaster017-Color.webp",
+        "sha256": "ebba9364b965704672d555e619a2bf56026d1d4d68fed0152d2ae8c1bade7331"
+      },
+      "Roughness": {
+        "file": "PaintedPlaster017-Roughness.webp",
+        "sha256": "27d6f5801b46bb4a0b60d64f100e768f185f5bf4c832da19cce27ca78e6b7d8b"
+      }
+    }
+  },
+  {
+    "id": "Concrete034",
+    "source": "https://ambientcg.com/view?id=Concrete034",
+    "download": "https://ambientcg.com/get?file=Concrete034_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "5839d284d94ffb8d2a56df742ec522b13dd311c52dbd42b8fd33f0409ceedb81",
+    "files": {
+      "Color": {
+        "file": "Concrete034-Color.webp",
+        "sha256": "e10276b09ff619cd4d27a0049a87d3dded884e1a8c16a4777809bbc049cd9aac"
+      },
+      "Roughness": {
+        "file": "Concrete034-Roughness.webp",
+        "sha256": "f092f76825c84f8c82f9108c21b1401ab7389d63d1eea772704ecb9912e0479c"
+      }
+    }
+  },
+  {
+    "id": "RoofingTiles012A",
+    "source": "https://ambientcg.com/view?id=RoofingTiles012A",
+    "download": "https://ambientcg.com/get?file=RoofingTiles012A_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "ab6ac400cd849c76c636912186bfda8feab2b055fa107c5dbea0d3ebbaadd9cb",
+    "files": {
+      "Color": {
+        "file": "RoofingTiles012A-Color.webp",
+        "sha256": "b606ab8a0f437d27e6f9d0e1e5338ccd98e03faaedd7b1a64ab65fcb70db2321"
+      },
+      "Roughness": {
+        "file": "RoofingTiles012A-Roughness.webp",
+        "sha256": "5dff8612dc8e3e396a7ace05030c2b575a725fb3e89fb569d8ac525b01ca7a1e"
+      }
+    }
+  },
+  {
+    "id": "Metal032",
+    "source": "https://ambientcg.com/view?id=Metal032",
+    "download": "https://ambientcg.com/get?file=Metal032_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "9e4f363905a647958c273154fa125d2a6440892d0e583f9b3af24bb08b5afc3c",
+    "files": {
+      "Color": {
+        "file": "Metal032-Color.webp",
+        "sha256": "1713aaac14e04d28678561ba1a318ec0aaef723becd8cf986fe1cff24072dac6"
+      },
+      "Roughness": {
+        "file": "Metal032-Roughness.webp",
+        "sha256": "58b2911921ed4b90ad56ce89e73ad8cbd1e47a1a8c3d807a0032352d0ceec06e"
+      }
+    }
+  },
+  {
+    "id": "WoodSiding005",
+    "source": "https://ambientcg.com/view?id=WoodSiding005",
+    "download": "https://ambientcg.com/get?file=WoodSiding005_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "8c12da8c4c77617e5394d77c9f1c87c98fb0d12d7353948104c612dad05dec1a",
+    "files": {
+      "Color": {
+        "file": "WoodSiding005-Color.webp",
+        "sha256": "7c0e8a4acfef74db41e050895aa81b26f6f1c228c3c009aba5ffb8cb5e63ee99"
+      },
+      "Roughness": {
+        "file": "WoodSiding005-Roughness.webp",
+        "sha256": "645cef906130489e456be16c85fbbf50eead6b6065777529c75be616fdc539ed"
+      }
+    }
+  },
+  {
+    "id": "PavingStones036",
+    "source": "https://ambientcg.com/view?id=PavingStones036",
+    "download": "https://ambientcg.com/get?file=PavingStones036_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "91223aa46aa4275bb30df310fba788d8bfb740f2b1e9796ac0eb9a14f367e9ce",
+    "files": {
+      "Color": {
+        "file": "PavingStones036-Color.webp",
+        "sha256": "cd32ac907f68d62ee4286bf68463c4881bceb1e8f5f458f5c18cb986e16df9cc"
+      },
+      "Roughness": {
+        "file": "PavingStones036-Roughness.webp",
+        "sha256": "8c085a1c11beed7e4ff6854f1f1b98ae46bf0a66c851761d793bf5387e84ebc8"
+      }
+    }
+  },
+  {
+    "id": "Tiles074",
+    "source": "https://ambientcg.com/view?id=Tiles074",
+    "download": "https://ambientcg.com/get?file=Tiles074_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "28a40cb36d3c265f17c798c52aa3ea7cdcb8c949b80c49692b0a855e9637c677",
+    "files": {
+      "Color": {
+        "file": "Tiles074-Color.webp",
+        "sha256": "14a5174be81d0ec4cfbc058735bd3c39461f651c3b01404920b4117b3042e066"
+      },
+      "Roughness": {
+        "file": "Tiles074-Roughness.webp",
+        "sha256": "ffb81cf3ab37201ba0499aa1fccfd35ceb645f98c98923283ad48c0f3c208df6"
+      }
+    }
+  }
+]

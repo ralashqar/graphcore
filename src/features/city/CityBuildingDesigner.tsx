@@ -1,3 +1,4 @@
+import { CITY_TEXTURES, TEXTURE_IDS } from "../../domain/cityTexturePresets";
 import { advertisingLayout, AD_PLACEMENTS, AD_LABELS, DEFAULT_ADVERTISING } from "../../domain/cityAdvertising";
 import { presetCategory, roofVariants } from "../../domain/cityBuildingArchetypes";
 import { frontStructure } from "../../domain/cityBuildingEntrances";
@@ -867,6 +868,15 @@ export function CityBuildingDesigner(
                   Your business logo appears on the selected primary sign. Add
                   or change it in Business details below.
                 </p>
+                {d.version === 3 && <fieldset><legend>Surface textures</legend>
+                  <p>Tileable CC0 materials. Textures use their natural colours; choose Palette only to use your colour below.</p>
+                  {(["wall","roof","ground"] as const).map(role=><label key={role}>{role} texture
+                    <select aria-label={`${role} texture`} value={d.textures?.[role] || "none"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
+                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{CITY_TEXTURES[id].label}</option>)}
+                    </select>
+                    {d.textures?.[role] && d.textures[role]!=="none" && <img alt={`${role} texture sample`} width={72} height={72} src={`/city/textures/${CITY_TEXTURES[d.textures[role]!].asset}-Color.webp`}/>}
+                  </label>)}
+                </fieldset>}
                 {(["wall", "trim", "glass", "roof"] as const).map((k) => (
                   <label key={k}>
                     {k[0].toUpperCase() + k.slice(1)} colour<input

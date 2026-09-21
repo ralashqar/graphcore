@@ -1,3 +1,5 @@
+import { useThree } from "@react-three/fiber";
+import type { CityTextureId } from "../../domain/cityTexturePresets";
 import { bevelCityGeometry } from "./CityBevelGeometry";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
 import { residentDetails, type CityDetail } from "../../domain/cityStreaming";
@@ -40,6 +42,7 @@ export function CityDesignBuildings(
     zoom?: number;
   },
 ) {
+  const invalidate=useThree(s=>s.invalidate);
   const { plotAxis, plotSize } = useCityMapLayout();
   const nearby = useMemo(() =>
     new Set(
@@ -109,6 +112,7 @@ export function CityDesignBuildings(
         g.computeVertexNormals();
         return bevelCityGeometry(g);
       })(),
+      textured: new Map<string, ReturnType<typeof citySurfaceMaterial>>(),
       material: citySurfaceMaterial(),
       glass: citySurfaceMaterial(true),
     }),
@@ -123,6 +127,7 @@ export function CityDesignBuildings(
     resources.pediment.dispose();
     resources.tree.dispose();
     resources.roof.dispose();
+    resources.textured.forEach(m=>m.dispose());
     resources.material.dispose();
     resources.glass.dispose();
   }, [resources]);
@@ -147,7 +152,9 @@ export function CityDesignBuildings(
           if (kit && "fallback" in part && part.fallback &&
             ("fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
-          const key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : part.kind;
+          let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : part.kind;
+          const texture = d.version === 3 && key !== "glassBox" ? (part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
+          if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
             key: `${p.id}:${index}`,
             property: p,
@@ -156,7 +163,7 @@ export function CityDesignBuildings(
             z: plotAxis(p.z) + (z * c - x * s) * scale,
             scale: part.size.map((v) => v * scale) as [number, number, number],
             rotation: angle,
-            color: dim
+            color: texture && texture!=="none" ? (dim ? "#8c8c8c" : "#ffffff") : dim
               ? `#${new Color(part.color).multiplyScalar(.55).getHexString()}`
               : part.color,
           });
@@ -169,11 +176,13 @@ export function CityDesignBuildings(
           }
           const [x, y, z] = a.position;
           pack.get(a.asset)!.forEach((piece, partIndex) => {
-            const key = "asset|" + a.asset + "|" + partIndex;
+            let key = "asset|" + a.asset + "|" + partIndex;
             const role = (piece.material as MeshLambertMaterial).userData
               .cityPalette as "wall" | "trim" | "glass";
+            const texture=d.version===3 ? (a.role==="paving" ? d.textures?.ground : role==="wall" ? d.textures?.wall : undefined) : undefined;
+            if(texture && texture!=="none") key+="|"+texture;
             const tint = d.palette[a.role === "paving" ? "trim" : role];
-            (out[key] ||= []).push({
+          (out[key] ||= []).push({
               key: `${p.id}:asset:${index}`,
               property: p,
               x: plotAxis(p.x) + (x * c + z * s) * scale,
@@ -181,7 +190,7 @@ export function CityDesignBuildings(
               z: plotAxis(p.z) + (z * c - x * s) * scale,
               rotation: angle + a.rotation,
               scale: [scale * a.scale, scale * a.scale, scale * a.scale],
-              color: dim
+              color: texture && texture!=="none" ? (dim ? "#8c8c8c" : "#ffffff") : dim
                 ? `#${new Color(tint).multiplyScalar(.55).getHexString()}`
                 : tint,
             });
@@ -201,6 +210,10 @@ export function CityDesignBuildings(
     center?.x,
     center?.z,
   ]);
+  const textureMaterial=(id:string)=>{
+    if(!resources.textured.has(id))resources.textured.set(id,citySurfaceMaterial(false,id as CityTextureId,invalidate));
+    return resources.textured.get(id)!;
+  };
   return (
     <>
       {Object.entries(batches).filter(([, items]) => items.length).map((
@@ -209,10 +222,10 @@ export function CityDesignBuildings(
         <Batch
           key={kind}
           pieces={kind.startsWith("asset|")
-            ? [pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])]]
+            ? [{...pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])], ...(kind.split("|")[3] ? {material:textureMaterial(kind.split("|")[3])} : {})}]
             : [{
-              geometry: kind === "glassBox" ? resources.pane : resources[kind as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
-              material: kind === "glassBox" ? resources.glass : resources.material,
+              geometry: kind === "glassBox" ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
+              material: kind === "glassBox" ? resources.glass : kind.includes("|") ? textureMaterial(kind.split("|")[1]) : resources.material,
             }]}
           instances={items}
           onSelect={onSelect}

@@ -29,6 +29,7 @@ export function demoBuildingDesign(index: number, color: string) {
   d.roofVariant = pick(roofVariants(d));
   d.slots["ground.left"] = d.slots["ground.right"] = d.grounds === "minimal" ? null : d.grounds === "urban" ? "bollards" : "planter";
   const result = normalizeV3(d);
+  result.textures={wall:pick(["brick","plaster","concrete","timber","none"] as const),roof:pick(["terracotta","metal","concrete"] as const),ground:pick(["pavers","concrete","none"] as const)};
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);
