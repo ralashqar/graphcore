@@ -1,5 +1,5 @@
 """Export only curated CC0 Quaternius components. No GPL generator code used."""
-import bpy, json, pathlib, os, hashlib
+import bpy, bmesh, json, pathlib, os, hashlib
 from mathutils import Matrix, Vector
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 SOURCE=pathlib.Path(os.environ.get('CITY_MEGAKIT_SOURCE',r'C:\Users\daruk\Projects\GraphCore\Assets\Downtown City MegaKit[Source]'))
@@ -14,7 +14,7 @@ NAMES={
 'band':['Brick_BottomTrim','Brick_TopTrim','Marble_Plain_1','WhiteBrick_Plain_1','Metal_Plain_1'],
 'shell':['Brick_Window_Square_Single','Brick_RedWhite_DoubleWindow','WhiteBrick_Window_Center','Marble_Window_Single','Marble_ShopWindow','Metal_Window','Metal_FirstFloor_Wall','DoorFrame_Marble','DoorFrame_WhiteBrick','Prop_EntranceArch','Prop_ColumnArch','Roof_2x2','Floor_4x4','WhiteBrick_Corner_Plain','Marble_Corner_Plain'],
 'facadeChoices':['WhiteBrick_Window_L','WhiteBrick_Window_R','Trim_BayWindow','WornBrick_WindowLarge_Top','Brick_Plain_3_noWear','Brick_Inset','Metal_FirstFloor_Wall_1','Trim_FirstFloor_Wall','WornBrick_Inset_Plain','Concrete_Plain_4','Brick_Window_CurvedDouble','Brick_Inset_Window','Brick_Inset_Window_Curved','Brick_Inset_Window_Curved_Small','Brick_BayWindow','Marble_WindowTriple','Metal_FullWindow','Metal_Panel_4','Metal_Panel_Window_4','Metal_BayWindow_Bottom','Trim_Window','Trim_Plain_3','Trim_FirstFloor_Window_Columns','WornBrick_WindowLarge','WornBrick_WindowTriple','WornBrick_Plain_3','DoorFrame_WornBrick','Cornice_WornBrick_Center','Floor_BayWindow','Floor_Inset','Trim_BayWindow_Top','Trim_BayWindow_Corner_L','Trim_BayWindow_Corner_R'],
-'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble'],
+'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble','Prop_FireEscape_Bottom','Prop_FireEscape_Center','Prop_FireEscape_Top'],
 'architecturalCorners':['Brick_CornerColumn_Bottom', 'Brick_CornerColumn_Center', 'Brick_CornerColumn_Top', 'Brick_CornerColumn_Cap', 'Marble_BevelColumn_Bottom', 'Marble_BevelColumn_Top', 'Metal_Column_Bottom', 'Metal_Column_Center', 'Metal_Column_Top'],
 'connectedCornices':['Cornice_Brick_Center', 'Cornice_Brick_L', 'Cornice_Brick_R', 'Cornice_Brick_90Angle_L', 'Cornice_Brick_90Angle_R', 'Cornice_Marble_Center', 'Cornice_Marble_L', 'Cornice_Marble_R', 'Cornice_Marble_90Angle_L', 'Cornice_Marble_90Angle_R', 'Cornice_Metal_Center', 'Cornice_Metal_L', 'Cornice_Metal_R', 'Cornice_Metal_90Angle_L', 'Cornice_Metal_90Angle_R', 'Cornice_Small_Metal_Center', 'Cornice_Small_Metal_L', 'Cornice_Small_Metal_R', 'Cornice_Small_Metal_90Angle_L', 'Cornice_Small_Metal_90Angle_R', 'Cornice_WhiteBrick_Center', 'Cornice_WhiteBrick_L', 'Cornice_WhiteBrick_R', 'Cornice_WhiteBrick_90Angle_L', 'Cornice_WhiteBrick_90Angle_R', 'Cornice_Trim_Center', 'Cornice_Trim_L', 'Cornice_Trim_R', 'Cornice_Trim_90Angle_L', 'Cornice_Trim_90Angle_R'],
 'entrancePresets':['Door_2', 'Door_3', 'Door_4', 'DoorFrame_Wooden', 'DoorFrame_MetalBrick', 'Entrance_Concrete_2x2', 'Entrance_Marble_2x2'],
@@ -65,6 +65,20 @@ for kind,names in NAMES.items():
   family=next((f for f in ['WhiteBrick','Brick','Marble','Metal','Concrete'] if f in name),'generic')
   manifest[name]={'kind':kind,'family':family,'size':[round(hi[i]-lo[i],5) for i in range(3)],'mount':'rear-bottom-centre','front':[0,0,1],'materials':[s.material.name for s in o.material_slots],'compatible':[n for ns in NAMES.values() for n in ns if next((f for f in ['WhiteBrick','Brick','Marble','Metal','Concrete'] if f in n),'generic')==family],'sourceSha256':hashlib.sha256(file.read_bytes()).hexdigest()}
   exports.append(o);o.hide_set(True)
+# The bottom prefab includes ground access plus the first platform/flight.
+# Separate its low ladder so independent lobby heights do not stretch upper flights.
+source=next(o for o in exports if o.name=='Prop_FireEscape_Bottom')
+ladder=source.copy();ladder.data=source.data.copy();bpy.context.collection.objects.link(ladder)
+ladder.name='Prop_FireEscape_GroundAccess';ladder['assetKey']=ladder.name
+bm=bmesh.new();bm.from_mesh(ladder.data)
+bmesh.ops.bisect_plane(bm,geom=list(bm.verts)+list(bm.edges)+list(bm.faces),dist=.00001,plane_co=(0,0,3.27471),plane_no=(0,0,1),clear_outer=True,clear_inner=False)
+bm.to_mesh(ladder.data);bm.free()
+# Bottom's platform is 0.10594m off its bounding-box centre; use Center/Top pivot.
+ladder.data.transform(Matrix.Translation(Vector((-.10594368,0,0))))
+exports.append(ladder)
+points=[C.inverted()@v.co for v in ladder.data.vertices]
+lo=[min(v[i] for v in points) for i in range(3)];hi=[max(v[i] for v in points) for i in range(3)]
+manifest[ladder.name]={**manifest['Prop_FireEscape_Bottom'],'size':[round(hi[i]-lo[i],5) for i in range(3)],'boundsMin':[round(v,5) for v in lo],'mount':'fire-escape-platform-pivot','derivedFrom':'Prop_FireEscape_Bottom','derivation':'Ground ladder below platform; x aligned to Center/Top platform pivot'}
 bpy.ops.object.select_all(action='DESELECT')
 for o in exports:o.hide_set(False);o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'decorators.glb'),export_format='GLB',use_selection=True,export_yup=True,export_extras=True)

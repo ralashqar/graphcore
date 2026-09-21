@@ -445,6 +445,21 @@ export const KIT_DIMENSIONS: Record<string, readonly [number,number,number]> = {
     1.007594108581543,
     2.08196759223938
   ],
+  "Prop_FireEscape_Bottom": [
+    5.013209342956543,
+    6.347199440002441,
+    1.9757131338119507
+  ],
+  "Prop_FireEscape_Center": [
+    4.8013224601745605,
+    3.0724942684173584,
+    1.9757131338119507
+  ],
+  "Prop_FireEscape_Top": [
+    4.8013224601745605,
+    1.2821495532989502,
+    1.9757131338119507
+  ],
   "Brick_CornerColumn_Bottom": [
     1.2600000500679016,
     3,
@@ -709,5 +724,10 @@ export const KIT_DIMENSIONS: Record<string, readonly [number,number,number]> = {
     0.21626752614974976,
     0.8917761445045471,
     0.2273970991373062
+  ],
+  "Prop_FireEscape_GroundAccess": [
+    0.2312021255493164,
+    3.274709939956665,
+    0.5639910101890564
   ]
 };

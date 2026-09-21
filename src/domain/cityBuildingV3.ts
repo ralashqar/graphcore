@@ -1,4 +1,5 @@
-import { architecturalDetails, kitEntrance, kitRoofReason, type ArchitecturalKit } from "./cityArchitecturalKit.ts";
+import { fireEscape, type EscapeBounds } from "./cityFireEscape.ts";
+import { attachmentBounds, architecturalDetails, kitEntrance, kitRoofReason, type ArchitecturalKit } from "./cityArchitecturalKit.ts";
 import { KIT_DIMENSIONS } from "./cityKitDimensions.ts";
 import { nativeFacadeChoice, type NativeFacadeId } from "./cityNativeFacades.ts";
 import { NATIVE_MODULES } from "./cityNativeModules.ts";
@@ -50,7 +51,7 @@ export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & Groun
   nativeFacade?: NativeFacadeId;
   textures?: CityTextureChoices;
   solidSideWalls?: boolean;
-  stairExtension?: "none" | "concrete" | "marble";
+  stairExtension?: "none" | "concrete" | "marble" | "fire-escape";
   advertising?: Advertising;
   version: 3;
   generatorRevision: "city-grammar-1";
@@ -354,8 +355,8 @@ export function classifyCorners(masses: BuildingMass[]): Corner[] {
   return [...seen.values()];
 }
 export function overlaps(
-  a: { position: number[]; size: number[] },
-  b: { position: number[]; size: number[] },
+  a: { position: readonly number[]; size: readonly number[] },
+  b: { position: readonly number[]; size: readonly number[] },
 ) {
   return a.position.every((v, i) =>
     Math.abs(v - b.position[i]) < (a.size[i] + b.size[i]) / 2 - .001
@@ -586,7 +587,7 @@ export function resolveV3(
   let stairLanding=1.26;
   let extensionWall: typeof walls[number] | undefined;
   let extensionReason: string | null = null;
-  if (d.stairExtension && d.stairExtension !== "none") {
+  if (d.stairExtension && d.stairExtension !== "none" && d.stairExtension !== "fire-escape") {
     extensionReason = d.finish === "procedural" ? "Choose Quaternius accents or facade for native stairs." : "No clear side wall has room for stairs inside this plot.";
     if (d.finish !== "procedural") {
       for (const wall of walls.filter(w=>w.y===.65 && w.nx!==0 && w.length>=4).sort((a,b)=>b.nx-a.nx || a.z-b.z)) {
@@ -611,6 +612,11 @@ export function resolveV3(
       }
     }
   }
+  const escape = d.stairExtension === "fire-escape" ? fireEscape(walls,masses,[
+    ...slots.filter(s=>s.active).map(s=>({position:s.position,size:s.size})),
+    ...advertising.signs.map(s=>({position:[s.x,s.y,s.z],size:[s.rotation?.6:s.width,s.height,s.rotation?s.width:.6]} as EscapeBounds)),
+  ]) : null;
+  if(escape)extensionReason=d.finish==="procedural"?"Choose Quaternius accents or facade for exterior stairs.":escape.reason;
   const surface =
     { garden: "#8c9d77", limestone: "#d5ceba", slate: "#7b8587" }[d.tile];
   box(0, .05, 0, 23.5, .24, 23.5, p.trim);
@@ -1040,7 +1046,7 @@ export function resolveV3(
       }
     }
   }
-  const kitResult=kit ? architecturalDetails({kit,family:detailArchitecture,walls,corners,masses,entrance:{z:entrance.z,width:entryWidth},slots,signs,lod,roofActive,equipmentAllowed:!roofActive && (d.roof==="flat"||d.roof==="parapet") && (!d.roofVariant||d.roofVariant==="standard") && d.crown!=="terrace",seed:d.facadeSeed,clearances:extensionWall?[{position:[extensionWall.x,stairLanding+NATIVE_MODULES.Door_1.height/2,extensionWall.z],size:[.8,NATIVE_MODULES.Door_1.height+.2,NATIVE_MODULES.Door_1.width+.3]}]:[]}) : {parts:[],attachments:[],notes:[]};
+  const kitResult=kit ? architecturalDetails({kit,family:detailArchitecture,walls,corners,masses,entrance:{z:entrance.z,width:entryWidth},slots,signs,lod,roofActive,equipmentAllowed:!roofActive && (d.roof==="flat"||d.roof==="parapet") && (!d.roofVariant||d.roofVariant==="standard") && d.crown!=="terrace",seed:d.facadeSeed,clearances:extensionWall?[{position:[extensionWall.x,stairLanding+NATIVE_MODULES.Door_1.height/2,extensionWall.z],size:[.8,NATIVE_MODULES.Door_1.height+.2,NATIVE_MODULES.Door_1.width+.3]}]:(escape?.bounds?[escape.bounds]:[])}) : {parts:[],attachments:[],notes:[]};
   // Connected planters replace their single-piece counterpart only when the run fits.
   for(const a of kitResult.attachments.filter(a=>a.role==="planter-run"&&a.asset==="Prop_Planter_Center")){
     const index=attachments.findIndex(old=>old.asset==="Prop_Planter_Single"&&Math.abs(old.position[0]-a.position[0])<.01);
@@ -1050,6 +1056,15 @@ export function resolveV3(
   parts.push(...kitResult.parts);
   attachments.push(...kitResult.attachments);
   parts.push(...advertising.parts);
+  if(escape?.bounds && d.finish!=="procedural" && lod!=="far") {
+    // The stair envelope owns projecting decoration, never structural wall panels.
+    for(let i=attachments.length-1;i>=0;i--) {
+      const a=attachments[i];
+      if(["cornice","column","accent","band","canopy","planter","rails"].includes(a.role) && KIT_DIMENSIONS[a.asset] && overlaps(escape.bounds,attachmentBounds(a))) attachments.splice(i,1);
+    }
+    attachments.push(...escape.attachments);
+  }
+
   return {
     parts,
     attachments,

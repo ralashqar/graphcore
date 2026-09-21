@@ -175,3 +175,8 @@ Deno.test("grass textures and legacy checker recipes remain valid", () => {
   assert.deepEqual(buildingDesignSchema.parse(recipe), recipe);
  }
 });
+
+Deno.test("multi-storey exterior stairs persist independently from entrance steps",()=>{
+ const recipe={...newDesign("escape"),stairExtension:"fire-escape"};
+ assert.deepEqual(buildingDesignSchema.parse(recipe),recipe);
+});

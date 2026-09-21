@@ -72,6 +72,11 @@ if(process.env.CITY_ENTRANCE_AUDIT === "1"){
  const {demoBuildingDesign}=await import("../src/domain/cityDemoDesign.ts");
  business.draft={...profile,buildingDesign:demoBuildingDesign(63,"#c6a262")};business.preview=business.draft;
 }
+if(process.env.CITY_FIRE_ESCAPE_AUDIT === "1") {
+ const {newDesign,normalizeV3}=await import("../src/domain/cityBuildingV3.ts");
+ profile.buildingDesign=normalizeV3({...newDesign("escape-browser"),blueprint:"office",width:12,depth:10,podium:false,crown:"none",middleFloors:3,finish:"facade",slots:{},solidSideWalls:true});
+ business.draft=structuredClone(profile);business.published=structuredClone(profile);
+}
 const errors = [];
 const browser = await chromium.launch({
   headless: true,
@@ -237,6 +242,18 @@ try {
     assert.deepEqual(errors,[]);
     console.log("All 39 native modules, mocked save/reload, undo/redo and mobile layout passed.");
     await browser.close();process.exit(0);
+  }
+  if (process.env.CITY_FIRE_ESCAPE_AUDIT === "1") {
+    await page.getByLabel("Side stairs",{exact:true}).selectOption("fire-escape");
+    await page.waitForTimeout(1800);
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-fire-escape.png"});
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.stairExtension,"fire-escape");
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="Side stairs"]')?.value === "fire-escape");
+    assert.deepEqual(errors,[]);
+    console.log("Exterior stairs rendering and mocked save/reload passed.");await browser.close();process.exit(0);
   }
   if (process.env.CITY_GRASS_AUDIT === "1") {
     await page.getByRole("button",{name:"Branding",exact:true}).click();

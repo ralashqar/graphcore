@@ -837,7 +837,7 @@ export function CityBuildingDesigner(
                 </label>
                 <label><input type="checkbox" checked={!!d.solidSideWalls} onChange={e=>commit({...d,solidSideWalls:e.target.checked,finish:e.target.checked?"facade":d.finish})}/>Solid side walls with native panels</label>
                 <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,finish:d.finish==="procedural"?"accents":d.finish})}>
-                  <option value="none">None</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
+                  <option value="none">None</option><option value="fire-escape">Multi-storey apartment fire escape</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
                 </select></label>
                 {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
                 <small>Accents add entrances with solid architectural trim. Façade mode builds a native panel shell with connected corners, floor tiles and door openings; accent placement does not limit structural coverage. Windows retain uniform proportions; plain infill panels fit the remaining spans. Unsupported roof shapes retain generated geometry.</small>

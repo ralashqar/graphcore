@@ -32,6 +32,11 @@ The shared profile validator is imported by city-api, city-command, city-buildin
 
 ## Overview
 
+### City multi-storey exterior stairs (September 2026)
+
+Building recipes accept `stairExtension: fire-escape`, separate from concrete/marble entrance steps. Quaternius platform/flight/top modules follow floor heights; a source-derived ground ladder handles lobby height independently. Full-height flat-wall, sign/slot and plot clearances gate placement. Shared validation and worker `2026-09-22-city-design-3.12` require matching City endpoint/world-worker staging rollout before hosted saving. No migration, provider call or production activation.
+
+
 ### City grass texture presets (September 2026)
 
 Three CC0 ambientCG grass materials add short lawn, natural grass and lush garden grass, using the existing packed height/roughness shader. Checkerboard is removed from editing and demo selection; legacy texture IDs resolve to paving and legacy checker paving resolves to classic. Shared recipe validation accepts the new IDs. World worker version is `2026-09-22-city-design-3.11`; matching City endpoints and world worker require staging rollout before hosted saving. No migration or paid generation is required.

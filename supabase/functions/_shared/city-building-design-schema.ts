@@ -57,7 +57,7 @@ const v3 = z.object({
   architecturalKit: z.object({corners:z.enum(KIT_CORNERS).optional(),roofline:z.enum(KIT_ROOFLINES).optional(),entrance:z.enum(KIT_ENTRANCES).optional(),frontage:z.enum(KIT_FRONTAGES).optional(),roof:z.enum(KIT_ROOFS).optional(),entranceSteps:z.boolean().optional(),connectedPlanters:z.boolean().optional(),stairRails:z.boolean().optional(),ornaments:z.boolean().optional(),rooftopUnits:z.boolean().optional()}).strict().optional(),
   nativeFacade: z.enum(NATIVE_FACADE_IDS).optional(),
   solidSideWalls: z.boolean().optional(),
-  stairExtension: z.enum(["none","concrete","marble"]).optional(),
+  stairExtension: z.enum(["none","concrete","marble","fire-escape"]).optional(),
   textures: z.object({wall:z.enum(TEXTURE_IDS).optional(),roof:z.enum(TEXTURE_IDS).optional(),ground:z.enum(TEXTURE_IDS).optional(),wallBorder:z.enum([...TEXTURE_IDS,"primary"]).optional(),groundBorder:z.enum([...TEXTURE_IDS,"primary"]).optional()}).strict().optional(),
   advertising: z.object({placements:z.array(z.enum(AD_PLACEMENTS)).max(2).refine(v=>new Set(v).size===v.length,"Duplicate placements"),width:z.number().min(3).max(18),height:z.number().min(2).max(24),style:z.enum(["image","text"])}).strict().optional(),
   entranceStyle: z.enum(ENTRANCE_STYLES).optional(),
