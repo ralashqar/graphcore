@@ -1,3 +1,5 @@
+import { NATIVE_FACADES, type NativeFacadeId } from "../../domain/cityNativeFacades";
+import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { CITY_TEXTURES, TEXTURE_IDS } from "../../domain/cityTexturePresets";
 import { advertisingLayout, AD_PLACEMENTS, AD_LABELS, DEFAULT_ADVERTISING } from "../../domain/cityAdvertising";
 import { presetCategory, roofVariants } from "../../domain/cityBuildingArchetypes";
@@ -770,7 +772,7 @@ export function CityBuildingDesigner(
                 </label>
                 <label>
                   Quaternius detail set<select aria-label="Quaternius detail set" value={d.detailSet ?? "matching"}
-                    onChange={(e) => commit({ ...d, detailSet: e.target.value as typeof d.detailSet, finish: d.finish === "procedural" ? "accents" : d.finish })}>
+                    onChange={(e) => commit({ ...d, detailSet: e.target.value as typeof d.detailSet, nativeFacade: "automatic", finish: d.finish === "procedural" ? "accents" : d.finish })}>
                     <option value="matching">Match architectural style</option>
                     <option value="brick">Brick and framed windows</option>
                     <option value="white-brick">White brick and light trim</option>
@@ -778,6 +780,19 @@ export function CityBuildingDesigner(
                     <option value="metal">Metal office detailing</option>
                   </select>
                 </label>
+                <label>
+                  Quaternius facade module<select aria-label="Quaternius facade module" value={d.nativeFacade ?? "automatic"}
+                    onChange={e=>commit({...d,nativeFacade:e.target.value as NativeFacadeId,finish:"facade"})}>
+                    <option value="automatic">Automatic - prefer framed and recessed modules</option>
+                    {(["brick","creative","boutique","glass"] as const).map(family=><optgroup key={family} label={ARCHITECTURE_LABELS[family]}>
+                      {NATIVE_FACADES.filter(p=>p.family===family).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}
+                    </optgroup>)}
+                  </select>
+                </label>
+                <small>The detail set chooses a family. The facade module chooses the actual windows and wall assembly; selecting one enables full Quaternius facade mode.</small>
+                {NATIVE_FACADES.filter(p=>p.id===d.nativeFacade).map(p=><small key={p.id}>
+                  {p.relief}. Native module {NATIVE_MODULES[p.asset].span.toFixed(1)} x {NATIVE_MODULES[p.asset].height.toFixed(1)} m, {NATIVE_MODULES[p.asset].depth.toFixed(2)} m model depth. Frames keep their proportions; exposed panel edges receive inward returns.
+                </small>)}
                 <label>
                   Accent placement<select aria-label="Detail placement" value={d.detailScope ?? "all"}
                     onChange={(e) => update("detailScope", e.target.value as typeof d.detailScope)}>

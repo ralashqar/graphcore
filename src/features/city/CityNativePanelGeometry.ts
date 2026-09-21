@@ -18,7 +18,7 @@ export function closeNativePanel(source:BufferGeometry, module:typeof NATIVE_MOD
  const extra:number[]=[],extraNormals:number[]=[],extraUv:number[]=[],extraSources:number[]=[];
  const back=module.face-.24;
  const perimeter=(a:Vector3,b:Vector3)=>
-  [-module.width/2,module.width/2].some(x=>Math.abs(a.x-x)<.004&&Math.abs(b.x-x)<.004)||
+  [-module.width/2,module.width/2,module.center-module.span/2,module.center+module.span/2].some(x=>Math.abs(a.x-x)<.004&&Math.abs(b.x-x)<.004)||
   [0,module.height].some(y=>Math.abs(a.y-y)<.004&&Math.abs(b.y-y)<.004);
  for(const {a,b,count} of edges.values()){
   const p=point(a),q=point(b);

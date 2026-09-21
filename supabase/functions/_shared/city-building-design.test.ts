@@ -144,3 +144,18 @@ Deno.test("native side wall and stair settings persist and reject unknown assets
  assert.deepEqual(buildingDesignSchema.parse(d),d);
  assert.throws(()=>buildingDesignSchema.parse({...d,stairExtension:"external-model"}));
 });
+import { NATIVE_FACADE_IDS } from "../../../src/domain/cityNativeFacades.ts";
+Deno.test("curated native facade selections survive profile validation and reject arbitrary models",()=>{
+ const owner="11111111-1111-4111-8111-111111111111";
+ for(const nativeFacade of NATIVE_FACADE_IDS){
+  const recipe={...newDesign("catalogue"),nativeFacade};
+  const parsed=buildingDesignSchema.parse(recipe);
+  assert.equal(parsed.version,3);
+  assert.equal("nativeFacade" in parsed ? parsed.nativeFacade : undefined,nativeFacade);
+  const profile=parseProfile({...emptyCityProfile(),name:"Catalogue",website:"https://example.com",description:"Native facade fixture",buildingDesign:recipe},owner);
+  assert.equal(profile.buildingDesign && "nativeFacade" in profile.buildingDesign ? profile.buildingDesign.nativeFacade : undefined,nativeFacade);
+ }
+ assert.throws(()=>buildingDesignSchema.parse({...newDesign("catalogue"),nativeFacade:"../../custom.glb"}));
+ const legacy={...newDesign("catalogue")};delete legacy.nativeFacade;
+ assert.equal("nativeFacade" in buildingDesignSchema.parse(legacy),false);
+});

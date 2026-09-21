@@ -1,3 +1,4 @@
+import { NATIVE_FACADE_IDS } from "../../../src/domain/cityNativeFacades.ts";
 import { TEXTURE_IDS } from "../../../src/domain/cityTexturePresets.ts";
 import { AD_PLACEMENTS } from "../../../src/domain/cityAdvertising.ts";
 import { ARCHETYPES, ROOF_VARIANTS, roofVariants } from "../../../src/domain/cityBuildingArchetypes.ts";
@@ -52,6 +53,7 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.literal("city-grammar-1"),
+  nativeFacade: z.enum(NATIVE_FACADE_IDS).optional(),
   solidSideWalls: z.boolean().optional(),
   stairExtension: z.enum(["none","concrete","marble"]).optional(),
   textures: z.object({wall:z.enum(TEXTURE_IDS).optional(),roof:z.enum(TEXTURE_IDS).optional(),ground:z.enum(TEXTURE_IDS).optional(),wallBorder:z.enum([...TEXTURE_IDS,"primary"]).optional(),groundBorder:z.enum([...TEXTURE_IDS,"primary"]).optional()}).strict().optional(),

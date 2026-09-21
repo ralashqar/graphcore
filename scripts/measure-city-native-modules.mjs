@@ -5,7 +5,7 @@ const doc=await new NodeIO().read("public/city/decorators/decorators.glb");
 const records={};
 for(const node of doc.getRoot().listNodes()){
  const name=node.getName();
- if(!/^(Brick|WhiteBrick|Marble|Metal|Concrete)_(Window|RedWhite|ShopWindow|FirstFloor|Plain)|^Door(Frame)?_|^Stairs_Entrance_/.test(name))continue;
+ if(!/^(Brick|WhiteBrick|Marble|Metal|Concrete|WornBrick|Trim)_(Window|RedWhite|ShopWindow|FirstFloor|Plain|Inset_Window|BayWindow|FullWindow|Panel)|^Door(Frame)?_|^Stairs_Entrance_/.test(name))continue;
  const primitives=node.getMesh()?.listPrimitives()||[];
  const points=primitives.flatMap(p=>{const a=p.getAttribute("POSITION");return Array.from({length:a.getCount()},(_,i)=>a.getElement(i,[]));});
  const lo=[0,1,2].map(i=>Math.min(...points.map(p=>p[i]))),hi=[0,1,2].map(i=>Math.max(...points.map(p=>p[i])));
@@ -19,13 +19,21 @@ for(const node of doc.getRoot().listNodes()){
   }
  }
  let left=lo[0],right=hi[0];
+ // Projecting mouldings can overhang the structural bay (notably Brick_BayWindow).
+ // Full-height structural surfaces determine its packing cell, not that overhang.
+ for(const p of primitives){
+  if(/glass|interior/i.test(p.getMaterial()?.getName()||""))continue;
+  const a=p.getAttribute("POSITION"),v=Array.from({length:a.getCount()},(_,i)=>a.getElement(i,[]));
+  const min=[0,1,2].map(i=>Math.min(...v.map(p=>p[i]))),max=[0,1,2].map(i=>Math.max(...v.map(p=>p[i])));
+  if(min[1]<.004 && max[1]>hi[1]-.004 && max[0]-min[0]>(hi[0]-lo[0])*.85 && max[0]-min[0]<right-left){left=min[0];right=max[0];}
+ }
  // A full-height rear sheet records the intended rectangular packing cell.
  // A few WhiteBrick modules contain a 2 mm protruding detail outside that cell.
  for(const p of primitives){
   if(!/glass|interior/i.test(p.getMaterial()?.getName()||""))continue;
   const a=p.getAttribute("POSITION"),v=Array.from({length:a.getCount()},(_,i)=>a.getElement(i,[]));
   const min=[0,1,2].map(i=>Math.min(...v.map(p=>p[i]))),max=[0,1,2].map(i=>Math.max(...v.map(p=>p[i])));
-  if(max[0]-min[0]>(hi[0]-lo[0])*.95 && max[1]>hi[1]-.001 && max[2]-min[2]<.001){left=min[0];right=max[0];break;}
+  if(max[0]-min[0]>(hi[0]-lo[0])*.9 && max[1]>hi[1]-.001 && max[2]-min[2]<.001){left=min[0];right=max[0];break;}
  }
  let opening;
  if(name.startsWith("DoorFrame")){

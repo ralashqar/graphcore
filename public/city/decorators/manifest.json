@@ -38,7 +38,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "6f137c6f101dd37a492ad164dac318598aba6f30475ec2da8aa41e35ff6ccd45",
       "attachmentType": "facade.bay",
@@ -122,6 +132,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "04df40c2030b6b158dd766ce7d44fa751a6ce36a17f35d1b74aa3836b5c437c4",
@@ -164,7 +175,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "630f11be07b0a72e5c884528877d510602896e170d13dc906bcb5a0e22f79e79",
       "attachmentType": "facade.bay",
@@ -207,7 +222,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "c7e84e38230a3e6231d28354ed7be0896469897bbe3b626b9115cacdca870f7a",
       "attachmentType": "facade.bay",
@@ -250,7 +275,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "95624f083d56c171943a067e2534e180899f6fd69c3f9a9ac9a55f918104f1a7",
       "attachmentType": "facade.bay",
@@ -360,6 +395,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "f6668f6f3f5aa256d2544de92f5bb2a8c51d889af9d1be90a38f5c22ef73ccde",
@@ -401,7 +437,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "5cd710f0e57a3690ccbe965d02d39bf95879a1cfb0a0a530d66cdf4cf8f32b9e",
       "attachmentType": "facade.bay",
@@ -440,6 +480,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "a93652dac15f07c56f859b80eb9a075ec09c57b5e9dc08460fed22e491e1150b",
@@ -508,6 +549,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -550,6 +599,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -594,7 +651,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "c95b028dbedbd4509b113480265a24f03c0c0aaeac136d72d8f8c93330144ba9",
       "attachmentType": "entrance",
@@ -636,7 +697,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "5246e328644ba0fe95fa5f80dd573749bdb85ce963d1ffaeff1795d6176a720a",
       "attachmentType": "roof.edge",
@@ -678,7 +749,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "2e48cc9e05614ff599272be258f8aff8d31272751e35a16dc8e8b11569280f74",
       "attachmentType": "roof.edge",
@@ -720,7 +801,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "09ec4d2824a81387554f2b878a8bc1610e6cdce8bbfe4bef1b8c0f8a4e84749d",
       "attachmentType": "roof.edge",
@@ -762,7 +853,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "f4881d48c6ebc4e95bbbad5dfc5f89d7b8aee14619cd76b0cbc0ffe7c4a29dd0",
       "attachmentType": "roof.edge",
@@ -838,6 +939,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "8f00418b36a05e749dee230689afcedffa0a5ef0298d879cb2a6fea0a9f079c2",
@@ -878,7 +980,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "62357dce45d6d4d3a5b3c5725bad3836cc562f120e2d624fe7c3e9aa7462f586",
       "attachmentType": "roof.edge",
@@ -918,7 +1024,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "1bf0c26073d07e589f71a3cf42ea677ef47e7b395591b7ee0933e2cdb7232928",
       "attachmentType": "roof.edge",
@@ -958,7 +1068,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "50a48410042fb37801fa2368a3e90b4dff99eef4429fafb9234d2be7de244836",
       "attachmentType": "roof.edge",
@@ -998,7 +1112,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "d9a0955c27122d76050a164d55bc23b06a843f4d2dff98fcbf2bf79e3e2c46e3",
       "attachmentType": "roof.edge",
@@ -1041,7 +1159,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "637c00c996f0e7514a702282e4e3da12c8f8dbabf970cf6c35c360acd041ecc4",
       "attachmentType": "facade.corner",
@@ -1116,7 +1244,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "0e0da7a30b3211a9a45fc3f633349dc7658f1e8131e4e33055567ed808a1ef4f",
       "attachmentType": "facade.corner",
@@ -1192,7 +1330,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "cc4c580167368a918e24c4f8718e6e230db4c41f766ccbfa6e28f31ef818fcb7",
       "attachmentType": "facade.corner",
@@ -1231,6 +1373,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "1bbe316f6f6b2ca825658a63ced21de6d6a42de4885e2954814a6fe657698e9e",
@@ -1277,7 +1420,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "a4cb8bfad5a988dd1a0a413e4bd0d9a87bd135e4c62bcd482dc51e29fb197416",
       "attachmentType": "facade.bay",
@@ -1321,7 +1474,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "e8a9deae7970e1062cd53a87c1c3bc403e2ff3a377a82c6e46ddb1262cc3c762",
       "attachmentType": "facade.bay",
@@ -1360,6 +1517,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -1407,7 +1572,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "e1bfd82b701112fbcdac9f7d2800e3a1e84303ac1bbcbe444fee5d1c14d4a761",
       "attachmentType": "facade.band",
@@ -1451,7 +1626,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "cc1933df9f214dfa809abf3116deebecae5e268f7551a78e886104751188dc42",
       "attachmentType": "facade.band",
@@ -1491,6 +1676,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "83edfbddd0fc353553cc73d338fedd4ee0de92291d9284e49759ae0881e79318",
@@ -1569,7 +1755,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "f6bf4fd831ef4dbcfc3d69eda24b3c94924a7489b935e0a62e40c8a394656557",
       "attachmentType": "facade.band",
@@ -1615,7 +1805,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "e6b7c79851d6b63c3bb520fa83e985bfc8de80252321d40269f7fab9ff4900f2",
       "attachmentType": "shell.module",
@@ -1662,7 +1862,17 @@
         "Brick_BottomTrim",
         "Brick_TopTrim",
         "Brick_Window_Square_Single",
-        "Brick_RedWhite_DoubleWindow"
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
       ],
       "sourceSha256": "1249a685bc316a2eff7fd1e0947a123f5f9f23f9307ed91ebbf33e3056ae1f49",
       "attachmentType": "shell.module",
@@ -1745,6 +1955,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "d3c7577c05aab1945c1bd267cb0aa682e89f00e26bae998ae43c56998a68a325",
@@ -1788,6 +1999,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "1123c525ee7ab5b0bbdc82f2b427626b35595ad67ffb0596718436d7c521791e",
@@ -1832,7 +2044,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "05671787a18a709e3c7cbda40793e5a6f0b81a77cbcfece85439a7f7e6532cca",
       "attachmentType": "shell.module",
@@ -1874,7 +2090,11 @@
         "Metal_FirstFloor_Window",
         "Metal_Plain_1",
         "Metal_Window",
-        "Metal_FirstFloor_Wall"
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
       ],
       "sourceSha256": "f41f2e2e10b9aff5056bd86255c302852203104ef6e72a5470999d8c4e1baa6d",
       "attachmentType": "shell.module",
@@ -1916,6 +2136,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "49d7bd1fa545f80fe14957b958b6b90afa2734b862be591a90cf135ab1fba13c",
@@ -1992,6 +2213,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2031,6 +2260,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2070,6 +2307,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2110,6 +2355,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2190,6 +2443,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "369e9df572cb421f3103c0a34f9ce674397854ef7471ebc652fee611fc7f0e88",
@@ -2198,6 +2452,1176 @@
         2.0,
         3.0,
         2.0
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_Window_CurvedDouble": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.26051
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_RedBrick_Pale",
+        "Decor_MI_InteriorWall",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "0a2b821bf43ecdd6b207b853d2e97c5569c3e6f4200db7cd83bf48fc58525112",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.26051
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_Inset_Window": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.37428
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_RedBrick_Pale",
+        "Decor_MI_Trim",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "a12da2457717bb36871bbf91a2f27aba35dfd743a3c7c3e629302d287f5056dc",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.37428
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_Inset_Window_Curved": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.37368
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_RedBrick_Pale",
+        "Decor_MI_Trim",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "5a17722e4e1ef695a41dd0ac5ed36c9e81b65cf8bd3711a82c0ef840d0dcc004",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.37368
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_Inset_Window_Curved_Small": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.34264
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_RedBrick_Pale",
+        "Decor_MI_Trim",
+        "Decor_MI_Glass",
+        "Decor_MI_InteriorWall",
+        "Decor_MI_FakeInterior"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "ba37fce7b8e8cf578974d39090750b1d0329e86c1921faa9fd347c3a5e87455d",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.34264
+      ],
+      "detailLevel": "near"
+    },
+    "Brick_BayWindow": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.22729,
+        3.00021,
+        1.39324
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_Trim_Dark",
+        "Decor_MI_RedBrick",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "da9f455d87632140db4595baf76357749495ea080f526b98b347351962be7044",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.22729,
+        3.00021,
+        1.39324
+      ],
+      "detailLevel": "near"
+    },
+    "Marble_WindowTriple": {
+      "kind": "facadeChoices",
+      "family": "Marble",
+      "size": [
+        4.0,
+        4.0,
+        0.30446
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_Ornaments",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Marble_Window",
+        "Marble_Plain_3",
+        "Entrance_Marble_2x1",
+        "Cornice_Marble_Center",
+        "Marble_BevelColumn_Center",
+        "Marble_Plain_1",
+        "Marble_Window_Single",
+        "Marble_ShopWindow",
+        "DoorFrame_Marble",
+        "Marble_Corner_Plain",
+        "Marble_WindowTriple",
+        "Stairs_Entrance_Marble"
+      ],
+      "sourceSha256": "7af28fed1ef132d4ba3531a76aae628bd24499427d19bb05ea1172c2372253f7",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        4.0,
+        0.30446
+      ],
+      "detailLevel": "near"
+    },
+    "Metal_FullWindow": {
+      "kind": "facadeChoices",
+      "family": "Metal",
+      "size": [
+        2.0,
+        3.0,
+        0.2311
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior"
+      ],
+      "compatible": [
+        "Metal_Window_Half",
+        "Metal_Plain_3",
+        "DoorFrame_Metal_Single",
+        "Cornice_Metal_Center",
+        "Cornice_Metal_L",
+        "Cornice_Metal_R",
+        "Cornice_Metal_90Angle_L",
+        "Metal_Column_Small_Center",
+        "Metal_FirstFloor_Window",
+        "Metal_Plain_1",
+        "Metal_Window",
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
+      ],
+      "sourceSha256": "6bbba31f78e8c4fb22c2774b607e72ac858a61963270881f56f3bc19dec6f2d6",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2311
+      ],
+      "detailLevel": "near"
+    },
+    "Metal_Panel_4": {
+      "kind": "facadeChoices",
+      "family": "Metal",
+      "size": [
+        4.0,
+        4.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Metal_Window_Half",
+        "Metal_Plain_3",
+        "DoorFrame_Metal_Single",
+        "Cornice_Metal_Center",
+        "Cornice_Metal_L",
+        "Cornice_Metal_R",
+        "Cornice_Metal_90Angle_L",
+        "Metal_Column_Small_Center",
+        "Metal_FirstFloor_Window",
+        "Metal_Plain_1",
+        "Metal_Window",
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
+      ],
+      "sourceSha256": "3a243af33ecb3c139393ff123d79b208e1d45037739a1001ce5752e212487d66",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        4.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "Metal_Panel_Window_4": {
+      "kind": "facadeChoices",
+      "family": "Metal",
+      "size": [
+        4.0,
+        4.0,
+        0.28652
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Metal_Window_Half",
+        "Metal_Plain_3",
+        "DoorFrame_Metal_Single",
+        "Cornice_Metal_Center",
+        "Cornice_Metal_L",
+        "Cornice_Metal_R",
+        "Cornice_Metal_90Angle_L",
+        "Metal_Column_Small_Center",
+        "Metal_FirstFloor_Window",
+        "Metal_Plain_1",
+        "Metal_Window",
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
+      ],
+      "sourceSha256": "8d33c25c07c8a1b285f76f078738c62f46b6994da6d2f9ecce7858d3df6a8221",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        4.0,
+        0.28652
+      ],
+      "detailLevel": "near"
+    },
+    "Metal_BayWindow_Bottom": {
+      "kind": "facadeChoices",
+      "family": "Metal",
+      "size": [
+        4.0,
+        3.00059,
+        1.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Metal_Window_Half",
+        "Metal_Plain_3",
+        "DoorFrame_Metal_Single",
+        "Cornice_Metal_Center",
+        "Cornice_Metal_L",
+        "Cornice_Metal_R",
+        "Cornice_Metal_90Angle_L",
+        "Metal_Column_Small_Center",
+        "Metal_FirstFloor_Window",
+        "Metal_Plain_1",
+        "Metal_Window",
+        "Metal_FirstFloor_Wall",
+        "Metal_FullWindow",
+        "Metal_Panel_4",
+        "Metal_Panel_Window_4",
+        "Metal_BayWindow_Bottom"
+      ],
+      "sourceSha256": "d9b40fbf3d4257873aedec74e3fc11832b989ec0d53af751e059d27a6081955b",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.00059,
+        1.2
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_Window": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        2.0,
+        3.0,
+        0.23975
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Glass",
+        "Decor_MI_Trim_Dark",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "4aeb1e8759a8e5d4cf8c324c9156526b10e9766d61b5dbbb095bd114c5320936",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.23975
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_Plain_3": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "6e39dfdbc8dc512649f0a76ef6eb008e8c648312915d85143baac320eae7d43c",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_FirstFloor_Window_Columns": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        2.14694,
+        2.33727,
+        0.09213
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim_Green"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "97da02e9f0bbbc9036d282a49f50fca7f4383ba176a31035abe0f22db3f0afe7",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.14694,
+        2.33727,
+        0.09213
+      ],
+      "detailLevel": "near"
+    },
+    "WornBrick_WindowLarge": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_WornBrick",
+        "Decor_MI_InteriorWall",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "d22c0bb5c6db7c1700d1f4a981f210bbd3e2d9db259c7f82737c722795dbe421",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "WornBrick_WindowTriple": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.22219
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_WornBrick",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass",
+        "Decor_MI_FakeInterior",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "c79cea8246cead28e6e8f1800d5374c1bd6b0f2c301ad6ef5abc8898c6c4990e",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.22219
+      ],
+      "detailLevel": "near"
+    },
+    "WornBrick_Plain_3": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_WornBrick",
+        "Decor_MI_InteriorWall"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "1f4389cfcf7d12e994545e6669e871479099ea141f74ae68bb4d304e34cb760a",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
+    },
+    "DoorFrame_WornBrick": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        4.0,
+        3.0,
+        0.26994
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_WornBrick",
+        "Decor_MI_InteriorWall",
+        "Decor_MI_Trim_Dark",
+        "Decor_MI_Trim_MetalConcrete",
+        "Decor_MI_Glass"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "605be385b317488606904cd013ce6f05a0772afd79d45679827b14ea39da32e2",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.26994
+      ],
+      "detailLevel": "near"
+    },
+    "Cornice_WornBrick_Center": {
+      "kind": "facadeChoices",
+      "family": "Brick",
+      "size": [
+        2.0,
+        1.0,
+        0.4
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_WornBrick"
+      ],
+      "compatible": [
+        "Brick_Window_Trim",
+        "Brick_Plain_1",
+        "Brick_Plain_3",
+        "Cornice_Brick_Center",
+        "Cornice_Brick_L",
+        "Cornice_Brick_R",
+        "Cornice_Brick_90Angle_L",
+        "Brick_Corner_Plain",
+        "Brick_Column_Small",
+        "Brick_Window_Trim_Single",
+        "Brick_BottomTrim",
+        "Brick_TopTrim",
+        "Brick_Window_Square_Single",
+        "Brick_RedWhite_DoubleWindow",
+        "Brick_Window_CurvedDouble",
+        "Brick_Inset_Window",
+        "Brick_Inset_Window_Curved",
+        "Brick_Inset_Window_Curved_Small",
+        "Brick_BayWindow",
+        "WornBrick_WindowLarge",
+        "WornBrick_WindowTriple",
+        "WornBrick_Plain_3",
+        "DoorFrame_WornBrick",
+        "Cornice_WornBrick_Center"
+      ],
+      "sourceSha256": "5bdc3ebbd54ad0d89e4cb44e769c172f848e244141154b7084f8506cad16b14f",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.4
+      ],
+      "detailLevel": "near"
+    },
+    "Floor_BayWindow": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        3.69957,
+        0.1,
+        0.75
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_InteriorFloor",
+        "Decor_MI_InteriorRoof"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "5479f2a344736969eb71ce20566715ebee160d9cb97e4dd2559edd44bf3c827c",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        3.69957,
+        0.1,
+        0.75
+      ],
+      "detailLevel": "near"
+    },
+    "Floor_Inset": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        2.0,
+        0.1,
+        1.33333
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_InteriorFloor",
+        "Decor_MI_InteriorRoof"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "668192473822b799fc3651075f38212b71cea0eafad42ad9daee4f73444cab40",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        0.1,
+        1.33333
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_BayWindow_Top": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        8.0,
+        0.99838,
+        1.62806
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Asphalt"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "cca53ef8eceec4c5acbbc8adca64c0de68f8c0dbf28d57274d2fc1b46803dd42",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        8.0,
+        0.99838,
+        1.62806
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_BayWindow_Corner_L": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        6.52789,
+        0.99838,
+        3.52784
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Asphalt"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "4430add0ee8aff49f0dfdaf35e4e7d47ca41a3fd5dae3242e6b50d6290f9f916",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        6.52789,
+        0.99838,
+        3.52784
+      ],
+      "detailLevel": "near"
+    },
+    "Trim_BayWindow_Corner_R": {
+      "kind": "facadeChoices",
+      "family": "generic",
+      "size": [
+        6.52789,
+        0.99838,
+        3.52784
+      ],
+      "mount": "rear-bottom-centre",
+      "front": [
+        0,
+        0,
+        1
+      ],
+      "materials": [
+        "Decor_MI_Trim",
+        "Decor_MI_Asphalt"
+      ],
+      "compatible": [
+        "Door_1",
+        "DoorFrame_Trim",
+        "Trim_FirstFloor_Window",
+        "Prop_EntranceArch",
+        "Prop_ColumnArch",
+        "Roof_2x2",
+        "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
+        "Floor_2x2",
+        "Prop_Awning",
+        "Prop_Planter_Single",
+        "Prop_Bollard"
+      ],
+      "sourceSha256": "2127fd1417f186d7109010739dc685cd7d48e03553ddcd2536ac82335c0e6d01",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        6.52789,
+        0.99838,
+        3.52784
       ],
       "detailLevel": "near"
     },
@@ -2262,6 +3686,7 @@
         "Marble_ShopWindow",
         "DoorFrame_Marble",
         "Marble_Corner_Plain",
+        "Marble_WindowTriple",
         "Stairs_Entrance_Marble"
       ],
       "sourceSha256": "47d2f247fdf1256f8658add7fd4a743ff69e5f34801a5d9a77649808532c08d7",
@@ -2299,6 +3724,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2339,6 +3772,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2379,6 +3820,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",
@@ -2418,6 +3867,14 @@
         "Prop_ColumnArch",
         "Roof_2x2",
         "Floor_4x4",
+        "Trim_Window",
+        "Trim_Plain_3",
+        "Trim_FirstFloor_Window_Columns",
+        "Floor_BayWindow",
+        "Floor_Inset",
+        "Trim_BayWindow_Top",
+        "Trim_BayWindow_Corner_L",
+        "Trim_BayWindow_Corner_R",
         "Floor_2x2",
         "Prop_Awning",
         "Prop_Planter_Single",

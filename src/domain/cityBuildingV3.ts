@@ -1,3 +1,4 @@
+import { nativeFacadeChoice, type NativeFacadeId } from "./cityNativeFacades.ts";
 import { NATIVE_MODULES } from "./cityNativeModules.ts";
 import { partitionNativeWall } from "./cityNativeShell.ts";
 import type { CityTextureChoices } from "./cityTexturePresets.ts";
@@ -43,6 +44,7 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  nativeFacade?: NativeFacadeId;
   textures?: CityTextureChoices;
   solidSideWalls?: boolean;
   stairExtension?: "none" | "concrete" | "marble";
@@ -101,6 +103,7 @@ export function newDesign(id: string): CityBuildingDesignV3 {
     ...DEFAULT_DESIGN_V2,
     version: 3,
     generatorRevision: "city-grammar-1",
+    nativeFacade: "automatic",
     base: "lobby",
     middleFloors: 2,
     rhythm: "vertical",
@@ -506,7 +509,9 @@ export function resolveV3(
     walls = exposedWalls(masses),
     parts: DesignPart[] = [],
     attachments: Attachment[] = [];
-  const detailArchitecture = ({ brick: "brick", "white-brick": "creative", marble: "boutique", metal: "glass" } as const)[d.detailSet as "brick" | "white-brick" | "marble" | "metal"] ?? d.architecture;
+  const requestedArchitecture = ({ brick: "brick", "white-brick": "creative", marble: "boutique", metal: "glass" } as const)[d.detailSet as "brick" | "white-brick" | "marble" | "metal"] ?? d.architecture;
+  const nativeChoice=nativeFacadeChoice(d.nativeFacade,requestedArchitecture);
+  const detailArchitecture=nativeChoice?.family ?? requestedArchitecture;
   const facadeEnabled = d.finish === "facade";
   const slots = buildingSlots(d, masses), corners = classifyCorners(masses);
   const signs: DesignSign[] = slots.filter((s) =>
@@ -560,7 +565,7 @@ export function resolveV3(
     width: 3.2,
     height: .55,
   };
-  const entryAsset=({glass:"DoorFrame_Metal_Single",creative:"DoorFrame_WhiteBrick",boutique:"DoorFrame_Marble",brick:"DoorFrame_Trim"} as const)[detailArchitecture];
+  const entryAsset=nativeChoice?.entry ?? ({glass:"DoorFrame_Metal_Single",creative:"DoorFrame_WhiteBrick",boutique:"DoorFrame_Marble",brick:"DoorFrame_Trim"} as const)[detailArchitecture];
   const entryModule=NATIVE_MODULES[entryAsset];
   const entryWall=walls.find(w=>w.y===.65 && w.nz===1 && Math.abs(w.z-entrance.z)<.001 && Math.abs(w.x)<w.length/2);
   const entryClearWidth=entryWall?2*(entryWall.length/2-Math.abs(entryWall.x))-.12:masses[0].width-.12;
@@ -632,6 +637,8 @@ export function resolveV3(
       "Cornice_WhiteBrick_Center",
     ],
   }[detailArchitecture];
+  if(nativeChoice?.wall)family[1]=nativeChoice.wall;
+  if(nativeChoice?.cornice)family[2]=nativeChoice.cornice;
   const cornerAsset=detailArchitecture==="brick"?"Brick_Corner_Plain":detailArchitecture==="creative"?"WhiteBrick_Corner_Plain":detailArchitecture==="boutique"?"Marble_Corner_Plain":"Concrete_Corner";
   // Native L returns can shorten horizontally while retaining full floor height.
   // Reserve actual entrance-module width before choosing the return length.
@@ -643,6 +650,10 @@ export function resolveV3(
     let scale=c.height/3;
     for(const w of adjacent){
       scale=Math.min(scale,(w.length-.12)/4);
+      if(nativeChoice){
+        const panel=NATIVE_MODULES[nativeChoice.asset], desired=panel.span*c.height/panel.height;
+        scale=Math.min(scale,Math.max(.03,(w.length-Math.min(desired,w.length-.24)-.12)/4));
+      }
       if(w.y===.65 && w.nz===1 && Math.abs(w.z-entrance.z)<.01 && Math.abs(w.x)<w.length/2)
         scale=Math.min(scale,(Math.abs(c.x)-entryWidth/2-.06)/2);
       if(extensionWall===w)scale=Math.min(scale,(w.length-NATIVE_MODULES.Door_1.width-.12)/4);
@@ -738,21 +749,28 @@ export function resolveV3(
     if (facadeEnabled) {
       // Centre-only WhiteBrick sections require proprietary neighbours. Use its
       // complete perimeter module for standalone cells and measured native fillers.
-      const windowAsset = detailArchitecture === "brick" ? (d.facadeSeed%3===0 ? "Brick_RedWhite_DoubleWindow" : "Brick_Window_Square_Single")
+      const windowAsset = nativeChoice?.asset ?? (detailArchitecture === "brick" ? (d.facadeSeed%3===0 ? "Brick_RedWhite_DoubleWindow" : "Brick_Window_Square_Single")
         : detailArchitecture === "boutique" ? (y===.65 && d.base==="storefront" ? "Marble_ShopWindow" : "Marble_Window_Single")
         : detailArchitecture === "creative" ? "WhiteBrick_Window"
-        : y===.65 ? "Metal_FirstFloor_Window" : "Metal_Window";
+        : y===.65 ? "Metal_FirstFloor_Window" : "Metal_Window");
       const module=NATIVE_MODULES[windowAsset], nativeW=module.span,nativeH=module.height;
-      const windowScale=height/nativeH, width=nativeW*windowScale;
       const gap=detailAllowed?columnWidth+.04:.12;
       const endInset=(direction:number)=>2*([...nativeCorners].find(([c])=>c.y===y && Math.abs(c.x-(x+(horizontal?direction*length/2:0)))<.001 && Math.abs(c.z-(z+(horizontal?0:direction*length/2)))<.001)?.[1] || 0);
       const leftInset=endInset(-1),rightInset=endInset(1),usable=length-leftInset-rightInset,shift=(leftInset-rightInset)/2;
+      // Treat the footprint as a packing envelope: keep the chosen panel's
+      // proportions, then use native head/sill infill rather than dropping it.
+      const projection=Math.max(0,module.depth-module.face);
+      const projectionRoom=11.5-Math.abs(horizontal?z:x);
+      const windowScale=Math.min(height/nativeH,Math.max(.01,usable-.2)/nativeW,projection>0?projectionRoom/projection:Infinity);
+      const width=nativeW*windowScale,windowHeight=nativeH*windowScale;
+      const windowBottom=y===.65?0:(height-windowHeight)/2;
       const offsets=fitBays(usable,width,gap,.1).map(offset=>offset+shift);
       const bays=offsets.filter((offset,index)=>{
+        if(extensionWall===wall && Math.abs(offset)<width/2+1.1)return false;
         if((d.solidSideWalls && nx!==0)||(y===.65 && d.base==="plinth")||(y>.65 && d.rhythm==="alternating" && (index+d.facadeSeed)%2===0))return false;
         const bounds={position:[x+(horizontal?offset:0),y+height/2,z+(horizontal?0:offset)],size:[horizontal?width:.6,height,horizontal?.6:width]};
         return !slots.some(slot=>slot.active && (slot.selected==="brand"||slot.selected==="campaign") && overlaps(bounds,slot));
-      }).map(center=>({center,width}));
+      }).map(center=>({center,width,bottom:windowBottom,top:windowBottom+windowHeight}));
       const doors:{left:number;right:number;bottom:number;top:number}[]=[];
       if(y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2)
         doors.push({left:-x-entryWidth/2,right:-x+entryWidth/2,bottom:0,top:entryModule.height*entryScale});
@@ -768,6 +786,12 @@ export function resolveV3(
         attach(asset,x+(horizontal?offset:0)+nx*rear-Math.cos(angle)*cellCenter,y+rect.bottom,z+(horizontal?0:offset)+nz*rear+Math.sin(angle)*cellCenter,angle,rect.kind==="window"?windowScale:1,"facade");
         if(rect.kind==="solid")attachments.at(-1)!.axisScale=[(rect.right-rect.left)/2,(rect.top-rect.bottom)/3,height/3];
         dependencies.add(asset);
+        if(rect.kind==="window" && nativeChoice?.overlay){
+          const overlay=NATIVE_MODULES[nativeChoice.overlay];
+          const depth=(.04-overlay.face)*windowScale;
+          attach(nativeChoice.overlay,x+(horizontal?offset:0)+nx*depth,y+rect.bottom+(windowHeight-overlay.height*windowScale)/2,z+(horizontal?0:offset)+nz*depth,angle,windowScale,"facade");
+          dependencies.add(nativeChoice.overlay);
+        }
       }
       // Native wall tiles replace the backing shell only after all required pieces load.
       attach(family[1],x-nx*.18,y+height-.25,z-nz*.18,angle,1,"band");

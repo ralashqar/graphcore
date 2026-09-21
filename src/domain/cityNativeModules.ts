@@ -131,6 +131,14 @@ export const NATIVE_MODULES: Record<string,{width:number;span:number;center:numb
     "depth": 0.2587936818599701,
     "face": 0.2587936818599701
   },
+  "Trim_FirstFloor_Window": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.0102756023406982,
+    "depth": 0.2151487022638321,
+    "face": 0.2151487022638321
+  },
   "Marble_Plain_1": {
     "span": 2,
     "center": 0,
@@ -236,6 +244,171 @@ export const NATIVE_MODULES: Record<string,{width:number;span:number;center:numb
     "height": 4.000000476837158,
     "depth": 0.24438227713108063,
     "face": 0.24438227713108063
+  },
+  "Brick_Window_CurvedDouble": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.2605074942111969,
+    "face": 0.2605074942111969
+  },
+  "Brick_Inset_Window": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.3742849826812744,
+    "face": 0.24526731669902802
+  },
+  "Brick_Inset_Window_Curved": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.37368232011795044,
+    "face": 0.24205341935157776
+  },
+  "Brick_Inset_Window_Curved_Small": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.34263792634010315,
+    "face": 0.2440696358680725
+  },
+  "Brick_BayWindow": {
+    "span": 4,
+    "center": 0,
+    "width": 4.227288246154785,
+    "height": 3.000208854675293,
+    "depth": 1.393239974975586,
+    "face": 0.1991920918226242
+  },
+  "Marble_WindowTriple": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 4.000000476837158,
+    "depth": 0.30446183681488037,
+    "face": 0.23764222860336304
+  },
+  "Metal_FullWindow": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3,
+    "depth": 0.23109720647335052,
+    "face": 0.2156250774860382
+  },
+  "Metal_Panel_4": {
+    "span": 4.000000476837158,
+    "center": 0,
+    "width": 4.000000476837158,
+    "height": 4.000000953674316,
+    "depth": 0.20000025629997253,
+    "face": 0.20000025629997253
+  },
+  "Metal_Panel_Window_4": {
+    "span": 4.000000476837158,
+    "center": 0,
+    "width": 4.000000476837158,
+    "height": 4.000000953674316,
+    "depth": 0.28652337193489075,
+    "face": 0.28652337193489075
+  },
+  "Metal_BayWindow_Bottom": {
+    "span": 4.000004768371582,
+    "center": 0,
+    "width": 4.000004768371582,
+    "height": 3.0005948543548584,
+    "depth": 1.200000524520874,
+    "face": 0.2000027745962143
+  },
+  "Trim_Window": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.000000476837158,
+    "depth": 0.2397490292787552,
+    "face": 0.2397490292787552
+  },
+  "Trim_Plain_3": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "Trim_FirstFloor_Window_Columns": {
+    "span": 2.146937370300293,
+    "center": 0,
+    "width": 2.146937370300293,
+    "height": 2.3372673988342285,
+    "depth": 0.09212683886289597,
+    "face": 0.033537499606609344
+  },
+  "WornBrick_WindowLarge": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "WornBrick_WindowTriple": {
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.2221875786781311,
+    "face": 0.2221875786781311
+  },
+  "WornBrick_Plain_3": {
+    "span": 2,
+    "center": 0,
+    "width": 2,
+    "height": 3.000000476837158,
+    "depth": 0.20000022649765015,
+    "face": 0.20000022649765015
+  },
+  "DoorFrame_WornBrick": {
+    "opening": {
+      "left": -1.0000000894069672,
+      "right": 1.0000000894069672,
+      "top": 2.19868373966215
+    },
+    "span": 4,
+    "center": 0,
+    "width": 4,
+    "height": 3.000000476837158,
+    "depth": 0.2699352204799652,
+    "face": 0.2699352204799652
+  },
+  "Trim_BayWindow_Top": {
+    "span": 8,
+    "center": 0,
+    "width": 8,
+    "height": 0.9983841180801392,
+    "depth": 1.6280624866485596,
+    "face": 0.6280624866485596
+  },
+  "Trim_BayWindow_Corner_L": {
+    "span": 6.527894973754883,
+    "center": 0,
+    "width": 6.527894973754883,
+    "height": 0.9983841180801392,
+    "depth": 3.5278401374816895,
+    "face": 2.5278398990631104
+  },
+  "Trim_BayWindow_Corner_R": {
+    "span": 6.527894973754883,
+    "center": 0,
+    "width": 6.527894973754883,
+    "height": 0.9983841180801392,
+    "depth": 3.5278401374816895,
+    "face": 2.5278398990631104
   },
   "Stairs_Entrance_Concrete": {
     "span": 2.000000476837158,

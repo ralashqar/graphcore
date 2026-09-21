@@ -1,3 +1,4 @@
+import {NATIVE_FACADES} from "./cityNativeFacades";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {NodeIO} from "@gltf-transform/core";
@@ -32,7 +33,9 @@ test("native assembled walls have coverage at panel joins, corners and floor bou
  }
  for(let preset=0;preset<COMPOSITIONS.length;preset++)for(const architecture of ["brick","boutique","creative","glass"] as const)
   fixtures.push({d:normalizeV3({...applyComposition(newDesign("preset-seams"),preset),architecture,finish:"facade",slots:{}}),lod:"near"});
- for(const {d,lod} of fixtures){
+ for(const choice of NATIVE_FACADES)for(const blueprint of ["office","courtyard","l-shape","terraces"] as const)
+  fixtures.push({d:normalizeV3({...newDesign("catalogue-seams"),nativeFacade:choice.id,blueprint,width:12,depth:10,groundHeight:4.2,finish:"facade",slots:{}}),lod:"near"});
+ for(const {d,lod} of fixtures.filter(f=>!process.env.CITY_NATIVE_CATALOGUE_ONLY || f.d.nativeFacade!=="automatic")){
   const {architecture,blueprint,groundHeight}=d;
   const r=resolveV3(d,"#778899",lod);
   const meshes=r.attachments.filter(a=>["facade","door","band"].includes(a.role)).flatMap(a=>(assets.get(a.asset)||[]).map(g=>{
@@ -51,13 +54,13 @@ test("native assembled walls have coverage at panel joins, corners and floor bou
    }
    for(const offset of samples)for(const h of [.002,w.height/2,w.height-.002])for(const oblique of [-.5,0,.5]){
     const target=new Vector3(w.x+(horizontal?offset:0),w.y+h,w.z+(horizontal?0:offset));
-    const origin=target.clone().add(new Vector3(w.nx+(horizontal?oblique:0),0,w.nz+(horizontal?0:oblique)));
-    ray.set(origin,target.clone().sub(origin).normalize());ray.far=1.85;
-    if(!ray.intersectObjects(meshes,false).length)failures.push(architecture+"/"+blueprint+"/"+groundHeight+" wall "+JSON.stringify(w)+" sample "+offset+","+h);
+    const origin=target.clone().add(new Vector3(w.nx+(horizontal?oblique:0),0,w.nz+(horizontal?0:oblique)).multiplyScalar(3));
+    ray.set(origin,target.clone().sub(origin).normalize());ray.far=4.1;
+    if(!ray.intersectObjects(meshes,false).length)failures.push((d.nativeFacade||"legacy")+"/"+architecture+"/"+blueprint+"/"+groundHeight+" wall "+JSON.stringify(w)+" sample "+offset+","+h);
    }
   }
  }
- assert.equal(failures.length,0,failures.slice(0,20).join("\n"));
+ assert.equal(failures.length,0,JSON.stringify(failures.reduce((out,f)=>{const id=f.split("/")[0];out[id]=(out[id]||0)+1;return out;},{} as Record<string,number>))+"\n"+failures.slice(0,20).join("\n"));
 });
 
 
@@ -75,4 +78,16 @@ test("closing native sheets preserves vertex colours and auxiliary UVs",()=>{
  assert.ok(Math.abs(closed.getAttribute("color").getX(0)-.8)<1e-6);
  assert.ok(Math.abs(closed.getAttribute("color").getX(closed.getAttribute("color").count-1)-.8)<1e-6);
  assert.ok(closed.getAttribute("uv1"));
+});
+
+test("every curated facade renders its selected native module at bounded dimensions",()=>{
+ for(const choice of NATIVE_FACADES)for(const blueprint of ["office","courtyard","l-shape","terraces"] as const)for(const size of [8,18]){
+  const r=resolveV3(normalizeV3({...newDesign("catalogue-fit"),nativeFacade:choice.id,blueprint,width:size,depth:size,finish:"facade",slots:{}}),"#778899");
+  assert.ok(r.attachments.some(a=>a.asset===choice.asset),`${choice.id}/${blueprint}/${size} must render selected module`);
+  if("overlay" in choice)assert.ok(r.attachments.some(a=>a.asset===choice.overlay));
+  for(const a of r.attachments){
+   assert.ok([...a.position,a.scale,...(a.axisScale||[])].every(Number.isFinite));
+   assert.ok(a.scale>0);
+  }
+ }
 });

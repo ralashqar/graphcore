@@ -145,6 +145,36 @@ try {
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if (process.env.CITY_NATIVE_CATALOGUE_AUDIT === "1") {
+    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    await page.getByRole("button",{name:/^Glass headquarters /}).click();
+    const picker=page.getByLabel("Quaternius facade module",{exact:true});
+    const ids=await picker.locator("option").evaluateAll(options=>options.map(o=>o.value));
+    assert.equal(ids.length,28);
+    for(const id of ids){
+      await picker.selectOption(id);
+      await page.waitForTimeout(240);
+      if(["brick-classic","brick-inset","brick-bay","metal-bay","marble-triple","worn-triple"].includes(id))
+        await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-module-${id}.png`});
+    }
+    await picker.selectOption("brick-classic");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.nativeFacade,"brick-classic");
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('select[aria-label="Quaternius facade module"]')?.value==="brick-classic");
+    assert.equal(await picker.inputValue(),"brick-classic");
+    await picker.selectOption("marble-triple");
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await picker.inputValue(),"brick-classic");
+    await page.getByRole("button",{name:"Redo",exact:true}).click();
+    assert.equal(await picker.inputValue(),"marble-triple");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    assert.deepEqual(errors,[]);
+    console.log("All 27 native modules, mocked save/reload, undo/redo and mobile layout passed.");
+    await browser.close();process.exit(0);
+  }
   if (process.env.CITY_TEXTURE_AUDIT === "1") {
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();

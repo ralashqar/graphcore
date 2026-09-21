@@ -1178,3 +1178,8 @@ Version-3 building recipes accept optional wallBorder/groundBorder texture IDs, 
 ### City native side extensions (September 2026)
 
 Optional v3 solidSideWalls and stairExtension (none/concrete/marble) are strict public-profile recipe fields. Geometry reserves a clear bounded side-wall stair/landing and solid backing; unavailable choices remain authored. The City shared schema and world worker city-design-3.7 must roll out with the frontend to designated staging. No migration, production activation or provider work. See docs/city-texture-presets.md.
+
+
+### Curated native facade catalogue (September 2026)
+
+Optional v3 nativeFacade selects a curated measured Quaternius module, independently of the four material families. The strict City profile parser preserves only catalogue IDs; arbitrary paths are rejected. Omitted legacy choices retain their prior automatic selection, while new recipes prefer dimensional framed or recessed modules. Whole modules fit uniformly with native wall infill, shared sealed perimeter geometry and original vertex colours/UVs. No migration or provider call is required. The profile-consuming City endpoints (city-api, city-command, city-building-art, city-reconcile, city-stripe-webhook), frontend and Fly world worker city-design-3.8 require paired designated-staging rollout. Staging remains undesignated; no production activation or paid generation. See docs/city-texture-presets.md for catalogue and verification details.
