@@ -82,3 +82,16 @@ export function marketHeadline(event: MarketEvent) {
   }
   return p ? `${p.name} increased City Value` : "City positions updated";
 }
+
+/** Name a displaced competitor only when the confirmed snapshot proves the takeover. */
+export function marketTickerHeadline(event: MarketEvent) {
+  if (event.cause !== "purchase") return marketHeadline(event);
+  const actor = event.moves.find(m => m.id === event.initiator);
+  if (!actor?.after || (actor.before && actor.before.rank <= actor.after.rank)) return marketHeadline(event);
+  const displaced = event.moves.find(m => m.id !== actor.id &&
+    m.before?.rank === actor.after!.rank && m.after && m.after.rank > m.before.rank);
+  if (!displaced?.before) return marketHeadline(event);
+  return actor.after.rank === 1
+    ? `${actor.after.name} overtook ${displaced.before.name} in Central Plaza`
+    : `${actor.after.name} overtook ${displaced.before.name} for #${actor.after.rank}`;
+}

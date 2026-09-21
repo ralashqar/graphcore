@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { marketMotion, marketHeadline, type MarketMove } from "./cityMarket.ts";
+import { marketMotion, marketHeadline, marketTickerHeadline, type MarketMove } from "./cityMarket.ts";
 const before = {
   id: "a",
   slug: "a",
@@ -41,4 +41,12 @@ test("refund and moderation never announce takeover", () => {
     marketHeadline({ ...event, cause: "purchase" }),
     "Acme took Central Plaza",
   );
+});
+
+test("ticker names only a confirmed displaced competitor and never invents purchase activity", () => {
+  const event = { version: 1, revision: 4, cause: "purchase" as const, initiator: "a", created_at: "", moves: [move,
+    { id: "b", before: { ...after, id: "b", name: "Rival" }, after: { ...after, id: "b", rank: 2 } }] };
+  assert.equal(marketTickerHeadline(event), "Acme overtook Rival in Central Plaza");
+  assert.equal(marketTickerHeadline({ ...event, cause: "correction" }), "City positions updated");
+  assert.equal(marketTickerHeadline({ ...event, moves: [move] }), "Acme took Central Plaza");
 });

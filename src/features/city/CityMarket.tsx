@@ -6,6 +6,7 @@ import {
   type CityQuote,
   type MarketEvent,
   marketHeadline,
+  marketTickerHeadline,
 } from "../../domain/cityMarket";
 import { cityCall, cityCommand, downloadCityCard } from "./api";
 import { CityDialog } from "./CityAuth";
@@ -42,6 +43,14 @@ export function CityMarketBoard({
     [error, setError] = useState(""),
     [more, setMore] = useState(true),
     [busy, setBusy] = useState(false);
+  const [focusEvent, setFocusEvent] = useState<number | null>(null);
+  useEffect(() => {
+    if (!open || focusEvent === null) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`city-market-event-${focusEvent}`)?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, focusEvent]);
   const loadedOlder = useRef(false);
   const seen = useRef<number | null>(null),
     callback = useRef(onTransition);
@@ -61,6 +70,7 @@ export function CityMarketBoard({
     }
     let active = true;
     const refresh = async () => {
+      if (document.visibilityState === "hidden") return;
       try {
         const next = await cityCall<CityMarket>("city-api", {
           action: "market_public",
@@ -101,9 +111,11 @@ export function CityMarketBoard({
     };
     void refresh();
     const timer = setInterval(refresh, 15000);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       active = false;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
     };
   }, [revision, demoProperties]);
   useEffect(() => {
@@ -197,6 +209,21 @@ export function CityMarketBoard({
           <button onClick={onChallenge}>Challenge #1 ↗</button>
         </div>
       </section>
+      <section className="city-market-ticker" aria-label="Latest paid market activity">
+        <span className="city-market-ticker-label">{demoProperties ? "DEMO MARKET" : error ? "MARKET · OFFLINE" : "PAID MARKET"}</span>
+        {data?.events[0] ? <>
+          <button className="city-market-ticker-headline" title={marketTickerHeadline(data.events[0])}
+            onClick={() => { setFocusEvent(data.events[0].revision); setOpen(true); }}>
+            {marketTickerHeadline(data.events[0])}
+          </button>
+          <time dateTime={data.events[0].created_at} title={new Date(data.events[0].created_at).toLocaleString()}>
+            {new Date(data.events[0].created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          </time>
+          <button className="city-market-ticker-replay" aria-label="Replay latest market movement"
+            onClick={() => callback.current(data.events[0], true)}>Replay ↗</button>
+        </> : <span className="city-market-ticker-empty">{error ? "Updates temporarily unavailable" : !data ? "Loading latest movements…" : demoProperties ? "Explore the demonstration city" : "No confirmed movements yet"}</span>}
+        <button className="city-market-ticker-feed" onClick={() => { setFocusEvent(null); setOpen(true); }}>Feed</button>
+      </section>
       {open && (
         <CityDialog title="City market" onClose={() => setOpen(false)}>
           <p>
@@ -237,7 +264,7 @@ export function CityMarketBoard({
           </ol>
           <h3>Market feed</h3>
           {data?.events.map((e) => (
-            <article className="city-market-event" key={e.revision}>
+            <article className="city-market-event" id={`city-market-event-${e.revision}`} key={e.revision}>
               <strong>{marketHeadline(e)}</strong>
               <small>
                 {new Date(e.created_at).toLocaleString()} · revision{" "}

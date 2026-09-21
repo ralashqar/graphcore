@@ -328,9 +328,19 @@ try {
   await page.locator("canvas").waitFor();
   await page.waitForTimeout(3500);
   await page.screenshot({ path: "output/playwright/city-landing-desktop.png" });
+  const ticker = page.getByRole("region", { name: "Latest paid market activity" });
+  await ticker.waitFor();
+  assert.match(await ticker.innerText(), /PAID MARKET/);
+  await ticker.locator(".city-market-ticker-headline").click();
+  await page.getByRole("dialog", { name: "City market" }).waitFor();
+  await page.locator(".city-market-event").first().waitFor();
+  await page.keyboard.press("Escape");
+  await ticker.getByRole("button", { name: "Replay latest market movement" }).click();
+  await page.getByText(/Historical movement replay/).waitFor();
+  await page.waitForTimeout(3500);
   await page.getByRole("button", { name: "Top spots & market feed" }).click();
   await page.getByRole("dialog", { name: "City market" }).waitFor();
-  await page
+  await page.getByRole("dialog", { name: "City market" })
     .getByText("Rival Studio took Central Plaza", { exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Replay movement" }).click();

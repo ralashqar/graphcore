@@ -132,3 +132,29 @@
 }
 
 .city-merchant-position .city-checkbox{display:flex;gap:10px;align-items:center;max-width:360px}.city-merchant-position .city-checkbox input{width:auto;margin:0}.city-merchant-position>label:not(.city-checkbox){max-width:360px}.city-merchant-position>button{width:auto;padding:10px 20px}.city-merchant-position{padding:24px;background:#eef1e8;border:1px solid #d5d9ce;margin-bottom:24px}
+
+
+.city-market-ticker {
+  position: absolute; left: 350px; right: 350px; bottom: 16px; z-index: 9;
+  display: flex; align-items: center; gap: 10px; min-height: 46px;
+  padding: 6px 12px; border: 1px solid #b3baa9; border-radius: 8px;
+  background: #f8f7eff5; color: #263c30; box-shadow: 0 4px 18px #20392c12;
+  font-size: 12px;
+}
+.city-market-ticker-label { font-size: 9px; letter-spacing: .08em; flex-shrink: 0; }
+.city-app .city-market-ticker button { display: block; background: none; border: 0; color: inherit; cursor: pointer; min-height: 32px; padding: 0 3px; }
+.city-market-ticker button:focus-visible { outline: 2px solid #355b45; outline-offset: 2px; }
+.city-app .city-market-ticker .city-market-ticker-headline { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-weight: 600; }
+.city-market-ticker time { font-size: 10px; white-space: nowrap; }
+.city-market-ticker-replay, .city-market-ticker-feed { flex-shrink: 0; text-decoration: underline; }
+.city-market-ticker-empty { flex: 1; }
+@media (max-width: 1200px) {
+  .city-market-ticker { left: 12px; right: 180px; }
+}
+@media (max-width: 700px) {
+  .city-market-ticker { left: 12px; right: 12px; bottom: 62px; gap: 7px; padding: 4px 8px; }
+  .city-market-ticker-label { max-width: 45px; font-size: 8px; }
+  .city-market-ticker time { display: none; }
+  .city-app .city-map-shell:has(.city-market-ticker) .city-market-leader { bottom: 120px; }
+  .city-map-shell:has(.city-property-panel, .city-linked-deal, .city-launches-browser) .city-market-ticker { bottom: calc(48dvh + 12px); }
+}
