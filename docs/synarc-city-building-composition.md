@@ -175,3 +175,8 @@ Seeded demo recipes now select one or two fitting advertising placements with va
 ### Disable real-time shadows
 
 City and building-editor canvases now disable shadow maps. The city previously used a 1024px hard shadow map across 320m, producing coarse self-shadow artifacts in street-level views. Directional, hemisphere and ambient lighting remain. Browser driving checks and a street-level screenshot show clean sampled facade surfaces; no Quaternius assets were modified.
+
+
+### Dedicated driving viewport
+
+Driving hides site chrome and fills the viewport. Up to 100 loaded properties remain resident with no car-triggered region updates; larger datasets retain bounded streaming. Driving uses 1x DPR, suppresses arrival motion and exposure scanning, and pauses street activity. Fixed 120Hz movement steps use a bounded catch-up window. Browser checks verify full-height canvas, hidden header, stable resident count, driving and map restoration. This is not a measured frame-time guarantee or physical mobile benchmark.

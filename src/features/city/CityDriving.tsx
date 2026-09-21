@@ -30,9 +30,15 @@ export function CityDriving({capacity,onRegion,onExit}:{capacity:number;onRegion
   const canvas=gl.domElement;canvas.addEventListener("pointerdown",down);canvas.addEventListener("pointermove",move);canvas.addEventListener("pointerup",up);canvas.addEventListener("pointercancel",up);canvas.addEventListener("contextmenu",menu);
   return()=>{clear();window.removeEventListener("keydown",key);window.removeEventListener("keyup",key);window.removeEventListener("blur",clear);document.removeEventListener("visibilitychange",visibility);canvas.removeEventListener("pointerdown",down);canvas.removeEventListener("pointermove",move);canvas.removeEventListener("pointerup",up);canvas.removeEventListener("pointercancel",up);canvas.removeEventListener("contextmenu",menu);delete canvas.dataset.cityDriving;};
  },[gl]);
+ const simulation=useRef(0);
  const desired=useRef(new Vector3()),target=useRef(new Vector3());
  useFrame((_,dt)=>{
-  state.current=driveStep(state.current,input.current,dt,bound);
+  // Bounded fixed steps keep driving speed stable through occasional long frames.
+  simulation.current+=Math.min(dt,.1);
+  while(simulation.current>=1/120){
+   state.current=driveStep(state.current,input.current,1/120,bound);
+   simulation.current-=1/120;
+  }
   const v=state.current;
   if(car.current){car.current.position.set(v.x,.65,v.z);car.current.rotation.y=v.heading;}
   if(camera.current){

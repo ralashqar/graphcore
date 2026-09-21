@@ -1536,3 +1536,9 @@ body:has(.city-app) {
  .city-drive-controls .city-drive-touch { display:flex; position:fixed; bottom:16px; left:12px; right:12px; justify-content:space-between; gap:4px; }
  .city-drive-touch button { padding:12px 7px; margin:0; font-size:11px; opacity:.8; }
 }
+
+/* Dedicated game viewport, independent of the website navigation/layout. */
+.city-app.city-is-driving { position:fixed; inset:0; z-index:1000; min-height:0; overflow:hidden; }
+.city-is-driving > :not(.city-map-shell) { display:none !important; }
+.city-is-driving .city-map-shell { position:absolute; inset:0; width:100%; height:100dvh; min-height:0; margin:0; border-radius:0; }
+.city-is-driving .city-canvas { position:absolute; inset:0; height:100%; }

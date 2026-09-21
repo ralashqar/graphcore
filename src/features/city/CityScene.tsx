@@ -459,22 +459,24 @@ function CitySceneContent({
   const [zoom, setZoom] = useState(3.8);
   const [center, setCenter] = useState({ x: 0, z: 0 });
   const [softwareRenderer, setSoftwareRenderer] = useState(false);
+  const residentDrive = driving && properties.length <= 100;
   const residents = useRef(new Map<string, number>());
   const visible = useMemo(() => {
+    if (residentDrive) return properties;
     const radius = driving ? 520 : streamRadius(window.innerWidth, window.innerHeight, zoom);
     return properties.filter(p => {
       const distance = Math.hypot(position(p.x) - position(center.x), position(p.z) - position(center.z));
       return distance <= radius + (residents.current.has(p.id) ? 66 : 0) || p.id === selected?.id ||
         !!playback?.event.moves.some(m => m.id === p.id);
     });
-  }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport, driving]);
+  }, [properties, center.x, center.z, zoom, selected?.id, playback, viewport, driving, residentDrive]);
   const arrivals = useMemo(() => new Map(visible.map(p => [p.id, residents.current.get(p.id) ?? performance.now()])), [visible]);
   useEffect(() => { residents.current = arrivals; }, [arrivals]);
   return (
     <SceneBoundary onFailure={onFailure}>
       <Canvas
         data-city-resident-count={visible.length}
-        dpr={softwareRenderer ? 0.75 : [1, 1.5]}
+        dpr={softwareRenderer ? 0.75 : driving ? 1 : [1, 1.5]}
         shadows={false}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
@@ -502,7 +504,7 @@ function CitySceneContent({
         {!spriteMode && <CityStreetActivity
           properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
           reduced={reduced}
-          paused={!!playback || launchFocus}
+          paused={driving || !!playback || launchFocus}
         />}
         {presetDemo && <hemisphereLight args={["#dcefff", "#a5a17c", 1.5]} />}
         <ambientLight intensity={presetDemo ? .25 : 1.5} color={presetDemo ? "#fff5e4" : "#ffffff"} />
@@ -570,20 +572,20 @@ function CitySceneContent({
             capacity={capacity}
             center={center}
             zoom={zoom}
-            onSelect={onSelect}
-            reduced={reduced}
+            onSelect={driving ? () => {} : onSelect}
+            reduced={driving || reduced}
           />
           </CityArrivalContext.Provider>
         </MarketMotionContext.Provider>
         <SceneReady onReady={onReady} />
-        {onExposure && (
+        {onExposure && !driving && (
           <CityExposure
             properties={visible}
             onExposure={onExposure}
             paused={!!playback}
           />
         )}
-        {driving ? <CityDriving capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
+        {driving ? <CityDriving capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{if(residentDrive)return;setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
           launchFocus={launchFocus}
           central={central}
           viewport={viewport}

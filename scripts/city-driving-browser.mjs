@@ -11,9 +11,15 @@ try {
  await page.waitForFunction(()=>document.querySelector("canvas")?.dataset.cityDriving);
  const state=()=>page.locator("canvas").evaluate(el=>JSON.parse(el.dataset.cityDriving));
  const start=await state();
+ assert.equal(await page.locator(".city-header").isVisible(),false);
+ const residents=await page.locator("canvas").getAttribute("data-city-resident-count");
+ const bounds=await page.locator("canvas").boundingBox();
+ assert.ok(bounds.y===0 && bounds.height===1000);
+
  await page.keyboard.down("w");await page.waitForTimeout(1800);await page.keyboard.up("w");
  await page.keyboard.down(" ");await page.waitForTimeout(700);await page.keyboard.up(" ");
  assert.ok((await state()).z>start.z+2);
+ assert.equal(await page.locator("canvas").getAttribute("data-city-resident-count"),residents);
  await page.mouse.move(900,350);await page.mouse.down({button:"right"});await page.mouse.move(1030,390,{steps:3});await page.mouse.up({button:"right"});
  await page.screenshot({path:"output/playwright/city-driving.png"});
  await page.keyboard.press("Escape");
