@@ -1,4 +1,4 @@
-import { partitionNativeWall } from "./cityNativeShell.ts";
+import { partitionNativeWall, nativeCornerJoin, NATIVE_WALL_BACK } from "./cityNativeShell.ts";
 import type { CityTextureChoices } from "./cityTexturePresets.ts";
 import { advertisingLayout, type Advertising, type AdPlacement } from "./cityAdvertising.ts";
 import { archetypeParts, roofVariants, type ArchetypeChoices } from "./cityBuildingArchetypes.ts";
@@ -628,8 +628,8 @@ export function resolveV3(
     const adjacent=walls.filter(w=>w.y===c.y && (w.nz ? Math.abs(w.z-c.z)<.001 && Math.abs(Math.abs(w.x-c.x)-w.length/2)<.001 : Math.abs(w.x-c.x)<.001 && Math.abs(Math.abs(w.z-c.z)-w.length/2)<.001));
     const nx=adjacent.find(w=>w.nx)?.nx || 1,nz=adjacent.find(w=>w.nz)?.nz || 1;
     const angle=nx<0?(nz>0?0:-Math.PI/2):(nz>0?Math.PI/2:Math.PI),scale=c.height/3;
-    const cx=-scale,cz=2*scale;
-    attach(cornerAsset,c.x-(cx*Math.cos(angle)+cz*Math.sin(angle))+nx*.025,c.y,c.z-(cz*Math.cos(angle)-cx*Math.sin(angle))+nz*.025,angle,scale,"facade");
+    const cx=-scale,cz=2*scale, outer=nativeCornerJoin(c.height).outer;
+    attach(cornerAsset,c.x-(cx*Math.cos(angle)+cz*Math.sin(angle))+nx*outer,c.y,c.z-(cz*Math.cos(angle)-cx*Math.sin(angle))+nz*outer,angle,scale,"facade");
   }
   const bayWidth = facadeEnabled
     ? (detailArchitecture === "boutique" || detailArchitecture === "creative" ? 4 : 2)
@@ -717,7 +717,7 @@ export function resolveV3(
       const windowAsset=variant[0] as string, nativeW=variant[1] as number,nativeH=variant[2] as number;
       const windowScale=height/nativeH, width=nativeW*windowScale;
       const gap=detailAllowed?columnWidth+.04:.12;
-      const endInset=(direction:number)=>nativeCorners.some(c=>c.y===y && Math.abs(c.x-(x+(horizontal?direction*length/2:0)))<.001 && Math.abs(c.z-(z+(horizontal?0:direction*length/2)))<.001)?2*height/3:0;
+      const endInset=(direction:number)=>nativeCorners.some(c=>c.y===y && Math.abs(c.x-(x+(horizontal?direction*length/2:0)))<.001 && Math.abs(c.z-(z+(horizontal?0:direction*length/2)))<.001)?nativeCornerJoin(height).inset:0;
       const leftInset=endInset(-1),rightInset=endInset(1),usable=length-leftInset-rightInset,shift=(leftInset-rightInset)/2;
       const offsets=fitBays(usable,width,gap,.1).map(offset=>offset+shift);
       const bays=offsets.filter((offset,index)=>{
@@ -734,8 +734,8 @@ export function resolveV3(
       for(const rect of rects){
         if(rect.kind==="door"){dependencies.add("Door_1");continue;}
         const offset=(rect.left+rect.right)/2, asset=rect.kind==="window"?windowAsset:family[1];
-        attach(asset,x+(horizontal?offset:0)+nx*.025,y+rect.bottom,z+(horizontal?0:offset)+nz*.025,angle,rect.kind==="window"?windowScale:1,"facade");
-        if(rect.kind==="solid")attachments.at(-1)!.axisScale=[(rect.right-rect.left)/2,(rect.top-rect.bottom)/3,Math.min(1.2,height/3)];
+        attach(asset,x+(horizontal?offset:0)+nx*NATIVE_WALL_BACK,y+rect.bottom,z+(horizontal?0:offset)+nz*NATIVE_WALL_BACK,angle,rect.kind==="window"?windowScale:1,"facade");
+        if(rect.kind==="solid")attachments.at(-1)!.axisScale=[(rect.right-rect.left)/2,(rect.top-rect.bottom)/3,height/3];
         dependencies.add(asset);
       }
       // Native wall tiles replace the backing shell only after all required pieces load.
