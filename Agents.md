@@ -32,6 +32,11 @@ The shared profile validator is imported by city-api, city-command, city-buildin
 
 ## Overview
 
+### City grass texture presets (September 2026)
+
+Three CC0 ambientCG grass materials add short lawn, natural grass and lush garden grass, using the existing packed height/roughness shader. Checkerboard is removed from editing and demo selection; legacy texture IDs resolve to paving and legacy checker paving resolves to classic. Shared recipe validation accepts the new IDs. World worker version is `2026-09-22-city-design-3.11`; matching City endpoints and world worker require staging rollout before hosted saving. No migration or paid generation is required.
+
+
 ### City Google sign-in (September 2026)
 
 City's login/signup dialog now exposes Google through the existing SynArc OAuth helper and shared session bootstrap. The helper accepts an optional same-origin return path, preserving City paths/query parameters while its existing default remains `/app`. Cross-origin return URLs are rejected. This is frontend-only: no new auth provider, user store, Edge deployment or Fly change is required. Browser fixtures verify provider/scopes, City return navigation, callback session restoration and failure/retry; no real Google account consent was automated.

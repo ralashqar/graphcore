@@ -38,7 +38,7 @@ export function demoBuildingDesign(index: number, color: string) {
   d.architecture = pick(ARCHITECTURES);
   d.finish = pick(FINISHES);
   d.enclosure = pick(ENCLOSURES);
-  d.pavingPattern = pick(PAVING_PATTERNS);
+  d.pavingPattern = pick(PAVING_PATTERNS.filter(pattern => pattern !== "checker"));
   d.detailSet = pick(DETAIL_SETS);
   d.detailScope = pick(["all", "entrance", "crown"] as const);
   d.grounds = pick(["minimal", "planted", "urban"] as const);
@@ -54,7 +54,7 @@ export function demoBuildingDesign(index: number, color: string) {
   result.textures = {
     wall: pick(["brick", "plaster", "concrete", "timber", "metal"] as const),
     roof: pick(["terracotta", "metal", "concrete"] as const),
-    ground: pick(["pavers", "concrete", "checker"] as const),
+    ground: pick(["pavers", "concrete", "grass-lawn", "grass-meadow", "grass-lush"] as const),
   };
   // Use a separate random stream so texture choices never change advertising layout.
   const borders = ["plaster", "concrete", "metal"] as const;

@@ -168,3 +168,10 @@ Deno.test("architectural kit choices survive public recipe validation and reject
  assert.deepEqual(profile.buildingDesign && "architecturalKit" in profile.buildingDesign ? profile.buildingDesign.architecturalKit : undefined,recipe.architecturalKit);
  for(const kit of [{roof:"external-url"},{entrance:"Door_99"},{script:"alert(1)"},{rooftopUnits:1}])assert.equal(buildingDesignSchema.safeParse({...recipe,architecturalKit:kit}).success,false);
 });
+
+Deno.test("grass textures and legacy checker recipes remain valid", () => {
+ for (const ground of ["grass-lawn", "grass-meadow", "grass-lush", "checker"]) {
+  const recipe = {...newDesign("grass"), textures: {ground}};
+  assert.deepEqual(buildingDesignSchema.parse(recipe), recipe);
+ }
+});

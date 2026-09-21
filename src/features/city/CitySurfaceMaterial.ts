@@ -57,7 +57,7 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    float cityDet=dot(cityDx,cityR1);
    float cityDetailFade=(1.0-smoothstep(20.0,65.0,length(vViewPosition)))
      *(1.0-smoothstep(.025,.15,length(fwidth(citySurfacePosition/${preset.meters.toFixed(2)}))));
-   float cityHeight=citySurfaceData.r*${({brick:.08,plaster:.015,concrete:.025,terracotta:.07,metal:.025,timber:.04,pavers:.07,checker:.025,none:0}[textureId]).toFixed(3)};
+   float cityHeight=citySurfaceData.r*${({brick:.08,plaster:.015,concrete:.025,terracotta:.07,metal:.025,timber:.04,pavers:.07,checker:.07,"grass-lawn":.025,"grass-meadow":.03,"grass-lush":.035,none:0}[textureId]).toFixed(3)};
    vec3 cityGradient=sign(cityDet)*(dFdx(cityHeight)*cityR1+dFdy(cityHeight)*cityR2);
    normal=normalize(normal-cityGradient/max(abs(cityDet),.00001)*cityDetailFade*cityTextureReady);
   `);
@@ -92,6 +92,6 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    #include <opaque_fragment>
   `);
  };
- material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-4-"+textureId;
+ material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-5-"+textureId;
  return material;
 }

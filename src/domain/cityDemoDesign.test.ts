@@ -8,6 +8,8 @@ import { demoBuildingDesign } from "./cityDemoDesign.ts";
 import { resolveV3 } from "./cityBuildingV3.ts";
 test("demo designs are stable, varied and bounded across a full city", () => {
  const designs = Array.from({length:400}, (_,i)=>demoBuildingDesign(i,"#506b58"));
+ assert.deepEqual(new Set(designs.map(d => d.textures?.ground)), new Set(["pavers", "concrete", "grass-lawn", "grass-meadow", "grass-lush"]));
+ assert.ok(designs.every(d => d.pavingPattern !== "checker"));
  const facades = designs.filter(d => d.finish === "facade");
  assert.deepEqual(new Set(facades.map(d => d.nativeFacade)), new Set(NATIVE_FACADES.map(f => f.id)));
  assert.equal(new Set(facades.slice(0, NATIVE_FACADES.length).map(d => d.nativeFacade)).size, NATIVE_FACADES.length);
@@ -16,7 +18,7 @@ test("demo designs are stable, varied and bounded across a full city", () => {
  assert.equal(new Set(designs.map(d=>d.enclosure)).size,4);
  assert.equal(new Set(designs.map(d=>d.finish)).size,3);
  assert.equal(new Set(designs.map(d=>d.archetype).filter(Boolean)).size,6);
- assert.equal(new Set(designs.map(d=>d.pavingPattern)).size,5);
+ assert.equal(new Set(designs.map(d=>d.pavingPattern)).size,4);
  assert.equal(new Set(designs.map(d=>d.textures?.wall)).size,6);
  for(const d of designs) {
   for (const role of ["wall", "roof", "ground"] as const) {

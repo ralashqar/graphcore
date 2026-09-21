@@ -13,7 +13,7 @@ export function groundsParts(d: GroundsChoices, lod: "near" | "medium" | "far"):
   const parts: DesignPart[] = [];
   const box = (x: number, y: number, z: number, w: number, h: number, depth: number, color: string) =>
     parts.push({ kind: "box", position: [x,y,z], size: [w,h,depth], color });
-  const pattern = d.pavingPattern ?? "classic";
+  const pattern = d.pavingPattern === "checker" ? "classic" : d.pavingPattern ?? "classic";
   if (pattern !== "classic") {
     const colors = { checker: ["#ded8c8", "#8b9390"], terracotta: ["#ba8e76", "#d0aa8d"], basalt: ["#687579", "#829091"], ribbon: ["#d4c9ae", "#9daba3"] }[pattern];
     box(0, .26, 0, 22.7, .02, 22.7, colors[0]);

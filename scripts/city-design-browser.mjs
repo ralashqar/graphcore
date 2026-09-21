@@ -238,6 +238,25 @@ try {
     console.log("All 39 native modules, mocked save/reload, undo/redo and mobile layout passed.");
     await browser.close();process.exit(0);
   }
+  if (process.env.CITY_GRASS_AUDIT === "1") {
+    await page.getByRole("button",{name:"Branding",exact:true}).click();
+    const select = page.getByLabel("ground texture",{exact:true});
+    assert.equal(await select.locator('option[value="checker"]').count(),0);
+    for (const id of ["grass-lawn","grass-meadow","grass-lush"]) {
+      await select.selectOption(id);
+      await page.waitForTimeout(700);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-${id}.png`});
+    }
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.textures.ground,"grass-lush");
+    await page.reload();
+    await page.getByRole("button",{name:"Branding",exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="ground texture"]')?.value === "grass-lush");
+    assert.deepEqual(errors,[]);
+    console.log("Grass rendering, removed checkerboard choice and mocked save/reload passed.");
+    await browser.close();process.exit(0);
+  }
   if (process.env.CITY_TEXTURE_AUDIT === "1") {
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
@@ -245,7 +264,7 @@ try {
     await page.getByLabel("Side stairs",{exact:true}).selectOption("concrete");
     await page.getByLabel("Solid side walls with native panels",{exact:true}).check();
     await page.getByRole("button",{name:"Branding",exact:true}).click();
-    for(const id of ["brick","plaster","concrete","terracotta","metal","timber","pavers","checker","none"]){
+    for(const id of ["brick","plaster","concrete","terracotta","metal","timber","pavers","grass-lawn","grass-meadow","grass-lush","none"]){
       await page.getByLabel("wall texture",{exact:true}).selectOption(id);
       await page.waitForTimeout(150);
     }

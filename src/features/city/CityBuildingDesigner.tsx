@@ -1,7 +1,7 @@
 import { KIT_CORNERS, KIT_ROOFLINES, KIT_ENTRANCES, KIT_FRONTAGES, KIT_ROOFS } from "../../domain/cityArchitecturalKit";
 import { NATIVE_FACADES, type NativeFacadeId } from "../../domain/cityNativeFacades";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
-import { CITY_TEXTURES, TEXTURE_IDS } from "../../domain/cityTexturePresets";
+import { CITY_TEXTURES, SELECTABLE_TEXTURE_IDS, displayedTexture } from "../../domain/cityTexturePresets";
 import { advertisingLayout, AD_PLACEMENTS, AD_LABELS, DEFAULT_ADVERTISING } from "../../domain/cityAdvertising";
 import { presetCategory, roofVariants } from "../../domain/cityBuildingArchetypes";
 import { frontStructure } from "../../domain/cityBuildingEntrances";
@@ -934,15 +934,15 @@ export function CityBuildingDesigner(
                 {d.version === 3 && <fieldset><legend>Surface textures</legend>
                   <p>Tileable CC0 materials. Textures use their natural colours; choose Original / palette to keep Quaternius materials or procedural palette colours.</p>
                   {(["wall","roof","ground"] as const).map(role=><label key={role}>{role} texture
-                    <select aria-label={`${role} texture`} value={d.textures?.[role] || "none"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
-                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
+                    <select aria-label={`${role} texture`} value={displayedTexture(d.textures?.[role]) || "none"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
+                      {SELECTABLE_TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
                     </select>
                     {d.textures?.[role] && d.textures[role]!=="none" && <img alt={`${role} texture sample`} width={72} height={72} src={`/city/textures/${CITY_TEXTURES[d.textures[role]!].asset}-Color.webp`}/>}
                   </label>)}
                   {(["wallBorder", "groundBorder"] as const).map(role=><label key={role}>{role === "wallBorder" ? "Façade border" : "Ground border"} texture
-                    <select aria-label={`${role} texture`} value={d.textures?.[role] || "primary"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
+                    <select aria-label={`${role} texture`} value={displayedTexture(d.textures?.[role]) || "primary"} onChange={e=>commit({...d,textures:{...d.textures,[role]:e.target.value}})}>
                       <option value="primary">Use primary</option>
-                      {TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
+                      {SELECTABLE_TEXTURE_IDS.map(id=><option key={id} value={id}>{id === "none" ? "Original / palette" : CITY_TEXTURES[id].label}</option>)}
                     </select>
                   </label>)}
                 </fieldset>}
@@ -1003,7 +1003,7 @@ export function CityBuildingDesigner(
                 <label>
                   Tile styling<select
                     aria-label="Tile styling"
-                    value={d.pavingPattern && d.pavingPattern !== "classic" ? d.pavingPattern : d.tile}
+                    value={d.pavingPattern && d.pavingPattern !== "classic" && d.pavingPattern !== "checker" ? d.pavingPattern : d.tile}
                     onChange={(e) => {
                       const value = e.target.value;
                       if (["garden", "limestone", "slate"].includes(value)) commit({ ...d, tile: value as typeof d.tile, pavingPattern: "classic" });
@@ -1013,7 +1013,6 @@ export function CityBuildingDesigner(
                     <option value="garden">Garden lawn</option>
                     <option value="limestone">Warm limestone</option>
                     <option value="slate">Slate plaza</option>
-                    <option value="checker">Ivory and stone checker</option>
                     <option value="terracotta">Terracotta courtyard</option>
                     <option value="basalt">Basalt paving</option>
                     <option value="ribbon">Limestone ribbon walk</option>

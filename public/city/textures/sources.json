@@ -182,23 +182,75 @@
     }
   },
   {
-    "id": "Tiles074",
-    "source": "https://ambientcg.com/view?id=Tiles074",
-    "download": "https://ambientcg.com/get?file=Tiles074_1K-JPG.zip",
+    "id": "Grass005",
+    "source": "https://ambientcg.com/view?id=Grass005",
+    "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
     "license": "CC0-1.0",
-    "sourceSha256": "28a40cb36d3c265f17c798c52aa3ea7cdcb8c949b80c49692b0a855e9637c677",
+    "sourceSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
     "files": {
       "Color": {
-        "file": "Tiles074-Color.webp",
-        "sha256": "14a5174be81d0ec4cfbc058735bd3c39461f651c3b01404920b4117b3042e066"
+        "file": "Grass005-Color.webp",
+        "sha256": "7d2ee9d2d37bacc5b393c6d0fb74317672951acdca35911076cecddce20ef385"
       },
       "Roughness": {
-        "file": "Tiles074-Roughness.webp",
-        "sha256": "ffb81cf3ab37201ba0499aa1fccfd35ceb645f98c98923283ad48c0f3c208df6"
+        "file": "Grass005-Roughness.webp",
+        "sha256": "a1f36683760295c99eb9068c4612c10298b1e4fd4733141e9fcf5b0493f3a752"
       },
       "Surface": {
-        "file": "Tiles074-Surface.webp",
-        "sha256": "cec9697c077048dab4f286e600b137cdc32a7f492dcada15643758c5dff26307",
+        "file": "Grass005-Surface.webp",
+        "sha256": "d3641571f1cca640420c8219ac0fca6ce286eefff0f3e198e10645a5a5b89b82",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
+      }
+    }
+  },
+  {
+    "id": "Grass003",
+    "source": "https://ambientcg.com/view?id=Grass003",
+    "download": "https://ambientcg.com/get?file=Grass003_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "bc729e396334117c92f46a6a0a2bdb17ae21758f5cb61ad01b911f63efe2d613",
+    "files": {
+      "Color": {
+        "file": "Grass003-Color.webp",
+        "sha256": "f971902644ab365b791aa8e5500b9afb10b743fdf752e22a1171a7250e4911d8"
+      },
+      "Roughness": {
+        "file": "Grass003-Roughness.webp",
+        "sha256": "1494dd2f47ad5ebafc1760020a08e720480c5b838766084e22bf9e3da5ea9e4f"
+      },
+      "Surface": {
+        "file": "Grass003-Surface.webp",
+        "sha256": "c53b4d2f3ebaabdee429df3f7b81c65c739e49dd487161101e060f8d7d1f1a50",
+        "channels": {
+          "r": "displacement",
+          "g": "roughness",
+          "b": "unused"
+        }
+      }
+    }
+  },
+  {
+    "id": "Grass004",
+    "source": "https://ambientcg.com/view?id=Grass004",
+    "download": "https://ambientcg.com/get?file=Grass004_1K-JPG.zip",
+    "license": "CC0-1.0",
+    "sourceSha256": "4b63495f459db8481f4d5144e4e9069345c81cf898cc71f2216f5dd3bb344469",
+    "files": {
+      "Color": {
+        "file": "Grass004-Color.webp",
+        "sha256": "8254ae288eeaea62125ecfe181722f5cbc725cc33e74cc05d2e5c85544e652a8"
+      },
+      "Roughness": {
+        "file": "Grass004-Roughness.webp",
+        "sha256": "58a482247a392d3cea7a76df9b777957616bca1ec9ef7093ed6cd9a5eb43fa76"
+      },
+      "Surface": {
+        "file": "Grass004-Surface.webp",
+        "sha256": "73e34e2747912f71aff58a959a5beec589de872535d69398f152c1514a1310a4",
         "channels": {
           "r": "displacement",
           "g": "roughness",
