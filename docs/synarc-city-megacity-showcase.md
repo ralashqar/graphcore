@@ -83,3 +83,8 @@ Layout tests verify unique block centres, coordinate round-trips and road cleara
 The current demo replaces the Unity office experiment with the original detailed Quaternius presets. Complete assemblies scale uniformly by 1.7–1.9 according to stable business identity, with both brick/metal variants, a stable one-tier silhouette variation and tier-based heights approximately 20–57m. The two wings align 19m from the plot centre along +X and -Z (bottom-right and top-right); the single large billboard remains at +Z (bottom-left). The lower frontage/taller-return variants add silhouette variation. The demo uses a minimum visual tier of 3 for substantial buildings; financial ranking is unchanged.
 
 No module rebake or directional facade stretching is introduced. Near/far variants, relocation and arrival animation receive the same uniform transform. The Unity pack remains available in the standalone showcase but is no longer requested by the demo. Normal City buildings retain their earlier size and layout. Eight layout tests cover the legacy renderer and the estate bounds, right-edge alignment, varied presets and billboard clearance.
+
+
+## Prefab restoration
+
+The Quaternius estate iteration is reverted at the user�s request. The current demo again uses one centred Unity office prefab per 48m block, with the single large bottom-left billboard retained. Stable identity selects among the ten offices; no skyscrapers are used. The normal City and showcase remain unchanged.
