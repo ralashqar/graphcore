@@ -61,10 +61,25 @@ The repeated-building far-detail scene measured approximately 60 FPS over five s
 
 Before applying these presets to live businesses, review the visual style, remove or adapt fixed vendor branding where appropriate, choose tier/category mappings and verify the complete City pipeline. Roads remain Quaternius because MegaCity's sampled ten-metre road grid is not a direct match for the current six-metre segments/eighteen-metre corridors. This release adds no database migration, provider spending, worker deployment or production activation.
 
-## Demo-city office experiment (September 2026)
+## Earlier demo-city office experiment (superseded)
 
 The demo route now renders one complete MegaCity office per occupied plot, replacing Quaternius building assemblies only in the demonstration. A stable hash of business identity chooses among the ten reviewed offices; no skyscrapers or extra building clusters are used. Office choice does not change with rank, and paid geography/displacement remain unchanged. In this experiment office size follows the selected preset rather than the normal paid tier progression.
 
 Quaternius roads, junctions, markings and landscaping remain in place. The converted office footprints retain their uniform source proportions and plot setbacks. Near/far instancing, arrival/movement animation, search dimming and selection reuse the existing renderer. The demo additionally loads the 4.9 MB MegaCity pack; only office geometry is prepared for instancing. Live City visits keep the Quaternius building path and do not request this extra GLB.
 
 Hero billboards use each office's roof height, width and frontage with the same lower-edge orientation rule. Labels and entrance paths follow the selected office orientation. Existing approved/demo image loading and fallback behavior remain unchanged. This is a frontend experiment without backend, provider or deployment changes.
+
+## Single-block demo estates
+
+The demo experiment now allocates one 48m road-bounded block to each business instead of subdividing a block into four plots. The latest iteration restores one enlarged Quaternius L-shaped assembly per block, rotated onto the top-right and bottom-right edges. One 36m by 18m billboard stands 2.5m above ground along +Z, the bottom-left isometric edge, leaving a clear courtyard in front of the L-shaped building. Clicking the sign selects the property. The entrance and landscaping stay inside the block.
+
+A scene-owned coordinate context maps existing logical plot coordinates to block centres without changing ranking or database data. Camera region lookup, selection, search markers, streaming, arrival and displacement use the same mapping. Road inventory expands to cover the existing business capacity; each axis has one business centre per 66m road pitch. Normal City and the asset showcase retain their existing spacing. Initial demo framing zooms farther out to accommodate the larger plots.
+
+Layout tests verify unique block centres, coordinate round-trips and road clearances; the existing road and asset validation remains unchanged. Physical mobile performance remains unverified.
+
+
+## Quaternius estate iteration
+
+The current demo replaces the Unity office experiment with the original detailed Quaternius presets. Complete assemblies scale uniformly by 1.7–1.9 according to stable business identity, with both brick/metal variants, a stable one-tier silhouette variation and tier-based heights approximately 20–57m. The two wings align 19m from the plot centre along +X and -Z (bottom-right and top-right); the single large billboard remains at +Z (bottom-left). The lower frontage/taller-return variants add silhouette variation. The demo uses a minimum visual tier of 3 for substantial buildings; financial ranking is unchanged.
+
+No module rebake or directional facade stretching is introduced. Near/far variants, relocation and arrival animation receive the same uniform transform. The Unity pack remains available in the standalone showcase but is no longer requested by the demo. Normal City buildings retain their earlier size and layout. Eight layout tests cover the legacy renderer and the estate bounds, right-edge alignment, varied presets and billboard clearance.

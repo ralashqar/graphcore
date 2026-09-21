@@ -798,7 +798,7 @@ export function CityApp() {
                         }
                       >
                         <CityScene
-                          officeDemo={demo.current}
+                          estateDemo={demo.current}
                           launches={plazaItems}
                           launchActivity={!!snapshot.activityEnabled}
                           launchFocus={!!snapshot.launchPlazaEnabled && (launchBrowse || (richLaunchRoute && plazaItems.some(i=>i.slug===path.split("/")[3])))}

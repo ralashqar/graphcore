@@ -135,3 +135,28 @@ export function roadNetwork(capacity: number): {
     }
   return { placements, nodes };
 }
+
+/** Demo estates occupy a complete 48m block between the unchanged road corridors. */
+export function estatePlotAxis(n: number): number {
+  return n === 0 ? 0 : Math.sign(n) * (33 + (Math.abs(n) - 1) * 66);
+}
+export function estateLogicalAxis(world: number): number {
+  return Math.abs(world) <= 9 ? 0 : Math.sign(world) * Math.max(1, Math.round((Math.abs(world) - 33) / 66) + 1);
+}
+
+/** Enlarged, uniformly scaled Quaternius L on the two right-hand estate edges. */
+export function estateBuilding(tier: number, id: string) {
+  let hash = 2166136261;
+  for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  const presetTier = Math.min(5, Math.max(3, tier) + ((hash >>> 3) & 1));
+  const scale = 1.7 + ((hash >>> 0) % 3) * 0.1;
+  const layout = buildingMassing(presetTier, id);
+  const maxX = Math.max(...layout.wings.map(w => w.z + w.depth / 2));
+  const minZ = Math.min(...layout.wings.map(w => -w.x - w.width / 2));
+  return { tier: presetTier, variant: buildingVariant(id), scale,
+    rotation: Math.PI / 2, x: 19 - maxX * scale, z: -19 - minZ * scale,
+    height: Math.max(...layout.wings.map(w => w.height)) * scale };
+}
+export function estateBillboard(_tier: number, _id = "") {
+  return { width: 36, height: 18, front: 20.5, bottom: 2.5, depth: 0.3, rotation: 0 };
+}

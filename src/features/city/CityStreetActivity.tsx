@@ -1,3 +1,4 @@
+import { useCityMapLayout } from "./CityMapLayout";
 import { useMemo, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
@@ -5,7 +6,7 @@ import { InstancedMesh, Object3D, Vector3 } from "three";
 import { useLiving } from "./CityLiving";
 import { freshLiving, storefrontVisual } from "../../domain/cityLiving";
 import type { CityProperty } from "../../domain/city";
-import { BUILDING_RECIPES, plotAxis } from "../../domain/cityLayout";
+import { BUILDING_RECIPES } from "../../domain/cityLayout";
 import { cityNavigate } from "./api";
 export function CityStreetActivity(
   { properties, reduced, paused }: {
@@ -14,6 +15,7 @@ export function CityStreetActivity(
     paused: boolean;
   },
 ) {
+  const { plotAxis } = useCityMapLayout();
   const living = useLiving(),
     { camera, size, gl } = useThree(),
     bodies = useRef<InstancedMesh>(null),

@@ -49,15 +49,9 @@ try {
   assert.equal(loaded.slots, 32);
   assert.ok(loaded.decodedImages >= 10);
   assert.equal(loaded.failedImages, 0);
-  await page.mouse.move(950, 530);
-  for (let i = 0; i < 18; i++) {
-    await page.mouse.wheel(0, -100);
-    await page.waitForTimeout(70);
-  }
-  await page.waitForTimeout(1600);
   await page.screenshot({ path: "output/playwright/city-billboards.png" });
-  // Click the visible Fieldwork display itself, not its floating label.
-  await page.mouse.click(1210, 285);
+  // Click the bottom-left Fieldwork sign in the estate's default framing.
+  await page.mouse.click(832, 510);
   await page
     .getByRole("complementary", { name: "Fieldwork property" })
     .waitFor();

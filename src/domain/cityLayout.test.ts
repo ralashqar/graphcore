@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  estateBuilding,
+  estatePlotAxis,
+  estateLogicalAxis,
   plotAxis,
   logicalAxis,
   frontage,
@@ -124,4 +127,35 @@ test("exported modular footprints and full-height bays match the runtime without
    assert.deepEqual(asset.wings,expected);
   }
  }
+});
+
+test("demo estates have one centre per road block with 48m of clear plot space", () => {
+  const centres = new Set<number>();
+  for (let n = -10; n <= 10; n++) {
+    assert.equal(estateLogicalAxis(estatePlotAxis(n)), n);
+    if (!n) continue;
+    const centre = estatePlotAxis(n);
+    assert.ok(!centres.has(centre)); centres.add(centre);
+    assert.equal(((centre % 66) + 66) % 66, 33);
+    // Each plot ends 9m from both road centre lines; billboards stay inside it.
+    assert.equal(((centre - 24) % 66 + 66) % 66, 9);
+  }
+  assert.equal(centres.size, 20);
+});
+
+test("enlarged Quaternius estates put both wings on the right edges and clear the sign", () => {
+  const variations = new Set();
+  for (let tier=0;tier<6;tier++) for (const id of ["demo-0","demo-1","demo-2","demo-3"]) {
+    const e=estateBuilding(tier,id); const layout=buildingMassing(e.tier,id);
+    variations.add(`${e.tier}:${e.variant}:${e.scale}`);
+    const bounds=layout.wings.map(w=>({
+      minX:e.x+(w.z-w.depth/2)*e.scale, maxX:e.x+(w.z+w.depth/2)*e.scale,
+      minZ:e.z+(-w.x-w.width/2)*e.scale, maxZ:e.z+(-w.x+w.width/2)*e.scale,
+    }));
+    assert.ok(Math.abs(Math.max(...bounds.map(b=>b.maxX))-19)<1e-8);
+    assert.ok(Math.abs(Math.min(...bounds.map(b=>b.minZ))+19)<1e-8);
+    for(const b of bounds) { assert.ok(b.minX>-22 && b.maxX<22 && b.minZ>-22 && b.maxZ<18); }
+    assert.ok(e.height>=20 && e.height<60);
+  }
+  assert.ok(variations.size>=6);
 });

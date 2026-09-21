@@ -1,3 +1,4 @@
+import { useCityMapLayout } from "./CityMapLayout";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useThree } from "@react-three/fiber";
 import {
@@ -13,7 +14,6 @@ import type { CityProperty } from "../../domain/city";
 import { billboardImageRect } from "../../domain/cityBranding";
 import {
   billboardEnvelope,
-  plotAxis,
 } from "../../domain/cityLayout";
 import { Batch, type Instance } from "./CityInstances";
 
@@ -86,6 +86,7 @@ export function drawTile(
 
 export function CityBillboards({
   envelope = billboardEnvelope,
+  perimeter = false,
   properties,
   selected,
   center,
@@ -93,12 +94,14 @@ export function CityBillboards({
   reduced,
 }: {
   envelope?: typeof billboardEnvelope;
+  perimeter?: boolean;
   properties: CityProperty[];
   selected: CityProperty | null;
   center: { x: number; z: number };
   onSelect: (p: CityProperty) => void;
   reduced: boolean;
 }) {
+  const { plotAxis } = useCityMapLayout();
   const { gl } = useThree();
   const decoded = useRef(new Map<string, HTMLCanvasElement>());
   const featured = useMemo(
@@ -237,18 +240,19 @@ export function CityBillboards({
       rects: number[] = [];
     const slots = new Map(featured.map((p, i) => [p.id, i]));
     for (const p of properties) {
-      const { width, height, front, bottom, rotation } = envelope(p.tier, p.id);
+      const { width, height, front, bottom, rotation: primaryRotation } = envelope(p.tier, p.id);
+      for (const rotation of perimeter ? [0] : [primaryRotation]) {
       const sin = Math.sin(rotation), cos = Math.cos(rotation);
       const locate = (localX: number, localZ: number) => ({
         x: plotAxis(p.x) + cos * localX + sin * localZ,
         z: plotAxis(p.z) - sin * localX + cos * localZ,
       });
-      const base = { key: p.id, ...locate(0, front), rotation, property: p };
+      const base = { key: `${p.id}:${rotation}`, ...locate(0, front), rotation, property: p };
       frames.push({ ...base, y: bottom + height / 2,
         scale: [width + 0.22, height + 0.22, 0.24], color: p.profile.color });
       for (const side of [-1, 1]) posts.push({
         ...base, ...locate(side * (width / 2 - 0.3), front - 0.3),
-        key: `${p.id}:${side}`, y: bottom - 0.2, scale: [0.18, 0.6, 0.18],
+        key: `${p.id}:${rotation}:${side}`, y: perimeter ? bottom / 2 : bottom - 0.2, scale: [0.3, perimeter ? bottom : 0.6, 0.3],
       });
       roofs.push({ ...base, ...locate(0, front - 0.2), y: bottom - 0.35,
         scale: [width + 0.22, 0.2, 0.8] });
@@ -260,8 +264,9 @@ export function CityBillboards({
       rects.push(((slot % COLS) + 0.004) / COLS,
         1 - (Math.floor(slot / COLS) + 0.992) / ROWS, 0.992 / COLS, 0.984 / ROWS);
     }
+    }
     return { frames, posts, roofs, faces, rects };
-  }, [properties, featured, envelope]);
+  }, [properties, featured, envelope, perimeter, plotAxis]);
   const facePiece = useMemo(() => {
     const geometry = new PlaneGeometry(1, 1);
     geometry.setAttribute(

@@ -26,7 +26,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { MapControls, OrthographicCamera } from "@react-three/drei";
 import { MOUSE, TOUCH, Vector3 } from "three";
 import { type CityProperty } from "../../domain/city";
-import { logicalAxis, plotAxis as position } from "../../domain/cityLayout";
+import { CityMapLayoutContext, estateMapLayout, standardMapLayout, useCityMapLayout } from "./CityMapLayout";
 import { CityKit } from "./CityKit";
 let establishedCentre = false;
 let savedCityCamera: {
@@ -56,6 +56,7 @@ function CameraRig({
   viewport: ViewportRect | null;
   onExplore?: () => void;
 }) {
+  const { plotAxis: position, logicalAxis, plotSize } = useCityMapLayout();
   const controls = useRef<ComponentRef<typeof MapControls>>(null),
     destination = useRef<Vector3 | null>(null),
     last = useRef(""),
@@ -138,7 +139,7 @@ function CameraRig({
     }
     restore.current = false;
     if (!establishedCentre) {
-      camera.zoom = size.width < 900 ? 5 : 6;
+      camera.zoom = plotSize === 48 ? (size.width < 900 ? 3.3 : 4.2) : (size.width < 900 ? 5 : 6);
       camera.updateProjectionMatrix();
     }
     const framed = (property: CityProperty | null) => {
@@ -325,6 +326,7 @@ function DiscoveryMarkers({
   zoom: number;
   onSelect: (item: CustomerItem) => void;
 }) {
+  const { plotAxis: position } = useCityMapLayout();
   const { camera, size } = useThree();
   const [shown, setShown] = useState<CustomerItem[]>([]);
   const elapsed = useRef(0),
@@ -398,8 +400,8 @@ function SceneReady({ onReady }: { onReady?: () => void }) {
   }, [onReady]);
   return null;
 }
-export default function CityScene({
-  officeDemo = false,
+function CitySceneContent({
+  estateDemo = false,
   properties,
   selected,
   capacity,
@@ -422,7 +424,7 @@ export default function CityScene({
   launchActivity = false,
   launchFocus = false,
 }: {
-  officeDemo?: boolean;
+  estateDemo?: boolean;
   launches?: LaunchItem[];
   launchActivity?: boolean;
   launchFocus?: boolean;
@@ -445,6 +447,7 @@ export default function CityScene({
   onDiscoverySelect?: (item: CustomerItem) => void;
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
+  const { plotAxis: position, plotSize } = useCityMapLayout();
   const living=useLiving();
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
@@ -552,14 +555,14 @@ export default function CityScene({
               position={[position(p.x), 0.04, position(p.z)]}
               rotation={[-Math.PI / 2, 0, 0]}
             >
-              <ringGeometry args={[10.7, 11.2, 4, 1, Math.PI / 4]} />
+              <ringGeometry args={[10.7 * plotSize / 24, 11.2 * plotSize / 24, 4, 1, Math.PI / 4]} />
               <meshBasicMaterial color="#bfa457" />
             </mesh>
           ))}
         <MarketMotionContext.Provider value={playback || null}>
           <CityArrivalContext.Provider value={arrivals}>
           <CityKit
-            officeDemo={officeDemo}
+            estateDemo={estateDemo}
             properties={visible}
             matchIds={matches ? new Set(matches) : undefined}
             selected={selected}
@@ -598,4 +601,10 @@ export default function CityScene({
       </Canvas>
     </SceneBoundary>
   );
+}
+
+export default function CityScene(props: Parameters<typeof CitySceneContent>[0]) {
+  return <CityMapLayoutContext.Provider value={props.estateDemo ? estateMapLayout : standardMapLayout}>
+    <CitySceneContent {...props} />
+  </CityMapLayoutContext.Provider>;
 }

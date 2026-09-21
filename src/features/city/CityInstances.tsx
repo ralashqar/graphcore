@@ -1,7 +1,8 @@
+import { useCityMapLayout } from "./CityMapLayout";
 import { useMarketMotion } from "./CityMarketMotion";
 import { entranceScale } from "../../domain/cityStreaming";
 import { marketMotion } from "../../domain/cityMarket";
-import { plotAxis } from "../../domain/cityLayout";
+
 import { createContext, useContext, useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
@@ -39,6 +40,7 @@ export function Batch({
   reduced?: boolean;
   animate?: boolean;
 }) {
+  const { plotAxis } = useCityMapLayout();
   const refs = useRef<(InstancedMesh | null)[]>([]),
     poses = useRef(new Map<string, Vector3>()),
     dirty = useRef(true);

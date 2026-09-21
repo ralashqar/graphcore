@@ -1,8 +1,9 @@
+import { useCityMapLayout } from "./CityMapLayout";
 import { useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Raycaster, Vector2, Vector3 } from "three";
 import type { CityProperty } from "../../domain/city";
-import { BUILDING_RECIPES, plotAxis } from "../../domain/cityLayout";
+import { BUILDING_RECIPES } from "../../domain/cityLayout";
 import { exposureDwell } from "../../domain/cityLanding";
 /** Sample at most four candidates per tick; no event is sent during replay or hidden tabs. */
 export function CityExposure(
@@ -12,6 +13,7 @@ export function CityExposure(
     paused: boolean;
   },
 ) {
+  const { plotAxis } = useCityMapLayout();
   const { camera, scene, gl } = useThree();
   const clock = useRef(0),
     cursor = useRef(0),

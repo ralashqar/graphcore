@@ -1,4 +1,5 @@
-import { officePreset, officeBillboard } from "./CityOfficePresets";
+import { useCityMapLayout } from "./CityMapLayout";
+import { estateBuilding, estateBillboard } from "../../domain/cityLayout";
 import { useMarketMotion } from "./CityMarketMotion";
 import { Batch, type Instance, type Piece } from "./CityInstances";
 import { CityBillboards } from "./CityBillboards";
@@ -19,7 +20,6 @@ import {
   BUILDING_RECIPES,
   buildingVariant,
   billboardEnvelope,
-  plotAxis,
   roadNetwork,
 } from "../../domain/cityLayout";
 
@@ -36,7 +36,7 @@ const trunk = {
 };
 
 export function CityKit({
-  officeDemo = false,
+  estateDemo = false,
   properties,
   selected,
   capacity,
@@ -47,7 +47,7 @@ export function CityKit({
   labels = true,
   matchIds,
 }: {
-  officeDemo?: boolean;
+  estateDemo?: boolean;
   properties: CityProperty[];
   selected: CityProperty | null;
   capacity: number;
@@ -58,20 +58,16 @@ export function CityKit({
   labels?: boolean;
   matchIds?: Set<string>;
 }) {
+  const { plotAxis, plotSize, roadCapacityMultiplier } = useCityMapLayout();
   const playback = useMarketMotion();
-  const loaded = useGLTF(officeDemo
-    ? ["/city/downtown/downtown.glb?v=source-v3", "/city/megacity/showcase.glb?v=3"]
-    : ["/city/downtown/downtown.glb?v=source-v3"], false, true);
-  const signEnvelope = officeDemo ? officeBillboard : billboardEnvelope;
+  const { scene } = useGLTF("/city/downtown/downtown.glb?v=source-v3", false, true);
+  const signEnvelope = estateDemo ? estateBillboard : billboardEnvelope;
   const assets = useMemo(() => {
     const result = new Map<string, Piece[]>(),
       cache = new Map<Material, Material>();
-    for (const { scene } of loaded) {
     scene.updateMatrixWorld(true);
     for (const root of scene.children) {
       const key = root.userData.assetKey || root.name;
-      if (officeDemo && (key.startsWith("Building_") ||
-        (scene === loaded[1]?.scene && !key.startsWith("office-")))) continue;
       const pieces: Piece[] = [];
       root.traverse((child) => {
         if (!(child instanceof Mesh)) return;
@@ -120,9 +116,8 @@ export function CityKit({
       });
       result.set(key, pieces);
     }
-    }
     return result;
-  }, [loaded[0].scene, loaded[1]?.scene, officeDemo]);
+  }, [scene]);
   useEffect(
     () => () => {
       const materials = new Set<Material>();
@@ -136,7 +131,7 @@ export function CityKit({
     },
     [assets],
   );
-  const roads = useMemo(() => roadNetwork(capacity), [capacity]);
+  const roads = useMemo(() => roadNetwork(capacity * roadCapacityMultiplier), [capacity, roadCapacityMultiplier]);
   const visibleRoads = useMemo(() => {
     const groups = new Map<string, Instance[]>();
     for (const p of roads.placements) {
@@ -182,43 +177,45 @@ export function CityKit({
             x: plotAxis(x),
             y: -0.07,
             z: plotAxis(z),
-            scale: [23.8, 0.14, 23.8],
+            scale: [plotSize - 0.2, 0.14, plotSize - 0.2],
           });
         }
       }
     }
     return out;
-  }, [capacity, center.x, center.z]);
+  }, [capacity, center.x, center.z, plotAxis, plotSize]);
   const buildings = useMemo(() => {
     const groups = new Map<string, Instance[]>();
     for (const p of properties) {
+      const estate = estateDemo ? estateBuilding(p.tier, p.id) : null;
       const near = p.id === selected?.id ||
-        ((officeDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3) * zoom >= 38 &&
+        ((estateDemo ? estateBuilding(p.tier, p.id).height : BUILDING_RECIPES[p.tier].floors * 3) * zoom >= 38 &&
           Math.abs(p.x - center.x) <= 5 &&
           Math.abs(p.z - center.z) <= 5);
-      const asset = `${officeDemo ? officePreset(p.id).key : `Building_${p.tier}_${buildingVariant(p.id)}`}_${
+      const asset = `Building_${estate?.tier ?? p.tier}_${estate?.variant ?? buildingVariant(p.id)}_${
         near ? "near" : "far"
       }`;
       const list = groups.get(asset) || [];
       list.push({
         key: p.id,
-        x: plotAxis(p.x), z: plotAxis(p.z), property: p,
-        rotation: officeDemo ? officeBillboard(p.tier, p.id).rotation : 0,
+        x: plotAxis(p.x) + (estate?.x ?? 0), z: plotAxis(p.z) + (estate?.z ?? 0), property: p,
+        rotation: estate?.rotation ?? 0,
+        scale: estate ? [estate.scale, estate.scale, estate.scale] : [1, 1, 1],
         color: matchIds && !matchIds.has(p.id) && p.id !== selected?.id ? "#767d76" : "#ffffff",
       });
       groups.set(asset, list);
     }
     return groups;
-  }, [properties, selected?.id, zoom, center.x, center.z, matchIds, officeDemo]);
+  }, [properties, selected?.id, zoom, center.x, center.z, matchIds, estateDemo]);
   const { paths, planters } = useMemo(() => {
     const paths: Instance[] = [],
       planters: Instance[] = [];
     for (const p of properties) {
       const variant = buildingVariant(p.id),
         x = plotAxis(p.x), z = plotAxis(p.z), sign = variant ? 1 : -1;
-      if (officeDemo) {
-        paths.push({ key: p.id, x: x + (variant ? 9.5 : 0), y: 0.025, z: z + (variant ? 0 : 9.5), scale: variant ? [5, 0.05, 2] : [2, 0.05, 5] });
-        planters.push({ key: p.id, x: x - 9.5, z: z + 8 });
+      if (estateDemo) {
+        paths.push({ key: p.id, x: x + 20.5, y: 0.025, z: z + 20.5, scale: [3, 0.05, 7] });
+        planters.push({ key: p.id, x: x - 19, z: z - 17 });
         continue;
       }
       // A two-metre walk through the open courtyard, outside both joined wings.
@@ -229,7 +226,7 @@ export function CityKit({
       }
     }
     return { paths, planters };
-  }, [properties, center.x, center.z, officeDemo]);
+  }, [properties, center.x, center.z, estateDemo]);
   const plaza = useMemo(() => {
     const paving: Instance[] = [],
       bollards: Instance[] = [],
@@ -277,7 +274,7 @@ export function CityKit({
       })),
     [planting],
   );
-  const extent = Math.ceil(Math.sqrt(capacity) / 4) * 132 + 60;
+  const extent = Math.ceil(Math.sqrt(capacity * roadCapacityMultiplier) / 4) * 132 + 60;
   return (
     <>
       <mesh
@@ -316,6 +313,7 @@ export function CityKit({
       ))}
       <CityBillboards
         envelope={signEnvelope}
+        perimeter={estateDemo}
         properties={properties}
         selected={selected}
         center={center}
@@ -332,7 +330,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              Math.max(officeDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
+              Math.max(estateDemo ? estateBuilding(p.tier, p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center
