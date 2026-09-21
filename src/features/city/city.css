@@ -1504,3 +1504,7 @@ body:has(.city-app) {
 .city-facade-boutique { border:6px solid #e0cfb0; background:#698b90; border-top:12px solid #bd9874; }
 .city-facade-creative { border:6px solid #d6ded0; background:repeating-linear-gradient(90deg,#649292 0 14px,#d6ded0 14px 17px); }
 .city-design-upgrade { padding:14px; background:#e6ebdf; margin-bottom:16px; border-radius:10px; }
+
+.city-slot-handle {width:26px;height:26px;border-radius:50%;background:#fff6dc;color:#345544;border:1px solid #96763a;cursor:pointer;padding:0;}
+.city-slot-controls {padding:16px;border:1px solid var(--city-line,#d4dad0);border-radius:12px;display:grid;gap:12px;margin-top:16px;}
+.city-slot-controls label {display:grid;gap:6px;}

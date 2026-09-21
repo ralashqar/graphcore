@@ -7,7 +7,7 @@ import {
   IcosahedronGeometry,
   MeshLambertMaterial,
 } from "three";
-import { resolveDesign } from "../../domain/cityBuildingV2";
+import { resolveCurrent } from "../../domain/cityBuildingV3";
 import { type DecoratorPack, loadDecorators } from "./CityDecorators";
 import { CityDesignSigns } from "./CityDesignSigns";
 import { buildingParts } from "../../domain/cityBuildingDesign";
@@ -55,7 +55,7 @@ export function CityDesignBuildings(
   const [pack, setPack] = useState<DecoratorPack | null>(null);
   const needsPack = properties.some((p) =>
     nearby.has(p.id) && !p.profile.buildingArt &&
-    p.profile.buildingDesign?.version === 2 &&
+    p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
     p.profile.buildingDesign.finish !== "procedural"
   );
   useEffect(() => {
@@ -140,10 +140,10 @@ export function CityDesignBuildings(
           Math.max(Math.abs(p.x - center.x), Math.abs(p.z - center.z)) > 6
         ? "far"
         : "medium";
-      const resolved = d.version === 2
-        ? resolveDesign(d, p.profile.color, lod)
+      const resolved = d.version !== 1
+        ? resolveCurrent(d, p.profile.color, lod)
         : null;
-      const kit = pack && lod === "near" && d.version === 2 &&
+      const kit = pack && lod === "near" && d.version !== 1 &&
         d.finish !== "procedural" && resolved?.attachments.every((a) =>
           pack.has(a.asset)
         );
@@ -175,9 +175,7 @@ export function CityDesignBuildings(
             const key = "asset|" + a.asset + "|" + partIndex;
             const role = (piece.material as MeshLambertMaterial).userData
               .cityPalette as "wall" | "trim" | "glass";
-            const tint = d.version === 2
-              ? d.palette[a.role === "paving" ? "trim" : role]
-              : "#ffffff";
+            const tint = d.palette[a.role === "paving" ? "trim" : role];
             (out[key] ||= []).push({
               key: `${p.id}:asset:${index}`,
               property: p,
@@ -225,13 +223,18 @@ export function CityDesignBuildings(
           animate
         />
       ))}
-      <CityDesignSigns
-        properties={properties}
-        reduced={reduced}
-        onSelect={onSelect}
-        matchIds={matchIds}
-        selectedId={selectedId}
-      />
+      {properties.some((p) =>
+        p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
+        !p.profile.buildingArt
+      ) && (
+        <CityDesignSigns
+          properties={properties}
+          reduced={reduced}
+          onSelect={onSelect}
+          matchIds={matchIds}
+          selectedId={selectedId}
+        />
+      )}
     </>
   );
 }

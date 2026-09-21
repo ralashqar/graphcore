@@ -52,6 +52,10 @@ for kind,names in NAMES.items():
 bpy.ops.object.select_all(action='DESELECT')
 for o in exports:o.hide_set(False);o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'decorators.glb'),export_format='GLB',use_selection=True,export_yup=True,export_extras=True)
+for entry in manifest.values():
+ entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration'}[entry['kind']]
+ entry['clearanceSize']=entry['size']
+ entry['detailLevel']='near'
 (OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','assets':manifest},indent=2)+'\n')
 (OUT/'LICENSE.txt').write_text((SOURCE/'License_Source.txt').read_text())
 print(json.dumps({k:v['size'] for k,v in manifest.items()},indent=2))

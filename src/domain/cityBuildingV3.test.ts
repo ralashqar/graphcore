@@ -1,0 +1,193 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  applyComposition,
+  buildingSlots,
+  classifyCorners,
+  COMPOSITIONS,
+  massesV3,
+  newDesign,
+  normalizeV3,
+  overlaps,
+  resolveV3,
+} from "./cityBuildingV3.ts";
+import { DEFAULT_DESIGN_V2, resolveDesign } from "./cityBuildingV2.ts";
+test("all compositions and shape extremes have supported floors and bounded parts", () => {
+  for (let i = 0; i < COMPOSITIONS.length; i++) {
+    for (
+      const blueprint of ["office", "terraces", "courtyard", "l-shape"] as const
+    ) {
+      for (const finish of ["procedural", "accents", "facade"] as const) {
+        for (const width of [12, 18]) {
+          for (const depth of [10, 18]) {
+            for (const total of [1, 8]) {
+              const preset = applyComposition(newDesign("fixture"), i),
+                d = normalizeV3({
+                  ...preset,
+                  blueprint,
+                  finish,
+                  width,
+                  depth,
+                  middleFloors: total === 1 ? 0 : 6,
+                  crown: total === 1 ? "none" : "recessed",
+                  crownSetback: 2,
+                });
+              const r = resolveV3(d, "#335577");
+              assert.equal(new Set(r.masses.map((m) => m.y)).size, d.floors);
+              for (const p of r.parts) {
+                assert.ok(p.size.every((v) => v > 0));
+                assert.ok(Math.abs(p.position[0]) + p.size[0] / 2 <= 12);
+                assert.ok(Math.abs(p.position[2]) + p.size[2] / 2 <= 12);
+              }
+              for (
+                const m of r.masses.filter((m) => m.y > .65)
+              ) {
+                assert.ok(
+                  r.masses.some((s) =>
+                    Math.abs(s.y + s.height - m.y) < .001 &&
+                    m.x - m.width / 2 >= s.x - s.width / 2 - .001 &&
+                    m.x + m.width / 2 <= s.x + s.width / 2 + .001 &&
+                    m.z - m.depth / 2 >= s.z - s.depth / 2 - .001 &&
+                    m.z + m.depth / 2 <= s.z + s.depth / 2 + .001
+                  ),
+                  "unsupported upper floor",
+                );
+              }
+              const active = r.slots.filter((s) => s.active);
+              for (let a = 0; a < active.length; a++) {
+                for (let b = a + 1; b < active.length; b++) {
+                  assert.ok(!overlaps(active[a], active[b]));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+});
+test("corners distinguish courtyards and exterior corners", () => {
+  const corners = classifyCorners(
+    massesV3({ ...newDesign("a"), blueprint: "courtyard" }),
+  );
+  assert.ok(corners.some((c) => c.kind === "convex"));
+  assert.ok(corners.some((c) => c.kind === "concave"));
+});
+test("unavailable roof sign selection survives shape changes and reactivates", () => {
+  const d = normalizeV3({
+    ...newDesign("a"),
+    blueprint: "office",
+    roof: "pitched",
+    slots: { "brand.roof": "brand" },
+  });
+  assert.equal(
+    buildingSlots(d).find((s) => s.id === "brand.roof")!.active,
+    false,
+  );
+  assert.equal(
+    buildingSlots(d).find((s) => s.id === "brand.roof")!.selected,
+    "brand",
+  );
+  assert.equal(
+    buildingSlots({ ...d, roof: "flat" }).find((s) => s.id === "brand.roof")!
+      .active,
+    true,
+  );
+});
+test("scoped seeds preserve shape, branding and the other subsystem", () => {
+  const d = {
+    ...newDesign("a"),
+    finish: "facade" as const,
+    rhythm: "alternating" as const,
+  };
+  const r = resolveV3(d, "#335577"),
+    facade = resolveV3({ ...d, facadeSeed: d.facadeSeed + 1 }, "#335577"),
+    grounds = resolveV3({ ...d, groundsSeed: d.groundsSeed + 1 }, "#335577");
+  assert.deepEqual(r, resolveV3(d, "#335577"));
+  assert.deepEqual(r.masses, facade.masses);
+  assert.deepEqual(r.masses, grounds.masses);
+  assert.deepEqual(r.slots, facade.slots);
+  assert.deepEqual(r.signs, grounds.signs);
+  assert.deepEqual(
+    r.attachments.filter((a) => a.role === "facade"),
+    grounds.attachments.filter((a) => a.role === "facade"),
+  );
+  assert.notDeepEqual(r.parts, facade.parts);
+  assert.notDeepEqual(r.slots, grounds.slots);
+});
+test("composition preserves brand palette and version two geometry is frozen", () => {
+  const d = newDesign("a");
+  assert.deepEqual(applyComposition(d, 2).palette, d.palette);
+  assert.equal(
+    createHash("sha256").update(
+      JSON.stringify(resolveDesign(DEFAULT_DESIGN_V2, "#335577")),
+    ).digest("hex"),
+    "3e6e8db0896d7ba8c470d7e6e98037a5ca2ea592d2e693a2dacd86d1d5867107",
+  );
+});
+
+test("optional attachment groups remain within declared envelopes and actual native bounds", async () => {
+  const { readFileSync } = await import("node:fs");
+  const catalog = JSON.parse(
+    readFileSync(
+      new URL("../../public/city/decorators/manifest.json", import.meta.url),
+      "utf8",
+    ),
+  ).assets;
+  for (
+    const blueprint of ["office", "courtyard", "l-shape", "terraces"] as const
+  ) {
+    for (const width of [12, 18]) {
+      for (const depth of [10, 18]) {
+        const d = normalizeV3({
+          ...newDesign("slots"),
+          blueprint,
+          width,
+          depth,
+          finish: "facade",
+          density: "full",
+          slots: {
+            "brand.roof": "brand",
+            "campaign.side": "campaign",
+            "canopy.entrance": "canopy",
+            "ground.left": "planter",
+            "ground.right": "bollards",
+            "terrace.left": "planter",
+            "terrace.right": "planter",
+          },
+        });
+        const r = resolveV3(d, "#335577"),
+          active = r.slots.filter((s) => s.active);
+        for (let a = 0; a < active.length; a++) {
+          for (let b = a + 1; b < active.length; b++) {
+            assert.ok(!overlaps(active[a], active[b]));
+          }
+        }
+        for (const a of r.attachments) {
+          const [w, , dep] = catalog[a.asset].size,
+            c = Math.cos(a.rotation),
+            s = Math.sin(a.rotation);
+          for (const x of [-w / 2, w / 2]) {
+            for (const z of [0, dep]) {
+              assert.ok(Math.abs(a.position[0] + x * c + z * s) < 11.8);
+              assert.ok(Math.abs(a.position[2] + z * c - x * s) < 11.8);
+            }
+          }
+        }
+        for (const tree of r.parts.filter((p) => p.kind === "tree")) {
+          assert.ok(
+            active.some((s) =>
+              s.selected === "planter" &&
+              tree.position.every((v, i) =>
+                Math.abs(v - s.position[i]) + tree.size[i] <=
+                  s.size[i] / 2 + .001
+              )
+            ),
+            "tree exceeds its reserved slot",
+          );
+        }
+      }
+    }
+  }
+});

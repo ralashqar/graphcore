@@ -1,6 +1,14 @@
-import { Component, type ReactNode, useEffect, useMemo, useState } from "react";
+import type { OrbitControls as OrbitControlsHandle } from "three-stdlib";
+import {
+  Component,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { Html, OrbitControls } from "@react-three/drei";
 import {
   BUILDING_PRESETS,
   buildingMasses,
@@ -11,22 +19,55 @@ import {
   ARCHITECTURE_LABELS,
   ARCHITECTURES,
   brandPalette,
-  type CityBuildingDesignV2,
-  DEFAULT_DESIGN_V2,
-  normalizeDesign,
-  resolveDesign,
-  upgradeDesign,
 } from "../../domain/cityBuildingV2";
+import {
+  applyComposition,
+  buildingSlots,
+  type CityBuildingDesignV3,
+  type ComponentId,
+  COMPOSITIONS,
+  newDesign,
+  normalizeV3,
+  resolveCurrent,
+  type SlotId,
+  upgradeV3,
+} from "../../domain/cityBuildingV3";
+import { useCityMapLayout } from "./CityMapLayout";
 import { CityDesignBuildings } from "./CityDesignBuildings";
 
 function FitCamera({ height }: { height: number }) {
   const { camera, size, invalidate } = useThree();
   useEffect(() => {
+    if (!size.width || !size.height) return;
     camera.zoom = Math.min(size.width, size.height) / Math.max(43, height + 24);
     camera.updateProjectionMatrix();
     invalidate();
   }, [camera, size.width, size.height, invalidate, height]);
   return null;
+}
+function PreviewControls(
+  { height, reset, fixed }: { height: number; reset: number; fixed: boolean },
+) {
+  const { camera, gl, invalidate } = useThree(),
+    ref = useRef<OrbitControlsHandle>(null);
+  useEffect(() => {
+    camera.position.set(36, 36 * 380 / 420 + height * .4, 36);
+    ref.current?.target.set(0, height * .4, 0);
+    ref.current?.update();
+    invalidate();
+  }, [camera, reset, height, invalidate]);
+  return (
+    <OrbitControls
+      ref={ref}
+      domElement={gl.domElement}
+      target={[0, height * .4, 0]}
+      enableRotate={!fixed}
+      enablePan={false}
+      minZoom={3}
+      maxZoom={35}
+      maxPolarAngle={Math.PI / 2.1}
+    />
+  );
 }
 class DesignBoundary
   extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -46,10 +87,14 @@ class DesignBoundary
   }
 }
 function Blueprint(
-  { design, mini = false }: { design: CityBuildingDesign; mini?: boolean },
+  { design, mini = false, onSlot }: {
+    design: CityBuildingDesign;
+    mini?: boolean;
+    onSlot?: (id: SlotId) => void;
+  },
 ) {
-  const resolved = design.version === 2
-    ? resolveDesign(design, "#547364")
+  const resolved = design.version !== 1
+    ? resolveCurrent(design, "#547364")
     : null;
   return (
     <svg
@@ -89,7 +134,11 @@ function Blueprint(
             fillOpacity=".6"
           />
         )}
-        {buildingMasses({ ...design, floors: 1 }).map((m, i) => (
+        {buildingMasses(
+          design.version === 3
+            ? { ...design, middleFloors: 0, crown: "none", floors: 1 }
+            : { ...design, floors: 1 },
+        ).map((m, i) => (
           <rect
             key={i}
             x={m.x - m.width / 2}
@@ -132,19 +181,110 @@ function Blueprint(
               fill="#907249"
             />
           ))}
+        {design.version === 3 && !mini &&
+          buildingSlots(design).map((slot) => (
+            <rect
+              key={slot.id}
+              x={slot.position[0] - slot.size[0] / 2}
+              y={slot.position[2] - slot.size[2] / 2}
+              width={slot.size[0]}
+              height={slot.size[2]}
+              fill={slot.active ? "#b48640" : "#78917b"}
+              fillOpacity=".35"
+              stroke={slot.reason ? "#ad594c" : "#496955"}
+              strokeWidth=".1"
+              role="button"
+              tabIndex={0}
+              aria-label={`Select ${slot.label}`}
+              onClick={() => onSlot?.(slot.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onSlot?.(slot.id);
+              }}
+            />
+          ))}
       </g>
     </svg>
   );
 }
+function SlotHandles(
+  { design, onSelect }: {
+    design: CityBuildingDesignV3;
+    onSelect: (id: SlotId) => void;
+  },
+) {
+  const { plotSize } = useCityMapLayout();
+  return (
+    <group
+      rotation={[0, design.rotation * Math.PI / 2, 0]}
+      scale={plotSize / 24}
+    >
+      {buildingSlots(design).map((slot) => (
+        <Html
+          key={slot.id}
+          position={slot.position}
+          center
+          zIndexRange={[20, 0]}
+        >
+          <button
+            type="button"
+            className="city-slot-handle"
+            aria-label={`Select ${slot.label}`}
+            title={slot.label}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(slot.id);
+            }}
+          >
+            {slot.active ? "●" : "+"}
+          </button>
+        </Html>
+      ))}
+    </group>
+  );
+}
 export function CityBuildingDesigner(
-  { profile, onChange }: {
+  { profile, onChange, businessId }: {
+    businessId?: string;
     profile: CityProfile;
     onChange: (design: CityBuildingDesign) => void;
   },
 ) {
-  const design = profile.buildingDesign || DEFAULT_DESIGN_V2;
-  const d = design.version === 2 ? design : upgradeDesign(design),
-    legacy = design.version === 1;
+  const [initial] = useState(() => {
+    let id = businessId;
+    if (!id) {
+      id = sessionStorage.getItem("city-design-draft-seed") ||
+        crypto.randomUUID();
+      sessionStorage.setItem("city-design-draft-seed", id);
+    }
+    return newDesign(id);
+  });
+  const design = profile.buildingDesign || initial;
+  const d = design.version === 3 ? design : upgradeV3(design),
+    legacy = design.version !== 3;
+  const [lastPreset, setLastPreset] = useState<number | null>(null);
+  const [showSlots, setShowSlots] = useState(false),
+    [selectedSlot, setSelectedSlot] = useState<SlotId>("brand.entrance");
+  const selectSlot = (id: SlotId) => {
+    setSelectedSlot(id);
+    setTab(
+      id.startsWith("ground.") || id.startsWith("terrace.")
+        ? "Grounds"
+        : "Branding",
+    );
+    setShowSlots(true);
+  };
+  const slots = useMemo(() => buildingSlots(d), [d]);
+  const selected = slots.find((s) => s.id === selectedSlot)!;
+  const setSlot = (id: SlotId, component: ComponentId | null) => {
+    const slots = { ...d.slots };
+    if (component === "brand") {
+      for (
+        const k of ["brand.entrance", "brand.facade", "brand.roof"] as const
+      ) slots[k] = null;
+    }
+    slots[id] = component;
+    commit({ ...d, slots });
+  };
   const [view, setView] = useState<"3d" | "fixed" | "plan">("3d"),
     [cameraKey, setCameraKey] = useState(0),
     [grid, setGrid] = useState(false),
@@ -154,7 +294,7 @@ export function CityBuildingDesigner(
   const commit = (next: CityBuildingDesign) => {
     setPast((h) => [...h, design].slice(-40));
     setFuture([]);
-    onChange(next.version === 2 ? normalizeDesign(next) : next);
+    onChange(next.version === 3 ? normalizeV3(next) : next);
   };
   const undo = () => {
     const previous = past.at(-1);
@@ -171,10 +311,38 @@ export function CityBuildingDesigner(
       setFuture((h) => h.slice(1));
     }
   };
-  const update = <K extends keyof CityBuildingDesignV2>(
+  const update = <K extends keyof CityBuildingDesignV3>(
     key: K,
-    value: CityBuildingDesignV2[K],
-  ) => commit({ ...d, [key]: value });
+    value: CityBuildingDesignV3[K],
+  ) => {
+    if (key === "floors") {
+      const n = Number(value), crown = n === 1 ? "none" : d.crown;
+      commit({ ...d, crown, middleFloors: n - 1 - (crown === "none" ? 0 : 1) });
+      return;
+    }
+    if (key === "canopy") {
+      setSlot("canopy.entrance", value ? "canopy" : null);
+      return;
+    }
+    if (key === "grounds") {
+      const component = value === "minimal"
+        ? null
+        : value === "urban"
+        ? "bollards"
+        : "planter";
+      commit({
+        ...d,
+        grounds: value as typeof d.grounds,
+        slots: {
+          ...d.slots,
+          "ground.left": component,
+          "ground.right": component,
+        },
+      });
+      return;
+    }
+    commit({ ...d, [key]: value });
+  };
   const property = useMemo<CityProperty>(
     () => ({
       id: "design-preview",
@@ -191,7 +359,7 @@ export function CityBuildingDesigner(
     [profile, design],
   );
   const properties = useMemo(() => [property], [property]);
-  const height = design.version === 2
+  const height = design.version !== 1
     ? design.groundHeight + (design.floors - 1) * 3
     : design.floors * 2.25;
   const ranges = (
@@ -268,56 +436,63 @@ export function CityBuildingDesigner(
             <button type="button" onClick={() => setCameraKey((k) => k + 1)}>
               Reset camera
             </button>
-          </div>
-          {view === "plan" ? <Blueprint design={design} /> : (
-            <div
-              className="city-design-canvas"
-              data-blueprint={design.blueprint}
-              data-version={design.version}
-              data-floors={design.floors}
+            <button
+              type="button"
+              disabled={legacy}
+              aria-pressed={showSlots}
+              onClick={() => setShowSlots(!showSlots)}
             >
-              <DesignBoundary>
-                <Canvas
-                  key={cameraKey}
-                  orthographic
-                  frameloop="demand"
-                  dpr={[1, 1.5]}
-                  camera={{
-                    position: [36, 36 * 380 / 420 + height * .4, 36],
-                    zoom: 15,
-                    near: .1,
-                    far: 250,
-                  }}
-                  gl={{ antialias: true }}
-                >
-                  <color attach="background" args={["#e8e5da"]} />
-                  <ambientLight intensity={1.6} />
-                  <directionalLight position={[10, 30, 20]} intensity={2} />
-                  <FitCamera height={height} />
-                  <CityDesignBuildings properties={properties} />
-                  {grid && (
-                    <gridHelper
-                      args={[24, 12, "#64796d", "#b1baaa"]}
-                      position={[0, .31, 0]}
-                    />
-                  )}
-                  <OrbitControls
-                    target={[0, height * .4, 0]}
-                    enableRotate={view !== "fixed"}
-                    enablePan={false}
-                    minZoom={3}
-                    maxZoom={35}
-                    maxPolarAngle={Math.PI / 2.1}
+              Attachment slots
+            </button>
+          </div>
+          {view === "plan" && <Blueprint design={design} onSlot={selectSlot} />}
+          <div
+            style={{ display: view === "plan" ? "none" : undefined }}
+            className="city-design-canvas"
+            data-blueprint={design.blueprint}
+            data-version={design.version}
+            data-floors={design.floors}
+          >
+            <DesignBoundary>
+              <Canvas
+                orthographic
+                frameloop="demand"
+                dpr={[1, 1.5]}
+                camera={{
+                  position: [36, 36 * 380 / 420 + height * .4, 36],
+                  zoom: 15,
+                  near: .1,
+                  far: 250,
+                }}
+                gl={{ antialias: true }}
+              >
+                <color attach="background" args={["#e8e5da"]} />
+                <ambientLight intensity={1.6} />
+                <directionalLight position={[10, 30, 20]} intensity={2} />
+                <FitCamera height={height} />
+                {!legacy && showSlots && (
+                  <SlotHandles design={d} onSelect={selectSlot} />
+                )}
+                <CityDesignBuildings properties={properties} />
+                {grid && (
+                  <gridHelper
+                    args={[24, 12, "#64796d", "#b1baaa"]}
+                    position={[0, .31, 0]}
                   />
-                </Canvas>
-              </DesignBoundary>
-            </div>
-          )}
+                )}
+                <PreviewControls
+                  height={height}
+                  reset={cameraKey}
+                  fixed={view === "fixed"}
+                />
+              </Canvas>
+            </DesignBoundary>
+          </div>
           <div className="city-design-caption">
             <strong>{profile.name || "Your business"}</strong>
             <span>
               {design.floors} floors · {design.width} ×{" "}
-              {design.version === 2 ? d.depth : design.width} m
+              {design.version !== 1 ? d.depth : design.width} m
             </span>
           </div>
           <p className="city-studio-note">
@@ -336,11 +511,18 @@ export function CityBuildingDesigner(
               type="button"
               disabled={legacy}
               onClick={() =>
-                commit(upgradeDesign(
-                  BUILDING_PRESETS.find((p) =>
-                    p.design.blueprint === d.blueprint
-                  )!.design,
-                ))}
+                commit(
+                  applyComposition(
+                    d,
+                    lastPreset ?? Math.max(
+                      0,
+                      COMPOSITIONS.findIndex((p) =>
+                        p.patch.blueprint === d.blueprint &&
+                        p.patch.architecture === d.architecture
+                      ),
+                    ),
+                  ),
+                )}
             >
               Reset to preset
             </button>
@@ -355,7 +537,7 @@ export function CityBuildingDesigner(
               </p>
               <button
                 type="button"
-                onClick={() => commit(upgradeDesign(design))}
+                onClick={() => commit(upgradeV3(design))}
               >
                 Upgrade design
               </button>
@@ -390,7 +572,8 @@ export function CityBuildingDesigner(
                         commit({
                           ...d,
                           blueprint: p.design.blueprint,
-                          floors: p.design.floors,
+                          middleFloors: p.design.floors - 1,
+                          crown: "none",
                         })}
                     >
                       <Blueprint
@@ -447,6 +630,103 @@ export function CityBuildingDesigner(
             )}
             {tab === "Architecture" && (
               <div className="city-art-controls">
+                <div className="city-preset-picker">
+                  {COMPOSITIONS.map((p, i) => (
+                    <button
+                      type="button"
+                      key={p.name}
+                      onClick={() => {
+                        setLastPreset(i);
+                        commit(applyComposition(d, i));
+                      }}
+                    >
+                      <Blueprint design={applyComposition(d, i)} mini />
+                      <strong>{p.name}</strong>
+                    </button>
+                  ))}
+                </div>
+                <details>
+                  <summary>Advanced floor stack</summary>
+                  <label>
+                    Ground-floor treatment<select
+                      aria-label="Ground-floor treatment"
+                      value={d.base}
+                      onChange={(e) =>
+                        update("base", e.target.value as typeof d.base)}
+                    >
+                      {["storefront", "lobby", "plinth"].map((v) => (
+                        <option key={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Middle floors<input
+                      aria-label="Middle floors"
+                      type="number"
+                      min="0"
+                      max={d.crown === "none" ? 7 : 6}
+                      value={d.middleFloors}
+                      onChange={(e) =>
+                        update(
+                          "middleFloors",
+                          Math.max(
+                            0,
+                            Math.min(
+                              d.crown === "none" ? 7 : 6,
+                              Number(e.target.value),
+                            ),
+                          ),
+                        )}
+                    />
+                  </label>
+                  <label>
+                    Façade rhythm<select
+                      aria-label="Façade rhythm"
+                      value={d.rhythm}
+                      onChange={(e) =>
+                        update("rhythm", e.target.value as typeof d.rhythm)}
+                    >
+                      {["vertical", "ribbon", "alternating"].map((v) => (
+                        <option key={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Crown<select
+                      aria-label="Crown"
+                      value={d.crown}
+                      onChange={(e) =>
+                        commit({
+                          ...d,
+                          crown: e.target.value as typeof d.crown,
+                          middleFloors: Math.min(
+                            d.middleFloors,
+                            e.target.value === "none" ? 7 : 6,
+                          ),
+                        })}
+                    >
+                      {["none", "recessed", "penthouse", "terrace"].map((v) => (
+                        <option key={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Crown setback<input
+                      aria-label="Crown setback"
+                      type="range"
+                      min=".5"
+                      max="2"
+                      step=".5"
+                      value={d.crownSetback}
+                      onChange={(e) =>
+                        update("crownSetback", Number(e.target.value))}
+                    />
+                  </label>
+                  <p>
+                    1 base + {d.middleFloors} middle +{" "}
+                    {d.crown === "none" ? 0 : 1} crown = {d.floors} floors
+                  </p>
+                </details>
                 <div className="city-style-picker">
                   {ARCHITECTURES.map((a) => (
                     <button
@@ -517,20 +797,22 @@ export function CityBuildingDesigner(
                 </label>
                 <button
                   type="button"
-                  onClick={() => update("seed", (d.seed + 7919) % 1000000)}
+                  onClick={() =>
+                    update("facadeSeed", (d.facadeSeed + 7919) % 1000000)}
                 >
-                  Try another variation
+                  Vary façade
                 </button>
                 <small>
-                  Variation {d.seed} · Shape and brand colours stay fixed.
+                  Façade variation {d.facadeSeed}{" "}
+                  · Shape and brand colours stay fixed.
                 </small>
               </div>
             )}
             {tab === "Branding" && (
               <div className="city-art-controls">
                 <p>
-                  Your business logo appears on the integrated entrance sign.
-                  Add or change it in Business details below.
+                  Your business logo appears on the selected primary sign. Add
+                  or change it in Business details below.
                 </p>
                 {(["wall", "trim", "glass", "roof"] as const).map((k) => (
                   <label key={k}>
@@ -556,6 +838,24 @@ export function CityBuildingDesigner(
             )}
             {tab === "Grounds" && (
               <div className="city-art-controls">
+                <button
+                  type="button"
+                  onClick={() =>
+                    update("groundsSeed", (d.groundsSeed + 7919) % 1000000)}
+                >
+                  Vary grounds
+                </button>
+                <label>
+                  Decoration density<select
+                    aria-label="Decoration density"
+                    value={d.density}
+                    onChange={(e) =>
+                      update("density", e.target.value as typeof d.density)}
+                  >
+                    <option value="restrained">Restrained</option>
+                    <option value="full">Full</option>
+                  </select>
+                </label>
                 <label>
                   Plot decoration<select
                     aria-label="Plot decoration"
@@ -584,6 +884,60 @@ export function CityBuildingDesigner(
                   Decorations respect the entrance route and plot clearance. The
                   city roads stay as they are.
                 </p>
+              </div>
+            )}
+            {(tab === "Branding" || tab === "Grounds") && (
+              <div className="city-slot-controls">
+                <label>
+                  Attachment slot<select
+                    aria-label="Attachment slot"
+                    value={selectedSlot}
+                    onChange={(e) => selectSlot(e.target.value as SlotId)}
+                  >
+                    {slots.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                        {s.selected && !s.active ? " · inactive" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Component<select
+                    aria-label="Slot component"
+                    value={selected.selected || ""}
+                    onChange={(e) =>
+                      setSlot(
+                        selected.id,
+                        e.target.value as ComponentId || null,
+                      )}
+                  >
+                    {!selected.id.startsWith("brand.") && (
+                      <option value="">None</option>
+                    )}
+                    {selected.id.startsWith("brand.") && !selected.selected && (
+                      <option value="">Not selected</option>
+                    )}
+                    {selected.compatible.map((c) => (
+                      <option key={c} value={c}>
+                        {c === "brand" ? "Primary business sign" : c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p>
+                  {selected.size[0].toFixed(1)} × {selected.size[1].toFixed(1)}
+                  {" "}
+                  × {selected.size[2].toFixed(1)} m clearance
+                </p>
+                {selected.reason && (
+                  <p role="status">
+                    Inactive: {selected.reason} Your selection is retained.
+                  </p>
+                )}
+                <button type="button" onClick={() => setShowSlots(true)}>
+                  Show slots in preview
+                </button>
               </div>
             )}
           </fieldset>

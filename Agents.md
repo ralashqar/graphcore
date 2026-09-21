@@ -2,6 +2,12 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## Composable City architecture and attachment slots (September 2026)
+
+Version-3 `buildingDesign` recipes add a pinned `city-grammar-1` generator revision, base/middle/crown composition, independent façade/grounds seeds, façade rhythms and explicit bounded attachment selections. Six complete presets and advanced stack editing share a support-clipped geometry resolver with the City renderer. Slot eligibility covers dimensions, roof compatibility, building clearance and mutual occupancy; inactive choices persist without relocation. The shared schema enforces eight floors, legal component/slot pairs and one primary brand sign plus at most one campaign panel. Approved published profile imagery/offer titles populate campaign signs; expired offers revert to branding. V1/v2 designs retain their renderers until explicit upgrade. No migration or provider generation is introduced.
+
+The affected City Edge entries and world campus worker still share the profile parser. Pair the five City endpoints, frontend and world worker (`2026-09-21-city-design-3`) on isolated staging. Local verification and benchmark evidence are in [docs/synarc-city-building-composition.md](docs/synarc-city-building-composition.md). Isolated staging configuration, hosted publication and physical-mobile acceptance remain pending; this is not production activation.
+
 ## Live City building blueprints (September 2026)
 
 The merchant studio separates immediate 3D design from generated artwork. Version-2 `buildingDesign` recipes add depth, ground-floor height, podium, four architectural families, three finish modes, roofs, palettes, independent grounds and a deterministic seed. A shared exposed-wall/bay resolver drives both the editor and city; Quaternius CC0 components load lazily, with procedural fallback, bounded near-detail and instanced geometry/material batches. The integrated logo/name sign uses a shared atlas. V1 geometry is preserved until explicit upgrade. Existing owner/revision/publication checks persist recipes inside profile JSON; no database migration or provider inference is required.

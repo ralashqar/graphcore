@@ -33,7 +33,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "6f137c6f101dd37a492ad164dac318598aba6f30475ec2da8aa41e35ff6ccd45"
+      "sourceSha256": "6f137c6f101dd37a492ad164dac318598aba6f30475ec2da8aa41e35ff6ccd45",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.30395
+      ],
+      "detailLevel": "near"
     },
     "WhiteBrick_Window": {
       "kind": "window",
@@ -62,7 +69,14 @@
         "WhiteBrick_Plain_3",
         "Cornice_WhiteBrick_Center"
       ],
-      "sourceSha256": "688fc887595979d56c9ee625332e7cf4f344c99cb5d3a38ebef0b4786d613914"
+      "sourceSha256": "688fc887595979d56c9ee625332e7cf4f344c99cb5d3a38ebef0b4786d613914",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.25624
+      ],
+      "detailLevel": "near"
     },
     "Marble_Window": {
       "kind": "window",
@@ -91,7 +105,14 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center"
       ],
-      "sourceSha256": "04df40c2030b6b158dd766ce7d44fa751a6ce36a17f35d1b74aa3836b5c437c4"
+      "sourceSha256": "04df40c2030b6b158dd766ce7d44fa751a6ce36a17f35d1b74aa3836b5c437c4",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        4.0,
+        3.0,
+        0.25624
+      ],
+      "detailLevel": "near"
     },
     "Metal_Window_Half": {
       "kind": "window",
@@ -121,7 +142,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "630f11be07b0a72e5c884528877d510602896e170d13dc906bcb5a0e22f79e79"
+      "sourceSha256": "630f11be07b0a72e5c884528877d510602896e170d13dc906bcb5a0e22f79e79",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.22864
+      ],
+      "detailLevel": "near"
     },
     "Brick_Plain_1": {
       "kind": "wall",
@@ -150,7 +178,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "c7e84e38230a3e6231d28354ed7be0896469897bbe3b626b9115cacdca870f7a"
+      "sourceSha256": "c7e84e38230a3e6231d28354ed7be0896469897bbe3b626b9115cacdca870f7a",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "WhiteBrick_Plain_3": {
       "kind": "wall",
@@ -175,7 +210,14 @@
         "WhiteBrick_Plain_3",
         "Cornice_WhiteBrick_Center"
       ],
-      "sourceSha256": "e3a0f64f87af723169e28368d2facad80e9903ea9490b98680efe46515901498"
+      "sourceSha256": "e3a0f64f87af723169e28368d2facad80e9903ea9490b98680efe46515901498",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Marble_Plain_3": {
       "kind": "wall",
@@ -201,7 +243,14 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center"
       ],
-      "sourceSha256": "f6668f6f3f5aa256d2544de92f5bb2a8c51d889af9d1be90a38f5c22ef73ccde"
+      "sourceSha256": "f6668f6f3f5aa256d2544de92f5bb2a8c51d889af9d1be90a38f5c22ef73ccde",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Metal_Plain_3": {
       "kind": "wall",
@@ -230,7 +279,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "5cd710f0e57a3690ccbe965d02d39bf95879a1cfb0a0a530d66cdf4cf8f32b9e"
+      "sourceSha256": "5cd710f0e57a3690ccbe965d02d39bf95879a1cfb0a0a530d66cdf4cf8f32b9e",
+      "attachmentType": "facade.bay",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Entrance_Marble_2x1": {
       "kind": "entrance",
@@ -255,7 +311,14 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center"
       ],
-      "sourceSha256": "a93652dac15f07c56f859b80eb9a075ec09c57b5e9dc08460fed22e491e1150b"
+      "sourceSha256": "a93652dac15f07c56f859b80eb9a075ec09c57b5e9dc08460fed22e491e1150b",
+      "attachmentType": "entrance",
+      "clearanceSize": [
+        2.0,
+        1.00675,
+        1.00321
+      ],
+      "detailLevel": "near"
     },
     "Entrance_Concrete_2x1": {
       "kind": "entrance",
@@ -278,7 +341,14 @@
         "Entrance_Concrete_2x1",
         "Concrete_Corner"
       ],
-      "sourceSha256": "df8b376d55f82da292f4f085fd0d348d6da8b8c50fa9e8b565e9cad090c1854b"
+      "sourceSha256": "df8b376d55f82da292f4f085fd0d348d6da8b8c50fa9e8b565e9cad090c1854b",
+      "attachmentType": "entrance",
+      "clearanceSize": [
+        2.0,
+        1.00675,
+        1.00321
+      ],
+      "detailLevel": "near"
     },
     "Door_1": {
       "kind": "entrance",
@@ -305,7 +375,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "629a9adfe5ca6115e307e5c3bddb157941670c6207319c6e3f44b3b2b96fb91a"
+      "sourceSha256": "629a9adfe5ca6115e307e5c3bddb157941670c6207319c6e3f44b3b2b96fb91a",
+      "attachmentType": "entrance",
+      "clearanceSize": [
+        1.0,
+        2.2,
+        0.25985
+      ],
+      "detailLevel": "near"
     },
     "DoorFrame_Trim": {
       "kind": "entrance",
@@ -335,7 +412,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "44c3b9b4616783d89a6a8ff6b4e1dc4c4eabfbc2bdd01d813ee9e759e3867ae6"
+      "sourceSha256": "44c3b9b4616783d89a6a8ff6b4e1dc4c4eabfbc2bdd01d813ee9e759e3867ae6",
+      "attachmentType": "entrance",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.22558
+      ],
+      "detailLevel": "near"
     },
     "DoorFrame_Metal_Single": {
       "kind": "entrance",
@@ -364,7 +448,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "c95b028dbedbd4509b113480265a24f03c0c0aaeac136d72d8f8c93330144ba9"
+      "sourceSha256": "c95b028dbedbd4509b113480265a24f03c0c0aaeac136d72d8f8c93330144ba9",
+      "attachmentType": "entrance",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Brick_Center": {
       "kind": "cornice",
@@ -392,7 +483,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "5246e328644ba0fe95fa5f80dd573749bdb85ce963d1ffaeff1795d6176a720a"
+      "sourceSha256": "5246e328644ba0fe95fa5f80dd573749bdb85ce963d1ffaeff1795d6176a720a",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.4
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Brick_L": {
       "kind": "cornice",
@@ -420,7 +518,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "2e48cc9e05614ff599272be258f8aff8d31272751e35a16dc8e8b11569280f74"
+      "sourceSha256": "2e48cc9e05614ff599272be258f8aff8d31272751e35a16dc8e8b11569280f74",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.4
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Brick_R": {
       "kind": "cornice",
@@ -448,7 +553,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "09ec4d2824a81387554f2b878a8bc1610e6cdce8bbfe4bef1b8c0f8a4e84749d"
+      "sourceSha256": "09ec4d2824a81387554f2b878a8bc1610e6cdce8bbfe4bef1b8c0f8a4e84749d",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.4
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Brick_90Angle_L": {
       "kind": "cornice",
@@ -476,7 +588,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "f4881d48c6ebc4e95bbbad5dfc5f89d7b8aee14619cd76b0cbc0ffe7c4a29dd0"
+      "sourceSha256": "f4881d48c6ebc4e95bbbad5dfc5f89d7b8aee14619cd76b0cbc0ffe7c4a29dd0",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.9
+      ],
+      "detailLevel": "near"
     },
     "Cornice_WhiteBrick_Center": {
       "kind": "cornice",
@@ -500,7 +619,14 @@
         "WhiteBrick_Plain_3",
         "Cornice_WhiteBrick_Center"
       ],
-      "sourceSha256": "d0343a7282505e29f8ccbec749ee40780b8bcc79d774b5158d6551a6c1ee7da4"
+      "sourceSha256": "d0343a7282505e29f8ccbec749ee40780b8bcc79d774b5158d6551a6c1ee7da4",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        0.4,
+        0.4
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Marble_Center": {
       "kind": "cornice",
@@ -526,7 +652,14 @@
         "Entrance_Marble_2x1",
         "Cornice_Marble_Center"
       ],
-      "sourceSha256": "8f00418b36a05e749dee230689afcedffa0a5ef0298d879cb2a6fea0a9f079c2"
+      "sourceSha256": "8f00418b36a05e749dee230689afcedffa0a5ef0298d879cb2a6fea0a9f079c2",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.0,
+        0.61846
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Metal_Center": {
       "kind": "cornice",
@@ -554,7 +687,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "62357dce45d6d4d3a5b3c5725bad3836cc562f120e2d624fe7c3e9aa7462f586"
+      "sourceSha256": "62357dce45d6d4d3a5b3c5725bad3836cc562f120e2d624fe7c3e9aa7462f586",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.00004,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Metal_L": {
       "kind": "cornice",
@@ -582,7 +722,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "1bf0c26073d07e589f71a3cf42ea677ef47e7b395591b7ee0933e2cdb7232928"
+      "sourceSha256": "1bf0c26073d07e589f71a3cf42ea677ef47e7b395591b7ee0933e2cdb7232928",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.1,
+        1.00004,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Metal_R": {
       "kind": "cornice",
@@ -610,7 +757,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "50a48410042fb37801fa2368a3e90b4dff99eef4429fafb9234d2be7de244836"
+      "sourceSha256": "50a48410042fb37801fa2368a3e90b4dff99eef4429fafb9234d2be7de244836",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.1,
+        1.00004,
+        0.2
+      ],
+      "detailLevel": "near"
     },
     "Cornice_Metal_90Angle_L": {
       "kind": "cornice",
@@ -638,7 +792,14 @@
         "Cornice_Metal_R",
         "Cornice_Metal_90Angle_L"
       ],
-      "sourceSha256": "d9a0955c27122d76050a164d55bc23b06a843f4d2dff98fcbf2bf79e3e2c46e3"
+      "sourceSha256": "d9a0955c27122d76050a164d55bc23b06a843f4d2dff98fcbf2bf79e3e2c46e3",
+      "attachmentType": "roof.edge",
+      "clearanceSize": [
+        2.0,
+        1.00004,
+        0.7
+      ],
+      "detailLevel": "near"
     },
     "Brick_Corner_Plain": {
       "kind": "corner",
@@ -667,7 +828,14 @@
         "Cornice_Brick_90Angle_L",
         "Brick_Corner_Plain"
       ],
-      "sourceSha256": "637c00c996f0e7514a702282e4e3da12c8f8dbabf970cf6c35c360acd041ecc4"
+      "sourceSha256": "637c00c996f0e7514a702282e4e3da12c8f8dbabf970cf6c35c360acd041ecc4",
+      "attachmentType": "facade.corner",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        2.0
+      ],
+      "detailLevel": "near"
     },
     "Concrete_Corner": {
       "kind": "corner",
@@ -691,7 +859,14 @@
         "Entrance_Concrete_2x1",
         "Concrete_Corner"
       ],
-      "sourceSha256": "eeefdebe81bb9720386bc7c4774197eb25a68d4f45e44dccaff3c3db1b30b9f5"
+      "sourceSha256": "eeefdebe81bb9720386bc7c4774197eb25a68d4f45e44dccaff3c3db1b30b9f5",
+      "attachmentType": "facade.corner",
+      "clearanceSize": [
+        2.0,
+        3.0,
+        2.0
+      ],
+      "detailLevel": "near"
     },
     "Floor_2x2": {
       "kind": "ground",
@@ -719,7 +894,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "eb6197ab9d5223c346b14ebaea66c285ba62a99beb8c5bcc1a22c51a7be56668"
+      "sourceSha256": "eb6197ab9d5223c346b14ebaea66c285ba62a99beb8c5bcc1a22c51a7be56668",
+      "attachmentType": "plot.decoration",
+      "clearanceSize": [
+        2.0,
+        0.1,
+        2.0
+      ],
+      "detailLevel": "near"
     },
     "Prop_Awning": {
       "kind": "ground",
@@ -747,7 +929,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "7682836a846c8fb1d9db0d93217da7992aa730297fc851907f87a131249b6c97"
+      "sourceSha256": "7682836a846c8fb1d9db0d93217da7992aa730297fc851907f87a131249b6c97",
+      "attachmentType": "plot.decoration",
+      "clearanceSize": [
+        2.85003,
+        0.92454,
+        1.528
+      ],
+      "detailLevel": "near"
     },
     "Prop_Planter_Single": {
       "kind": "ground",
@@ -775,7 +964,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "c12730d52f1fc633e8d11d95c8eeae328c7f2c55a5605ef97a4e42e3a6b176ee"
+      "sourceSha256": "c12730d52f1fc633e8d11d95c8eeae328c7f2c55a5605ef97a4e42e3a6b176ee",
+      "attachmentType": "plot.decoration",
+      "clearanceSize": [
+        2.0,
+        0.6,
+        2.0
+      ],
+      "detailLevel": "near"
     },
     "Prop_Bollard": {
       "kind": "ground",
@@ -802,7 +998,14 @@
         "Prop_Planter_Single",
         "Prop_Bollard"
       ],
-      "sourceSha256": "59c6fc05a1de1ed991ce1764d4ed91c68c1967dbab209471ed9601ce20387965"
+      "sourceSha256": "59c6fc05a1de1ed991ce1764d4ed91c68c1967dbab209471ed9601ce20387965",
+      "attachmentType": "plot.decoration",
+      "clearanceSize": [
+        0.21627,
+        0.89178,
+        0.2274
+      ],
+      "detailLevel": "near"
     }
   }
 }

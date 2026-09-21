@@ -133,7 +133,7 @@ try {
     return reply({ ok: true });
   });
   const page = await context.newPage();
-  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("pageerror", (e) => errors.push(e.stack || e.message));
   await page.goto(`${origin}/city/manage`);
   await page.getByRole("region", { name: "Live 3D building designer" })
     .waitFor();
@@ -186,6 +186,37 @@ try {
     await page.getByLabel("Building orientation", { exact: true }).inputValue(),
     "1",
   );
+  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByText("Advanced floor stack", { exact: true }).click();
+  await page.getByLabel("Middle floors", { exact: true }).fill("3");
+  await page.getByLabel("Crown", { exact: true }).selectOption("penthouse");
+  await page.getByLabel("Façade rhythm", { exact: true }).selectOption(
+    "alternating",
+  );
+  await page.getByRole("button", { name: "Vary façade", exact: true }).click();
+  await page.getByRole("button", { name: "Branding", exact: true }).click();
+  await page.getByLabel("Attachment slot", { exact: true }).selectOption(
+    "brand.roof",
+  );
+  await page.getByLabel("Slot component", { exact: true }).selectOption(
+    "brand",
+  );
+  await page.getByRole("button", { name: "Grounds", exact: true }).click();
+  await page.getByRole("button", { name: "Vary grounds", exact: true }).click();
+  await page.getByLabel("Attachment slot", { exact: true }).selectOption(
+    "terrace.left",
+  );
+  await page.getByLabel("Slot component", { exact: true }).selectOption(
+    "planter",
+  );
+  await page.getByRole("button", { name: "City camera", exact: true }).click();
+  await page.getByRole("button", { name: "Select Roof-edge sign", exact: true })
+    .click();
+  assert.equal(
+    await page.getByLabel("Attachment slot", { exact: true }).inputValue(),
+    "brand.roof",
+  );
+  await page.screenshot({ path: "output/playwright/city-design-v3-slots.png" });
   await page.getByRole("button", { name: "Save property draft", exact: true })
     .click();
   await page.getByText(
@@ -194,6 +225,9 @@ try {
   ).waitFor();
   assert.equal(saved, 1);
   assert.equal(business.draft.buildingDesign.blueprint, "l-shape");
+  assert.equal(business.draft.buildingDesign.version, 3);
+  assert.equal(business.draft.buildingDesign.crown, "penthouse");
+  assert.equal(business.draft.buildingDesign.slots["brand.roof"], "brand");
   assert.equal(business.draft.buildingArt, "");
   await page.reload();
   await page.locator('.city-design-canvas[data-floors="5"]').waitFor();
@@ -217,7 +251,7 @@ try {
   );
   await page.waitForTimeout(1200);
   await page.screenshot({ path: "output/playwright/city-design-v2-map.png" });
-  await page.mouse.click(885, 553);
+  await page.getByRole("button", { name: "01 Fieldwork", exact: true }).click();
   await page.getByRole("complementary", {
     name: "Fieldwork property",
     exact: true,
@@ -256,9 +290,65 @@ try {
   assert.ok(await page.getByLabel("Floors", { exact: true }).isDisabled());
   await page.getByRole("button", { name: "Upgrade design", exact: true })
     .click();
-  await page.locator('.city-design-canvas[data-version="2"]').waitFor();
+  await page.locator('.city-design-canvas[data-version="3"]').waitFor();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await page.locator('.city-design-canvas[data-version="1"]').waitFor();
+  const { DEFAULT_DESIGN_V2 } = await import("../src/domain/cityBuildingV2.ts");
+  business.draft = { ...profile, buildingDesign: DEFAULT_DESIGN_V2 };
+  business.preview = business.draft;
+  await page.reload();
+  await page.locator('.city-design-canvas[data-version="2"]').waitFor();
+  await page.getByRole("button", { name: "Upgrade design", exact: true })
+    .click();
+  await page.locator('.city-design-canvas[data-version="3"]').waitFor();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await page.locator('.city-design-canvas[data-version="2"]').waitFor();
+  await page.getByRole("button", { name: "Upgrade design", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  for (
+    const name of [
+      "Retail flagship",
+      "Glass headquarters",
+      "Brick creative studio",
+      "Stepped garden office",
+      "Courtyard workspace",
+      "Corner showroom",
+    ]
+  ) {
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.waitForTimeout(80);
+  }
+  await page.getByRole("button", { name: "Brick creative studio", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Branding", exact: true }).click();
+  await page.getByLabel("Attachment slot", { exact: true }).selectOption(
+    "brand.roof",
+  );
+  await page.getByLabel("Slot component", { exact: true }).selectOption(
+    "brand",
+  );
+  await page.getByText(
+    "Inactive: A pitched roof does not support this sign. Your selection is retained.",
+    { exact: true },
+  ).waitFor();
+  await page.getByRole("button", { name: "Architecture", exact: true }).click();
+  await page.getByLabel("Roof style", { exact: true }).selectOption("flat");
+  await page.getByRole("button", { name: "Branding", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("Slot component", { exact: true }).inputValue(),
+    "brand",
+  );
+  assert.equal(await page.getByText(/Inactive: A pitched roof/).count(), 0);
+  await page.getByLabel("Attachment slot", { exact: true }).selectOption(
+    "campaign.side",
+  );
+  await page.getByLabel("Slot component", { exact: true }).selectOption(
+    "campaign",
+  );
+  await page.screenshot({
+    path: "output/playwright/city-design-v3-composition.png",
+  });
   assert.deepEqual(errors, []);
   console.log(
     "3D designer: live presets, geometry changes, blueprint, save/reload, mobile and city rendering passed (mock API).",

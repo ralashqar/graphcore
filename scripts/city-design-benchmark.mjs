@@ -7,7 +7,9 @@ import {
   cityPlots,
   emptyCityProfile,
 } from "../src/domain/city.ts";
-const design = process.env.CITY_DESIGN_V2 === "1"
+const design = process.env.CITY_DESIGN_VERSION === "3"
+  ? (await import("../src/domain/cityBuildingV3.ts")).newDesign("benchmark")
+  : process.env.CITY_DESIGN_V2 === "1"
   ? (await import("../src/domain/cityBuildingV2.ts")).DEFAULT_DESIGN_V2
   : {
     version: 1,
@@ -59,10 +61,10 @@ try {
           name: `Fixture ${i + 1}`,
           buildingDesign: {
             ...design,
-            ...(design.version === 2
+            ...(design.version !== 1
               ? {
                 architecture: ["glass", "brick", "boutique", "creative"][i % 4],
-                  finish: i % 3 === 0
+                finish: i % 3 === 0
                   ? "facade"
                   : i % 3 === 1
                   ? "accents"

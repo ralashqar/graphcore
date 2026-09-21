@@ -248,7 +248,7 @@ export function CityManage({
           <button type="button" aria-pressed={buildingMode==="3d"} onClick={()=>setBuildingMode("3d")}>3D designer</button>
           <button type="button" aria-pressed={buildingMode==="art"} onClick={()=>setBuildingMode("art")}>AI artwork</button>
         </div>
-        {buildingMode==="3d" ? <CityBuildingDesigner key={business?.id||"new"} profile={previewProfile} onChange={design=>setProfile(p=>({...p,buildingDesign:design,buildingArt:""}))}/> : business
+        {buildingMode==="3d" ? <CityBuildingDesigner businessId={business?.id} key={business?.id||"new"} profile={previewProfile} onChange={design=>setProfile(p=>({...p,buildingDesign:design,buildingArt:""}))}/> : business
           ? (
             <CityBuildingArt
               key={business.id}

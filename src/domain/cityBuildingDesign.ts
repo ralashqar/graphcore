@@ -1,3 +1,4 @@
+import { massesV3, resolveV3, type CityBuildingDesignV3 } from "./cityBuildingV3.ts";
 import { massesV2, resolveDesign, type CityBuildingDesignV2 } from "./cityBuildingV2.ts";
 /** Versioned, bounded geometry recipe. No executable content or asset URLs. */
 export const BLUEPRINTS = [
@@ -8,7 +9,7 @@ export const BLUEPRINTS = [
 ] as const;
 export const FACADES = ["ribbon", "grid", "piers"] as const;
 export const TILE_STYLES = ["garden", "limestone", "slate"] as const;
-export type CityBuildingDesign = CityBuildingDesignV1 | CityBuildingDesignV2;
+export type CityBuildingDesign = CityBuildingDesignV1 | CityBuildingDesignV2 | CityBuildingDesignV3;
 export type CityBuildingDesignV1 = {
   version: 1;
   blueprint: typeof BLUEPRINTS[number];
@@ -82,6 +83,7 @@ export type BuildingMass = {
   height: number;
 };
 export function buildingMasses(d: CityBuildingDesign): BuildingMass[] {
+  if(d.version===3)return massesV3(d);
   if(d.version===2)return massesV2(d);
   const w = d.width, floorHeight = 2.25, masses: BuildingMass[] = [];
   for (let floor = 0; floor < d.floors; floor++) {
@@ -151,6 +153,7 @@ export function buildingParts(
   d: CityBuildingDesign,
   brand: string,
 ): BuildingPart[] {
+  if(d.version===3)return resolveV3(d,brand).parts;
   if(d.version===2)return resolveDesign(d,brand).parts;
   const parts: BuildingPart[] = [];
   const box = (

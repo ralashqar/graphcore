@@ -344,7 +344,7 @@ export function CityKit({
             key={p.id}
             position={[
               plotAxis(p.x),
-              p.profile.buildingDesign && !p.profile.buildingArt ? (p.profile.buildingDesign.version===2 ? (p.profile.buildingDesign.floors-1)*3+p.profile.buildingDesign.groundHeight+3 : p.profile.buildingDesign.floors*2.25+3)*plotSize/24 : spriteMode || p.profile.buildingArt ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
+              p.profile.buildingDesign && !p.profile.buildingArt ? (p.profile.buildingDesign.version!==1 ? (p.profile.buildingDesign.floors-1)*3+p.profile.buildingDesign.groundHeight+3 : p.profile.buildingDesign.floors*2.25+3)*plotSize/24 : spriteMode || p.profile.buildingArt ? 32 : Math.max(estateDemo ? officePreset(p.id).height : BUILDING_RECIPES[p.tier].floors * 3, signEnvelope(p.tier, p.id).bottom + signEnvelope(p.tier, p.id).height) + 2,
               plotAxis(p.z),
             ]}
             center
