@@ -165,7 +165,8 @@ test("optional attachment groups remain within declared envelopes and actual nat
           }
         }
         for (const a of r.attachments) {
-          const [w, , dep] = catalog[a.asset].size,
+          const [nativeW, , nativeDep] = catalog[a.asset].size,
+            w=nativeW*(a.axisScale?.[0]??a.scale),dep=nativeDep*(a.axisScale?.[2]??a.scale),
             c = Math.cos(a.rotation),
             s = Math.sin(a.rotation);
           for (const x of [-w / 2, w / 2]) {

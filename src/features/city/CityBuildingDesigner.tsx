@@ -791,7 +791,7 @@ export function CityBuildingDesigner(
                   <option value="none">None</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
                 </select></label>
                 {d.stairExtension && d.stairExtension!=="none" && <small>{resolveV3(d,"#547364").extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
-                <small>Accents add entrances with solid architectural trim. Façade mode tiles all eligible floors and walls; accent placement does not limit wall coverage. Modules retain uniform proportions, with plain corner fillers and reserved door/sign bays.</small>
+                <small>Accents add entrances with solid architectural trim. Façade mode builds a native panel shell with connected corners, floor tiles and door openings; accent placement does not limit structural coverage. Windows retain uniform proportions; plain infill panels fit the remaining spans. Unsupported roof shapes retain generated geometry.</small>
                 {d.finish !== "procedural" && (
                   <small>
                     Whole modules, uniform scale. Footprint snaps to 2 m

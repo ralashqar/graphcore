@@ -12,6 +12,7 @@ NAMES={
 'corner':['Brick_Corner_Plain','Concrete_Corner','Brick_Column_Small','WhiteBrick_Column_Half','Metal_Column_Small_Center','Marble_BevelColumn_Center'],
 'windowExtra':['Brick_Window_Trim_Single','Metal_FirstFloor_Window','Trim_FirstFloor_Window'],
 'band':['Brick_BottomTrim','Brick_TopTrim','Marble_Plain_1','WhiteBrick_Plain_1','Metal_Plain_1'],
+'shell':['Brick_Window_Square_Single','Brick_RedWhite_DoubleWindow','WhiteBrick_Window_Center','Marble_Window_Single','Marble_ShopWindow','Metal_Window','Metal_FirstFloor_Wall','DoorFrame_Marble','DoorFrame_WhiteBrick','Prop_EntranceArch','Prop_ColumnArch','Roof_2x2','Floor_4x4','WhiteBrick_Corner_Plain','Marble_Corner_Plain'],
 'stairs':['Stairs_Entrance_Concrete','Stairs_Entrance_Marble'],
 'ground':['Floor_2x2','Prop_Awning','Prop_Planter_Single','Prop_Bollard'],
 }
@@ -57,7 +58,7 @@ bpy.ops.object.select_all(action='DESELECT')
 for o in exports:o.hide_set(False);o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'decorators.glb'),export_format='GLB',use_selection=True,export_yup=True,export_extras=True)
 for entry in manifest.values():
- entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension'}[entry['kind']]
+ entry['attachmentType']={'window':'facade.bay','wall':'facade.bay','entrance':'entrance','cornice':'roof.edge','corner':'facade.corner','ground':'plot.decoration','windowExtra':'facade.bay','band':'facade.band','stairs':'wall.extension','shell':'shell.module'}[entry['kind']]
  entry['clearanceSize']=entry['size']
  entry['detailLevel']='near'
 (OUT/'manifest.json').write_text(json.dumps({'version':1,'units':'metres','license':'CC0-1.0','assets':manifest},indent=2)+'\n')

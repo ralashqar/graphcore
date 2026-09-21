@@ -231,9 +231,10 @@ export type Attachment = {
   position: [number, number, number];
   rotation: number;
   scale: number;
+  axisScale?: [number, number, number];
   role: string;
 };
-export type DesignPart = BuildingPart & { textureRole?: "groundBorder"; fallback?: "facade" | "props"; fallbackAsset?: string };
+export type DesignPart = BuildingPart & { textureRole?: "groundBorder"; fallback?: "facade" | "props"; fallbackAsset?: string; fallbackAssets?: string[] };
 export type ResolvedDesign = {
   parts: DesignPart[];
   attachments: Attachment[];

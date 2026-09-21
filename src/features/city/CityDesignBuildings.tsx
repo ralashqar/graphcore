@@ -151,7 +151,7 @@ export function CityDesignBuildings(
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {
           if (kit && "fallback" in part && part.fallback &&
-            ("fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
+            ("fallbackAssets" in part && Array.isArray(part.fallbackAssets) ? part.fallbackAssets.every(asset=>pack.has(asset)) : "fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
           // Unit-box chamfers grow with instance length and pull long rail/trim ends
           // away from their adjoining pieces. Keep slender connectors square-ended.
@@ -184,7 +184,7 @@ export function CityDesignBuildings(
             let key = "asset|" + a.asset + "|" + partIndex;
             const role = (piece.material as MeshLambertMaterial).userData
               .cityPalette as "wall" | "trim" | "glass";
-            const texture=d.version===3 ? (a.role==="paving" ? (role==="trim" ? borderTexture(d.textures,"ground") : d.textures?.ground) : role==="trim" ? (["facade","cornice","column"].includes(a.role) ? borderTexture(d.textures,"wall") : undefined) : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
+            const texture=d.version===3 ? (a.role==="floor" ? d.textures?.roof : a.role==="paving" ? (role==="trim" ? borderTexture(d.textures,"ground") : d.textures?.ground) : role==="trim" ? (["facade","cornice","column","band"].includes(a.role) ? borderTexture(d.textures,"wall") : undefined) : (role==="wall" || (a.role==="facade" && role!=="glass")) ? d.textures?.wall : undefined) : undefined;
             if(texture && texture!=="none") key+="|"+texture;
             const tint = d.palette[a.role === "paving" ? "trim" : role];
           (out[key] ||= []).push({
@@ -194,7 +194,7 @@ export function CityDesignBuildings(
               y: y * scale,
               z: plotAxis(p.z) + (z * c - x * s) * scale,
               rotation: angle + a.rotation,
-              scale: [scale * a.scale, scale * a.scale, scale * a.scale],
+              scale: (a.axisScale || [a.scale,a.scale,a.scale]).map(v=>v*scale) as [number,number,number],
               color: (texture && texture!=="none") || piece.material.userData.cityNativeTexture ? (dim ? "#8c8c8c" : "#ffffff") : dim
                 ? `#${new Color(tint).multiplyScalar(.55).getHexString()}`
                 : tint,

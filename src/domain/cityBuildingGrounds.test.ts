@@ -29,9 +29,9 @@ test("detail sets and scopes change native finishes without changing structure o
     assert.deepEqual(result.signs, original.signs);
 
     if (detailScope === "entrance") assert.ok(result.attachments.every(a => a.role !== "cornice"));
-    if (detailScope === "crown") assert.ok(result.attachments.every(a => !["door", "entrance"].includes(a.role)));
+    // Facade shell doorways remain structural even when optional accents are crown-only.
     const family = {brick:"Brick", "white-brick":"WhiteBrick", marble:"Marble", metal:"Metal", matching:""}[detailSet];
-    assert.ok(result.attachments.filter(a => ["facade", "cornice"].includes(a.role)).every(a => a.asset.includes(family)));
+    assert.ok(result.attachments.filter(a => ["facade", "cornice"].includes(a.role)).every(a => a.asset.includes(family) || (detailSet==="metal" && a.asset==="Concrete_Corner")));
   }
 });
 
