@@ -233,3 +233,18 @@ test("stairs fit side walls, preserve selections when blocked and reserve solid 
  assert.ok(!blocked.attachments.some(a=>a.role==="stairs"));
  assert.ok(!resolveV3(d,"#445566","far").attachments.some(a=>a.role==="stairs"));
 });
+
+test("native columns bridge slab margins and reach the ground plinth",()=>{
+ const heights:Record<string,number>={Brick_Column_Small:3,WhiteBrick_Column_Half:4,Marble_BevelColumn_Center:4,Metal_Column_Small_Center:3};
+ for(const architecture of ["brick","creative","boutique","glass"] as const){
+  const d={...newDesign("column-joins"),architecture,finish:"facade" as const,slots:{}};
+  const r=resolveV3(d,"#445566");
+  const columns=r.attachments.filter(a=>a.role==="column");
+  assert.ok(columns.some(a=>a.position[1]===.25));
+  for(const a of columns){
+   const base=a.position[1]===.25?.65:a.position[1];
+   const wall=r.walls.find(w=>w.y===base)!;
+   assert.ok(Math.abs(a.position[1]+heights[a.asset]*a.scale-(wall.y+wall.height))<.00001);
+  }
+ }
+});

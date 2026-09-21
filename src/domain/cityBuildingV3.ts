@@ -659,7 +659,9 @@ export function resolveV3(
     const moduleScale = Math.min(1, (Math.min(d.groundHeight, 3) - .36) / 3);
     const detailAllowed = d.finish !== "procedural" && (d.detailScope === "entrance" ? y === .65 : d.detailScope === "crown" ? top : true);
     const column = ({brick:["Brick_Column_Small",.25,3,.35],creative:["WhiteBrick_Column_Half",.72,4,.25],boutique:["Marble_BevelColumn_Center",.57489,4,.20441],glass:["Metal_Column_Small_Center",.24888,3,.24911]} as const)[detailArchitecture];
-    const columnScale = (height - .36) / column[2];
+    // Wall panels stop at slabs, but corner framing must bridge those slab margins.
+    const columnBottom = y === .65 ? .25 : y;
+    const columnScale = (y + height - columnBottom) / column[2];
     const columnWidth = column[1] * columnScale;
     // Only exposed walls receive details. Native pieces retain uniform XYZ scaling.
     const addDetail = (asset:string,offset:number,bottom:number,scale:number,size:readonly number[],role:string) => {
@@ -677,7 +679,7 @@ export function resolveV3(
       for (const direction of [-1,1]) {
         const endX=x+(horizontal?direction*length/2:0),endZ=z+(horizontal?0:direction*length/2);
         if (corners.some(c=>c.kind==="convex" && c.y===y && Math.abs(c.x-endX)<.01 && Math.abs(c.z-endZ)<.01))
-          addDetail(column[0],direction*(length/2-columnWidth/2),y+.18,columnScale,[column[1],column[2],column[3]],"column");
+          addDetail(column[0],direction*(length/2-columnWidth/2),columnBottom,columnScale,[column[1],column[2],column[3]],"column");
       }
       if (top && d.roof==="parapet" && (!d.roofVariant || d.roofVariant==="standard")) {
         // A single curated crown course, never the old cornice on every storey edge.
@@ -694,7 +696,7 @@ export function resolveV3(
       const gap = detailAllowed ? columnWidth + .06 : 0;
       const bayOffsets = fitBays(length, width, gap, Math.max(.3,columnWidth));
       if (detailAllowed && lod === "near") {
-        for(let i=1;i<bayOffsets.length;i++) addDetail(column[0],(bayOffsets[i-1]+bayOffsets[i])/2,y+.18,columnScale,[column[1],column[2],column[3]],"column");
+        for(let i=1;i<bayOffsets.length;i++) addDetail(column[0],(bayOffsets[i-1]+bayOffsets[i])/2,columnBottom,columnScale,[column[1],column[2],column[3]],"column");
       }
       for (const offset of bayOffsets) {
         const wx = x + (horizontal ? offset : 0), wz = z + (horizontal ? 0 : offset);
