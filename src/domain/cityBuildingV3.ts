@@ -890,7 +890,7 @@ export function resolveV3(
     }
   }
   box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);
-  if(facadeEnabled){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAsset=entryAsset;}
+  if(d.finish!=="procedural"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=[entryAsset,"Door_1"];}
   const frontAssembly=frontStructure(d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim);
   if(facadeEnabled && lod!=="far" && d.entranceStyle==="portico" && !frontAssembly.reason && frontAssembly.envelope){
     const archScale=Math.min(d.groundHeight/4.44324,frontAssembly.envelope.size[0]/4.04074,frontAssembly.envelope.size[2]/1.22758);
@@ -904,9 +904,11 @@ export function resolveV3(
     for (let z = entrance.z + .3; z + 2 <= 11.4; z += 2) {
       attach("Floor_2x2", 0, .3, z, 0, 1, "paving");
     }
-    if(facadeEnabled) {
-      // The full native entry tile (including its authored door/glazing) owns this bay.
-      attach(entryAsset,-entryModule.center*entryScale,.65,entrance.z-entryModule.face*entryScale,0,entryScale,"door");
+    {
+      // One measured native entrance owns both accents and full-facade modes.
+      // Accents sit in front of the procedural wall; facade mode has a real opening.
+      const entryFace=entrance.z+(facadeEnabled?0:.3);
+      attach(entryAsset,-entryModule.center*entryScale,.65,entryFace-entryModule.face*entryScale,0,entryScale,"door");
       const opening=entryModule.opening;
       if(opening){
         const door=NATIVE_MODULES.Door_1;
@@ -915,24 +917,13 @@ export function resolveV3(
         // Uniformly fit native leaves to the measured frame aperture. The tiny
         // seating overlap is behind its reveal, not coplanar with the wall.
         const leafScale=Math.max(openingWidth/count/door.width,openingHeight/door.height)*1.002;
-        for(let i=0;i<count;i++)attach("Door_1",((opening.left-entryModule.center)*entryScale)+(i+.5)*openingWidth/count,.65,entrance.z-door.face*leafScale-.012,0,leafScale,"door");
+        for(let i=0;i<count;i++)attach("Door_1",((opening.left-entryModule.center)*entryScale)+(i+.5)*openingWidth/count,.65,entryFace-door.face*leafScale-.012,0,leafScale,"door");
       }
-    } else {
-    attach("Door_1", 0, .65, entrance.z + .14, 0, 1, "door");
-    attach(
-      detailArchitecture === "glass" ? "DoorFrame_Metal_Single" : detailArchitecture === "creative" ? "DoorFrame_WhiteBrick" : detailArchitecture === "boutique" ? "DoorFrame_Marble" : "DoorFrame_Trim",
-      0,
-      .65,
-      entrance.z + .02,
-      0,
-      detailArchitecture === "boutique" ? .65 : detailArchitecture === "creative" ? .72 : 1,
-      "entrance",
-    );
     }
   }
   const entranceWall = walls.find(w => w.y === .65 && w.nz === 1 && Math.abs(w.z - entrance.z) < .001 && Math.abs(w.x) < w.length / 2);
   const frontage = entranceWall ? 2 * Math.min(entranceWall.length / 2 - entranceWall.x, entranceWall.length / 2 + entranceWall.x) : masses[0].width;
-  parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod));
+  parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod, d.finish!=="procedural" ? [entryAsset,"Door_1"] : undefined));
   if (d.roofVariant && d.roofVariant !== "standard") {
     const tops = masses.filter(m => !masses.some(upper => Math.abs(upper.y-m.y-m.height)<.001 && Math.abs(upper.x-m.x)<upper.width/2 && Math.abs(upper.z-m.z)<upper.depth/2));
     for (const m of tops) {

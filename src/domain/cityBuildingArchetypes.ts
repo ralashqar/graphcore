@@ -20,12 +20,15 @@ export function presetCategory(archetype: ArchetypeChoices["archetype"]) {
     : archetype === "hotel" ? "Hospitality" : "Workspaces";
 }
 /** Coherent, low-detail exterior features; nothing occupies the central entrance route. */
-export function archetypeParts(archetype: ArchetypeChoices["archetype"], width: number, depth: number, front: number, groundHeight: number, trim: string, brand: string, lod: "near" | "medium" | "far") {
+export function archetypeParts(archetype: ArchetypeChoices["archetype"], width: number, depth: number, front: number, groundHeight: number, trim: string, brand: string, lod: "near" | "medium" | "far", nativeEntranceAssets?: string[]) {
   const parts: DesignPart[] = [];
   const box = (x:number,y:number,z:number,w:number,h:number,d:number,color:string) => parts.push({kind:"box",position:[x,y,z],size:[w,h,d],color});
   if (archetype === "shop") {
     box(0, groundHeight+.28, front+.18, width-.5, .55, .22, brand);
-    for (const x of [-1.25,1.25]) box(x,1.85,front+.28,.22,2.4,.5,trim);
+    for (const x of [-1.25,1.25]) {
+      box(x,1.85,front+.28,.22,2.4,.5,trim);
+      if(nativeEntranceAssets){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=nativeEntranceAssets;}
+    }
   }
   if (archetype === "kiosk") {
     for (const x of [-width/2+1.25,width/2-1.25]) box(x,1.55,front+.3,2,.16,.6,trim);

@@ -74,3 +74,13 @@ Full-height native panels exposed a coincident-surface case: procedural lower sl
 Regression coverage checks floor top/UV preservation, recessed lower vertices and loading-aware lower slab suppression, alongside the actual-mesh seam coverage suite. No recipe, server validator, deployment pairing or asset re-export changes are required. Refresh open tabs to rebuild their cached decorator geometry.
 
 Verification: 18 geometry tests pass, including native mesh seam raycasts across the catalogue and footprint fixtures. All 27 module browser selections, mocked persistence, mobile layout and driving controls pass. TypeScript and production build pass (existing large-chunk/landing-asset warnings remain). The fresh Vite runtime retains the existing public-manifest warning. No hosted deployment occurred.
+
+### Single native entrance and consistent masonry colour (2026-09-21)
+
+The Monday Studio 8 fixture (demo index 63) used accents, a brick native frame and the shop archetype. Accents previously kept its procedural glass entrance and decorative shop jambs while also adding an independently scaled native frame and leaf. Both native finish modes now use the same measured frame/aperture fit. Their procedural entrance and shop jambs remain loading fallbacks, suppressed only once the frame and leaf are available. Accents mount the complete assembly slightly forward of their procedural wall; full facades retain the cut opening.
+
+Inspection of actual Brick_Plain_3 vertices found near-zero RGB at the bottom and white at the top, whereas neighbouring window masonry was white throughout. Multiplying the authored albedo by that module-local ramp caused the discontinuous black shading. Textured native materials now ignore vertex tint while retaining albedo, normal and roughness maps. Geometry attributes are preserved and untextured vertex-coloured props retain their colour behavior. This adds no textures or draw calls.
+
+Tests cover the exact demo entrance and preservation of native PBR maps. Browser fixtures capture accents and native brick without texture overrides, alongside the complete catalogue. No schema, hosted deployment or provider changes are involved.
+
+Verification: 18 geometry/material tests, the exact entrance browser fixture, all 27 catalogue choices, mocked persistence and driving/mobile checks pass. TypeScript, production build and fresh Vite runtime checks pass; existing public-manifest and large-chunk/landing-asset warnings remain. Refresh open tabs to rebuild cached native materials.

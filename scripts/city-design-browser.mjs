@@ -64,6 +64,10 @@ if (process.env.CITY_PRESET_THUMBNAILS === "1") {
   business.draft = {...profile, buildingDesign:newDesign("preset-gallery-v1")};
   business.preview = business.draft;
 }
+if(process.env.CITY_ENTRANCE_AUDIT === "1"){
+ const {demoBuildingDesign}=await import("../src/domain/cityDemoDesign.ts");
+ business.draft={...profile,buildingDesign:demoBuildingDesign(63,"#c6a262")};business.preview=business.draft;
+}
 const errors = [];
 const browser = await chromium.launch({
   headless: true,
@@ -145,6 +149,22 @@ try {
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if(process.env.CITY_ENTRANCE_AUDIT === "1"){
+   page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+   await page.waitForTimeout(1800);
+   const canvas=page.locator(".city-design-canvas canvas");await canvas.scrollIntoViewIfNeeded();const b=await canvas.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);
+   for(let i=0;i<10;i++){await page.mouse.wheel(0,-120);await page.waitForTimeout(35);}
+   await page.waitForTimeout(500);
+   await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-native-entry-fixed.png"});
+   await page.getByLabel("Building finish",{exact:true}).selectOption("facade");
+   await page.getByLabel("Quaternius detail set",{exact:true}).selectOption("brick");
+   await page.getByRole("button",{name:"Branding",exact:true}).click();
+   await page.getByLabel("wall texture",{exact:true}).selectOption("none");
+   await page.getByLabel("wallBorder texture",{exact:true}).selectOption("none");
+   await page.waitForTimeout(700);
+   await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-native-brick-colour-fixed.png"});
+   assert.deepEqual(errors,[]);console.log("Native entrance and brick colour fixture rendered without errors.");await browser.close();process.exit(0);
+  }
   if (process.env.CITY_NATIVE_CATALOGUE_AUDIT === "1") {
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();

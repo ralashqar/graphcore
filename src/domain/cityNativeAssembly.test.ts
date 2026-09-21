@@ -1,3 +1,6 @@
+import {nativeSurfaceMaterial} from "../features/city/CityNativeMaterial";
+import {MeshStandardMaterial,Texture} from "three";
+import {demoBuildingDesign} from "./cityDemoDesign";
 import {NATIVE_FACADES} from "./cityNativeFacades";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -110,5 +113,26 @@ test("native full-height facade suppresses redundant lower slab only after pack 
   const lower=r.parts.filter(p=>p.kind==="box" && Math.abs(p.size[1]-.18)<.00001 && r.masses.some(m=>Math.abs(p.position[1]-(m.y+.09))<.00001));
   assert.ok(lower.length);
   for(const p of lower){assert.equal(p.fallback,"facade");assert.equal(p.fallbackAsset,"Floor_4x4");}
+ }
+});
+
+test("textured native surfaces ignore tile colour ramps without losing PBR maps",()=>{
+ const source=new MeshStandardMaterial({map:new Texture(),normalMap:new Texture(),roughnessMap:new Texture(),vertexColors:true});
+ const material=nativeSurfaceMaterial(source);
+ assert.equal(material.vertexColors,false);assert.equal(source.vertexColors,true);
+ assert.equal(material.map,source.map);assert.equal(material.normalMap,source.normalMap);assert.equal(material.roughnessMap,source.roughnessMap);
+ const untextured=new MeshStandardMaterial({vertexColors:true});assert.equal(nativeSurfaceMaterial(untextured).vertexColors,true);
+});
+
+test("native accents own the entrance and suppress shop jambs once assets load",()=>{
+ const d=demoBuildingDesign(63,"#c6a262");
+ assert.equal(d.finish,"accents");assert.equal(d.archetype,"shop");
+ for(const finish of ["accents","facade"] as const){
+  const r=resolveV3({...d,finish},"#c6a262");
+  const native=r.attachments.filter(a=>a.asset==="DoorFrame_Trim");assert.equal(native.length,1);
+  const placeholders=r.parts.filter(p=>p.kind==="box" && ((p.size[0]===2 && p.size[1]===2.4) || (p.size[0]===.22 && p.size[1]===2.4)));
+  assert.equal(placeholders.length,3);
+  for(const p of placeholders)assert.deepEqual(p.fallbackAssets,["DoorFrame_Trim","Door_1"]);
+  assert.ok(r.attachments.some(a=>a.asset==="Door_1"));
  }
 });

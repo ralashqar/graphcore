@@ -1,3 +1,4 @@
+import { nativeSurfaceMaterial } from "./CityNativeMaterial";
 import { closeNativePanel, recessNativeFloorSides } from "./CityNativePanelGeometry";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
@@ -29,12 +30,7 @@ export function loadDecorators(): Promise<DecoratorPack> {
           if (!material) {
             const name = original.name.toLowerCase();
             const glass = name.includes("glass") || name.includes("interior");
-            material = !glass && original instanceof MeshStandardMaterial ? original.clone() : citySurfaceMaterial(glass);
-            if (!glass) {
-              material.normalScale.multiplyScalar(.35);
-              for (const texture of [material.map, material.normalMap, material.roughnessMap, material.metalnessMap]) if (texture) texture.anisotropy = 4;
-              material.userData.cityNativeTexture = !!material.map;
-            }
+            material = !glass && original instanceof MeshStandardMaterial ? nativeSurfaceMaterial(original) : citySurfaceMaterial(glass);
             material.userData.cityPalette =
               name.includes("glass") || name.includes("interior")
                 ? "glass"
