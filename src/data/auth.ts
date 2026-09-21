@@ -147,11 +147,18 @@ const oauthScopes: Partial<Record<Provider, string>> = {
   google: 'email profile',
 }
 
-export async function signInWithOAuthProvider(provider: Provider) {
+export async function signInWithOAuthProvider(provider: Provider, returnPath?: string) {
+  let redirectTo = appRedirectUrl()
+  if (returnPath) {
+    const destination = new URL(returnPath, window.location.origin)
+    if (destination.origin !== window.location.origin) throw new Error('Sign-in must return to SynArc.')
+    destination.hash = ''
+    redirectTo = destination.toString()
+  }
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider,
     options: {
-      redirectTo: appRedirectUrl(),
+      redirectTo,
       scopes: oauthScopes[provider],
     },
   })

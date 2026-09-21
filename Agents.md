@@ -4,6 +4,10 @@ This document outlines the AI agents and autonomous systems that power GraphCore
 
 ## Overview
 
+### City Google sign-in (September 2026)
+
+City's login/signup dialog now exposes Google through the existing SynArc OAuth helper and shared session bootstrap. The helper accepts an optional same-origin return path, preserving City paths/query parameters while its existing default remains `/app`. Cross-origin return URLs are rejected. This is frontend-only: no new auth provider, user store, Edge deployment or Fly change is required. Browser fixtures verify provider/scopes, City return navigation, callback session restoration and failure/retry; no real Google account consent was automated.
+
 ### City building artwork (September 2026)
 
 The authenticated `city-building-art` endpoint reuses the character-sheet visual queue and Fly world worker. Its service-only `city_building_sprite` kind uses business ownership instead of a world draft. Policy `city-building-sprite-1.0.0` pins tile/style reference hashes, separates business/logo subject references from fixed art/camera instructions, and supports Fal Nano Banana 2 edit and GPT Image 2 edit. CPU processing removes edge-connected chroma, verifies the lower isometric footprint, applies uniform scaling and exports transparent 512px candidates. Owner/version-fenced application updates only the draft; existing publication review remains required.

@@ -1422,3 +1422,9 @@ body:has(.city-app) {
 .city-art-studio article small {display:block;margin-top:10px;line-height:1.5}
 .city-art-studio button:disabled {opacity:.5;cursor:default}
 @media(max-width:640px){.city-art-studio .city-art-controls{grid-template-columns:minmax(0,1fr);gap:16px}}
+
+.city-google-sign-in {display:flex;align-items:center;justify-content:center;gap:12px;width:100%;margin:24px 0 16px;min-height:46px;background:#fff;color:#24372e;border:1px solid #bcc7bc;border-radius:8px;font-weight:600}
+.city-google-sign-in:hover:not(:disabled) {background:#f1f5ed;border-color:#617b66}
+.city-google-sign-in:disabled {opacity:.55;cursor:wait}
+.city-auth-divider {display:flex;align-items:center;gap:12px;color:#6a786e;font-size:12px;margin:16px 0}
+.city-auth-divider::before,.city-auth-divider::after {content:"";height:1px;background:#dce2d7;flex:1}
