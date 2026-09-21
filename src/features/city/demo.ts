@@ -1,3 +1,4 @@
+import { demoBuildingDesign } from "../../domain/cityDemoDesign";
 import {
   buildingTier,
   cityPlots,
@@ -24,7 +25,7 @@ const artwork = [
   "tidal",
   "monday",
 ];
-export function demoCity(count = 72, corporate = false): CitySnapshot {
+export function demoCity(count = 72, corporate = false, customised = !corporate): CitySnapshot {
   const plots = cityPlots(Math.max(count, 400));
   return {
     revision: 1,
@@ -76,6 +77,7 @@ export function demoCity(count = 72, corporate = false): CitySnapshot {
           website: "", offer: emptyCityProfile().offer,
         });
       }
+      if (customised) profile.buildingDesign = demoBuildingDesign(i, profile.color);
       return {
         id: `demo-${i}`,
         slug: `demo-${i}`,

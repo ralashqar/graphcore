@@ -448,7 +448,8 @@ function CitySceneContent({
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
   const { plotAxis: position, plotSize } = useCityMapLayout();
-  const spriteMode = estateDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
+  const presetDemo = estateDemo && [null, "presets"].includes(new URLSearchParams(window.location.search).get("cityRender"));
+  const spriteMode = estateDemo && !presetDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
   const living=useLiving();
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
@@ -474,7 +475,7 @@ function CitySceneContent({
         shadows={softwareRenderer || mobile ? false : { type: 0, autoUpdate: false }}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
-          gl.setClearColor("#e4e5dc");
+          gl.setClearColor(presetDemo ? "#c8deeb" : "#e4e5dc");
           const context = gl.getContext(),
             info = context.getExtension("WEBGL_debug_renderer_info");
           if (
@@ -500,10 +501,12 @@ function CitySceneContent({
           reduced={reduced}
           paused={!!playback || launchFocus}
         />}
-        <ambientLight intensity={1.5} />
+        {presetDemo && <hemisphereLight args={["#dcefff", "#a5a17c", 1.5]} />}
+        <ambientLight intensity={presetDemo ? .25 : 1.5} color={presetDemo ? "#fff5e4" : "#ffffff"} />
         <directionalLight
           position={[-120, 240, 80]}
-          intensity={1.6}
+          intensity={presetDemo ? 2.5 : 1.6}
+          color={presetDemo ? "#fff0d5" : "#ffffff"}
           castShadow
           shadow-mapSize={[1024, 1024]}
           shadow-camera-left={-160}
@@ -513,7 +516,8 @@ function CitySceneContent({
           shadow-camera-far={800}
           shadow-bias={-0.0003}
         />
-        <fog attach="fog" args={["#e4e5dc", 850, 1500]} />
+        {presetDemo && <directionalLight position={[125, 80, -110]} color="#c5ddff" intensity={.45} />}
+        <fog attach="fog" args={[presetDemo ? "#c8deeb" : "#e4e5dc", 850, 1500]} />
         {!spriteMode && pavilion && <CityPavilion {...pavilion} />}
         {!spriteMode && (launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
         {!living.storefronts && !markers &&
