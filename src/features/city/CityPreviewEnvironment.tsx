@@ -32,7 +32,7 @@ export function CityPreviewEnvironment() {
   return <>
     <fog attach="fog" args={["#c8deeb", 58, 118]} />
     <hemisphereLight args={["#dcefff", "#78816c", .85]} />
-    <ambientLight intensity={.12} color="#fff5e4" />
+    <ambientLight intensity={.35} color="#fff5e4" />
     <directionalLight
       position={[-24, 42, 28]} color="#fff0d5" intensity={2.5} castShadow
       shadow-mapSize={[1024, 1024]} shadow-bias={-.0002} shadow-normalBias={.035}

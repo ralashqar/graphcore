@@ -507,7 +507,7 @@ function CitySceneContent({
           paused={driving || !!playback || launchFocus}
         />}
         {presetDemo && <hemisphereLight args={["#dcefff", "#78816c", .85]} />}
-        <ambientLight intensity={presetDemo ? .12 : 1.5} color={presetDemo ? "#fff5e4" : "#ffffff"} />
+        <ambientLight intensity={presetDemo ? .35 : 1.5} color={presetDemo ? "#fff5e4" : "#ffffff"} />
         <directionalLight
           position={[-120, 240, 80]}
           intensity={presetDemo ? 2.5 : 1.6}
