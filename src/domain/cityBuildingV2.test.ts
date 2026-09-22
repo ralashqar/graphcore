@@ -100,13 +100,13 @@ test("seed is reproducible and cannot change the shell or branding; LOD reduces 
   );
   assert.equal(normalizeDesign({ ...d, width: 15 }).width, 16);
 });
-test("legacy recipe output stays frozen", () => {
+test("legacy recipe keeps its silhouette with recessed ribbon windows", () => {
   const hash = createHash("sha256").update(
     JSON.stringify(buildingParts(DEFAULT_BUILDING_DESIGN, "#335577")),
   ).digest("hex");
   assert.equal(
     hash,
-    "24c59b5668051c3bf813898cc3c54dcfe9b19d832f8228a9d66c6e6781ab79f3",
+    "fa22e7d3edc03fef537383bdab7146eb7e5cec5768bf83935c17f1a03b296f58",
   );
 });
 

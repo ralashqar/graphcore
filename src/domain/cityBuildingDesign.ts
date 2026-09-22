@@ -186,7 +186,12 @@ export function buildingParts(
     box(m.x, .45, m.z, m.width + .6, .4, m.depth + .6, "#d3cbb6");
   }
   for (const m of buildingMasses(d)) {
-    box(m.x, m.y + m.height / 2, m.z, m.width, m.height, m.depth, "#d8d6c9");
+    // Legacy ribbon windows still need real depth, not panels over a solid mass.
+    box(m.x,m.y+m.height/2,m.z,m.width-.5,m.height,m.depth-.5,"#d8d6c9");
+    box(m.x,m.y+.41/2,m.z,m.width,.41,m.depth,"#d8d6c9");
+    box(m.x,m.y+(1.89+m.height)/2,m.z,m.width,m.height-1.89,m.depth,"#d8d6c9");
+    for(const sx of [-1,1])for(const sz of [-1,1])
+      box(m.x+sx*(m.width/2-.1625),m.y+1.15,m.z+sz*(m.depth/2-.1625),.325,1.48,.325,"#d8d6c9");
     box(
       m.x,
       m.y + m.height - .12,
@@ -201,14 +206,14 @@ export function buildingParts(
       box(
         m.x,
         m.y + 1.15,
-        m.z + sign * (m.depth / 2 + .018),
+        m.z + sign * (m.depth / 2 - .14),
         m.width - .65,
         1.48,
         .06,
         glass,
       );
       box(
-        m.x + sign * (m.width / 2 + .018),
+        m.x + sign * (m.width / 2 - .14),
         m.y + 1.15,
         m.z,
         .06,

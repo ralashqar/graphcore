@@ -1,10 +1,10 @@
+import {cityAtlasMaterial} from "./cityAtlasMaterial";
 import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useState } from "react";
 import {
   CanvasTexture,
   InstancedBufferAttribute,
-  MeshBasicMaterial,
   PlaneGeometry,
   SRGBColorSpace,
 } from "three";
@@ -58,6 +58,7 @@ export function CityDesignSigns({
     const canvas = document.createElement("canvas");
     canvas.width = 2048;
     canvas.height = atlasHeight;
+    canvas.getContext("2d")!.clearRect(0,0,canvas.width,canvas.height);
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
     return { canvas, texture };
@@ -183,27 +184,7 @@ export function CityDesignSigns({
       ], i * 4)
     );
     geometry.setAttribute("atlasRect", new InstancedBufferAttribute(rects, 4));
-    const material = new MeshBasicMaterial({
-      map: atlas.texture,
-      toneMapped: false,
-    });
-    material.onBeforeCompile = (shader) => {
-      shader.vertexShader = shader.vertexShader.replace(
-        "#include <common>",
-        "#include <common>\nattribute vec4 atlasRect; varying vec2 citySignUv;",
-      ).replace(
-        "#include <uv_vertex>",
-        "#include <uv_vertex>\ncitySignUv=uv*atlasRect.zw+atlasRect.xy;",
-      );
-      shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <common>",
-        "#include <common>\nvarying vec2 citySignUv;",
-      ).replace(
-        "#include <map_fragment>",
-        "diffuseColor *= texture2D(map,citySignUv);",
-      );
-    };
-    material.customProgramCacheKey = () => "city-design-sign-1";
+    const material=cityAtlasMaterial(atlas.texture);
     return { geometry, material };
   }, [items, atlas, invalidate]);
   useEffect(() => () => {

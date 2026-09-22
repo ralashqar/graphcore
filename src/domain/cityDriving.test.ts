@@ -1,70 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { driveStep,onCityRoad } from "./cityDriving.ts";
-const input={forward:false,reverse:false,left:false,right:false,brake:false};
-test("driving advances along roads, brakes and never enters plots",()=>{
- let s={x:0,z:33,heading:0,speed:0};
- for(let i=0;i<120;i++)s=driveStep(s,{...input,forward:true},1/60,330);
- assert.ok(s.z>45 && s.speed>0);
- for(let i=0;i<100;i++)s=driveStep(s,{...input,brake:true},1/60,330);
- assert.ok(s.speed<.001);
- for(let i=0;i<3000;i++) {
-  s=driveStep(s,{...input,forward:true,left:true},1/60,330);
-  assert.ok(onCityRoad(s.x,s.z,330));
- }
-});
-test("bounds and long frame deltas cannot teleport the car",()=>{
- const s={x:0,z:329,heading:0,speed:20};
- const next=driveStep(s,{...input,forward:true},5,330);
- assert.ok(next.z-s.z<=.800001);
- assert.ok(onCityRoad(next.x,next.z,330));
- assert.ok(driveStep({...s,z:330},{...input,forward:true},.04,330).speed>0);
-});
+import {DriveWorld,pavementHeight,syncCityDriveWorld} from "./cityDriveWorld.ts";
+import {advanceDrive,createDriveState,DRIVE_PROFILE,recoverDrive} from "./cityDriving.ts";
+const idle={forward:false,reverse:false,left:false,right:false,brake:false};
+function world(){const w=new DriveWorld(330);w.sync([{id:"plot",minX:10,maxX:50,minZ:10,maxZ:60}]);return w;}
+test("arcade acceleration, opposing brake and handbrake stop",()=>{const w=new DriveWorld(330),s=createDriveState();for(let i=0;i<600;i++)advanceDrive(s,{...idle,forward:true},1/120,w);assert.ok(s.speed>23&&s.speed<=24);for(let i=0;i<240;i++)advanceDrive(s,{...idle,reverse:true},1/120,w);assert.ok(s.speed<0&&s.speed>=-7);for(let i=0;i<240;i++)advanceDrive(s,{...idle,brake:true},1/120,w);assert.ok(Math.abs(s.speed)<.001);});
+test("fixed steps agree at 30,60,120 Hz",()=>{const positions=[30,60,120].map(fps=>{const s=createDriveState(),w=new DriveWorld(1000);let accumulator=0;for(let f=0;f<fps*5;f++){accumulator+=1/fps;while(accumulator>=1/120-1e-10){advanceDrive(s,{...idle,forward:true,left:true},1/120,w);accumulator-=1/120;}}return s;});for(const s of positions)assert.ok(Math.hypot(s.x-positions[0].x,s.z-positions[0].z)<1e-7);});
+test("pavement is free, head-on contact stops, reverse recovers",()=>{const w=world(),s=createDriveState(6,30,Math.PI/2);advanceDrive(s,{...idle,forward:true},1/120,w);assert.ok(s.x>6);for(let i=0;i<500;i++)advanceDrive(s,{...idle,forward:true},1/120,w);assert.ok(s.x<=10-DRIVE_PROFILE.radius+.001);assert.ok(Math.abs(s.vx)<.01);for(let i=0;i<180;i++)advanceDrive(s,{...idle,reverse:true},1/120,w);assert.ok(s.x<4);});
+test("continuous sliding has no inward pulses or heading snap",()=>{const w=world(),s=createDriveState(10-DRIVE_PROFILE.radius-.0001,20,.4);s.vx=4;s.vz=10;for(let i=0;i<180;i++){advanceDrive(s,{...idle,forward:true},1/120,w);assert.ok(w.clear(s.x,s.z,DRIVE_PROFILE.radius));assert.equal(s.heading,.4);}assert.ok(s.z>30);});
+test("sweeps stop at faces and rounded corners without tunnelling",()=>{const w=world();let h=w.sweep(-100,30,300,0,2);assert.ok(Math.abs(h.t-.36)<1e-6);assert.equal(h.nx,-1);h=w.sweep(0,0,30,30,2);assert.ok(h.t<1/3&&h.nx<0&&h.nz<0);});
+test("spatial hash updates only changed occupancy and keeps distant boxes",()=>{const w=world();assert.equal(w.clear(30,30,2),false);w.sync([{id:"plot",minX:100,maxX:140,minZ:100,maxZ:140}]);assert.equal(w.clear(30,30,2),true);assert.equal(w.clear(120,120,2),false);assert.ok(recoverDrive(w,{x:120,z:120,heading:0}));w.sync([]);assert.equal(w.clear(120,120,2),true);});
+test("handbrake permits more slip while steering stays bounded",()=>{const w=new DriveWorld(1000);const states=[false,true].map(brake=>{const s=createDriveState();s.vz=18;s.speed=18;for(let i=0;i<40;i++)advanceDrive(s,{...idle,forward:true,left:true,brake},1/120,w);return s;});const slip=(s:typeof states[0])=>Math.abs(Math.atan2(s.vx,s.vz)-s.heading);assert.ok(slip(states[1])>slip(states[0]));assert.ok(states.every(s=>Math.abs(s.yawRate)<2));});
+test("large deltas bounded and pavement height continuous",()=>{const s=createDriveState(),w=new DriveWorld(330);s.vz=24;advanceDrive(s,{...idle,forward:true},10,w);assert.ok(s.z<34);assert.equal(pavementHeight(0,30),0);assert.equal(pavementHeight(7,30),.18);assert.ok(pavementHeight(5.8,30)>0);});
 
-test("curbs preserve momentum and steer the car back into the road",()=>{
- const s={x:4.99,z:33,heading:Math.PI/4,speed:12};
- const next=driveStep(s,{...input,forward:true},.04,330);
- assert.ok(next.x<=5 && next.z>s.z);
- assert.ok(next.speed>=s.speed);
- assert.ok(next.heading<s.heading);
-});
-
-test("head-on and reverse curb contact recover while staying on roads",()=>{
- for(const speed of [12,-8]) {
-  let s={x:4.99,z:33,heading:speed>0?Math.PI/2:-Math.PI/2,speed};
-  const controls={...input,forward:speed>0,reverse:speed<0};
-  for(let i=0;i<180;i++) {
-   s=driveStep(s,controls,1/60,330);
-   assert.ok(onCityRoad(s.x,s.z,330));
-   assert.ok(Math.abs(s.speed)>1);
-  }
-  assert.ok(Math.hypot(s.x-4.99,s.z-33)>5);
- }
-});
-
-test("reverse input brakes first and steering builds progressively",()=>{
- const start={x:0,z:33,heading:0,speed:12};
- const reverse=driveStep(start,{...input,reverse:true},1/60,330);
- assert.ok(reverse.speed>0 && reverse.speed<start.speed);
- const turn=driveStep(start,{...input,left:true},1/120,330);
- assert.ok(turn.steering!>0 && turn.steering!<.1);
- const coast=driveStep(start,input,1/60,330);
- assert.ok(coast.speed>11.8);
- const stopped=driveStep({...start,speed:0},{...input,left:true},1/60,330);
- assert.equal(stopped.heading,0);
-});
-
-test("sustained curb contact has no inward position pulses",()=>{
- let s={x:5,z:20,heading:.3,speed:12};
- for(let i=0;i<90;i++) {
-  s=driveStep(s,{...input,forward:true},1/120,330);
-  assert.ok(Math.abs(s.x-5)<1e-8);
- }
-});
-test("braking increases steering authority",()=>{
- const s={x:0,z:33,heading:0,speed:12,steering:.4};
- const normal=driveStep(s,{...input,left:true},1/120,330);
- const braking=driveStep(s,{...input,left:true,brake:true},1/120,330);
- assert.ok(braking.steering!>normal.steering!);
- assert.ok(braking.heading>normal.heading);
-});
+test("standard and estate fences use layout geometry, not rendered residency",()=>{for(const size of [24,48]){const w=new DriveWorld(600),axis=(n:number)=>n*66;syncCityDriveWorld(w,[{id:'a',x:1,z:1}],axis,size,true,true);assert.equal(w.clear(66,66,2),false);assert.equal(w.clear(0,33,2),true);assert.equal(w.clear(0,0,2),false);assert.equal(w.clear(0,-510,2),false);const edge=66-11.225*size/24;assert.equal(w.clear(edge-2.01,66,2),true);assert.equal(w.clear(edge-1.99,66,2),false);}});
+test("corners and sustained mixed controls never penetrate or become non-finite",()=>{const w=world(),s=createDriveState();for(let i=0;i<12000;i++){advanceDrive(s,{forward:i%1200<850,reverse:i%1200>=850,left:i%700<300,right:i%700>=500,brake:i%600>530},1/120,w);assert.ok(w.clear(s.x,s.z,DRIVE_PROFILE.radius));assert.ok(Object.values(s).every(Number.isFinite));}});
+test("outer boundary and camera boom use the same swept query",()=>{const w=world();const h=w.sweep(0,30,20,0,.35);assert.ok(Math.abs(h.t-9.65/20)<1e-8);const edge=w.sweep(325,0,20,0,2);assert.ok(Math.abs(edge.t-.15)<1e-8);});

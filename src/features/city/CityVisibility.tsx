@@ -21,7 +21,7 @@ export function CityVisibility({properties,enabled,simpleOnly=false,children}:{p
   if(!enabled)return;
   elapsed.current+=delta;if(elapsed.current<.15)return;elapsed.current=0;
   scratch.matrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
-  scratch.frustum.setFromProjectionMatrix(scratch.matrix);
+  scratch.frustum.setFromProjectionMatrix(scratch.matrix,camera.coordinateSystem);
   let changed=false;
   for(const item of bounds){
    const old=state.current.levels.get(item.id);

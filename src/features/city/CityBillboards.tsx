@@ -1,3 +1,4 @@
+import {cityAtlasMaterial} from "./cityAtlasMaterial";
 import { useCityMapLayout } from "./CityMapLayout";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useThree } from "@react-three/fiber";
@@ -5,7 +6,6 @@ import {
   BoxGeometry,
   CanvasTexture,
   InstancedBufferAttribute,
-  MeshBasicMaterial,
   MeshLambertMaterial,
   PlaneGeometry,
   SRGBColorSpace,
@@ -121,6 +121,7 @@ export function CityBillboards({
     const canvas = document.createElement("canvas");
     canvas.width = COLS * TILE_W;
     canvas.height = ROWS * TILE_H;
+    canvas.getContext("2d")!.clearRect(0,0,canvas.width,canvas.height);
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
     texture.anisotropy = Math.min(4, gl.capabilities.getMaxAnisotropy());
@@ -273,31 +274,7 @@ export function CityBillboards({
       "atlasRect",
       new InstancedBufferAttribute(new Float32Array(rects), 4),
     );
-    const material = new MeshBasicMaterial({
-      map: atlas.texture,
-      toneMapped: false,
-    });
-    material.onBeforeCompile = (shader) => {
-      shader.vertexShader = shader.vertexShader
-        .replace(
-          "#include <common>",
-          "#include <common>\nattribute vec4 atlasRect; varying vec2 vBillboardUv;",
-        )
-        .replace(
-          "#include <uv_vertex>",
-          "#include <uv_vertex>\nvBillboardUv=uv*atlasRect.zw+atlasRect.xy;",
-        );
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          "#include <common>",
-          "#include <common>\nvarying vec2 vBillboardUv;",
-        )
-        .replace(
-          "#include <map_fragment>",
-          "diffuseColor *= texture2D(map,vBillboardUv);",
-        );
-    };
-    material.customProgramCacheKey = () => "city-billboard-atlas-v1";
+    const material=cityAtlasMaterial(atlas.texture);
     return { geometry, material };
   }, [rects, atlas]);
   useEffect(

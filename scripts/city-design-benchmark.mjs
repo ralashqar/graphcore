@@ -26,6 +26,7 @@ const officeModule=process.env.CITY_OFFICE_BENCHMARK==="1"?await import("../src/
 const residentialModule=process.env.CITY_RESIDENTIAL_BENCHMARK==="1"?await import("../src/domain/cityBuildingV3.ts"):null;
 const origin = process.env.CITY_TEST_ORIGIN || "http://127.0.0.1:5184";
 const browser = await chromium.launch({
+ ...(process.env.CITY_BROWSER_CHANNEL?{channel:process.env.CITY_BROWSER_CHANNEL}:{}),
   headless: true,
   args: process.platform === "win32" ? ["--use-angle=d3d11"] : [],
 });
@@ -39,6 +40,7 @@ try {
       deviceScaleFactor: mobile ? 2 : 1,
     });
     if(process.env.CITY_SCENE_QUALITY)await context.addInitScript(quality=>localStorage.setItem("city-scene-look-v1",JSON.stringify({look:"daylight",quality})),process.env.CITY_SCENE_QUALITY);
+    if(process.env.CITY_AO_MODE)await context.addInitScript(occlusion=>localStorage.setItem("city-scene-look-v1",JSON.stringify({look:"daylight",quality:"balanced",occlusion})),process.env.CITY_AO_MODE);
     const page = await context.newPage(),
       errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
@@ -99,11 +101,14 @@ try {
       "**/realtime/**",
       (socket) => socket.onMessage(() => {}),
     );
+    const preparationStart=Date.now();
     await page.goto(`${origin}/city`);
     await page
       .getByRole("button", { name: "01 Fixture 1", exact: true })
       .waitFor();
     await page.waitForFunction(min=>Number(document.querySelector("[data-city-resident-count]")?.getAttribute("data-city-resident-count"))>=min,mobile?200:280,{timeout:60000});
+    await page.waitForFunction(()=>Number(document.querySelector("canvas")?.dataset.cityPreparedBuildings)>=Number(document.querySelector("[data-city-resident-count]")?.getAttribute("data-city-resident-count")),null,{timeout:180000});
+    const preparationMs=Date.now()-preparationStart;
     await page.waitForTimeout(2000);
     const performance = await page.evaluate(
       () =>
@@ -158,11 +163,12 @@ try {
       "zooming in releases distant property instances",
     );
     assert.deepEqual(errors, []);
-    const gpu=await page.evaluate(()=>{const gl=document.querySelector("canvas")?.getContext("webgl2");const ext=gl?.getExtension("WEBGL_debug_renderer_info");return ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):"unavailable";});
+    const gpu=await page.evaluate(async()=>{const canvas=document.querySelector("canvas");if(canvas?.dataset.cityBackend==="webgpu"){const adapter=await navigator.gpu?.requestAdapter();return {backend:"webgpu",adapter:adapter?.info?.description || adapter?.info?.device || "available"};}const gl=canvas?.getContext("webgl2"),ext=gl?.getExtension("WEBGL_debug_renderer_info");return {backend:"webgl2",adapter:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):"unavailable"};});
     results.push({
       gpu,
       viewport: mobile ? "mobile-viewport-on-desktop-GPU" : "desktop",
       properties: 400,
+      preparationMs,
       initialResidents,
       closeResidents,
       closeStats,

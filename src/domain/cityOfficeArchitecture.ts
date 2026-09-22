@@ -292,13 +292,12 @@ export function resolveOffice(
         b[1] + nz * .18 / Math.max(.15, den),
       ];
     });
-    if (lod !== "near") {
-      // At city distance use one closed envelope with thin glazing panels.
-      // The editor/near representation retains real apertures and full returns.
+    if (lod === "far") {
+      // Only the distant silhouette omits openings; it renders no window panels.
       wall.push(...prism(poly, f.y, f.y + f.height - .16));
       trim.push(...prism(poly, f.y + f.height - .16, f.y + f.height));
     }
-    if (lod === "near") roof.push(...prism(inner, f.y, f.y + .12));
+    if (lod !== "far") roof.push(...prism(inner, f.y, f.y + .12));
     if (d.archetype !== "atrium-campus" || f.level !== 0 || d.floors === 1) {
       roof.push(
         ...prism(
@@ -321,6 +320,7 @@ export function resolveOffice(
         );
       }
     }
+    if (lod === "far") continue;
     for (let i = 0; i < poly.length; i++) {
       const a = poly[i],
         b = poly[(i + 1) % poly.length],
@@ -338,24 +338,22 @@ export function resolveOffice(
         y1: number,
         target: number[],
       ) => {
-        if (lod !== "near" || hi - lo < 1e-5 || y1 - y0 < 1e-5) return;
+        if (hi - lo < 1e-5 || y1 - y0 < 1e-5) return;
         const lerp = (
           u: Point,
           v: Point,
           t: number,
         ): Point => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t];
-        target.push(
-          ...prism(
-            [
-              lerp(a, b, lo),
-              lerp(b, a, 1 - hi),
-              lerp(ib, ia, 1 - hi),
-              lerp(ia, ib, lo),
-            ],
-            y0,
-            y1,
-          ),
-        );
+        const polygon=[lerp(a,b,lo),lerp(a,b,hi),lerp(ia,ib,hi),lerp(ia,ib,lo)];
+        const solid=prism(polygon,y0,y1);
+        if(lod==="near"){target.push(...solid);return;}
+        // A continuous medium shell needs front/back faces, not the hidden
+        // side faces between every neighbouring rectangular wall piece.
+        target.push(...solid.slice(36,54),...solid.slice(72,90));
+        for(let t=0;t<36;t+=9){
+          const cy=solid[t+1];
+          if(Math.abs(cy-f.y)<1e-5||Math.abs(cy-f.y-f.height)<1e-5)target.push(...solid.slice(t,t+9));
+        }
       };
       if(len<.85){strip(0,1,f.y,f.y+f.height-.16,wall);strip(0,1,f.y+f.height-.16,f.y+f.height,trim);continue;}
       const ground = f.level === 0, isEntry = ground && i === entry.index;
@@ -380,13 +378,20 @@ export function resolveOffice(
           strip(hi, (j + 1) / n, f.y, f.y + sill, wall);
         } else strip(j / n, (j + 1) / n, f.y, f.y + sill, wall);
         const y0 = isDoor ? f.y + .12 : f.y + sill;
+        if(lod==="medium"){
+          const lerp=(u:Point,v:Point,t:number):Point=>[u[0]+(v[0]-u[0])*t,u[1]+(v[1]-u[1])*t];
+          const opening=prism([lerp(a,b,lo),lerp(a,b,hi),lerp(ia,ib,hi),lerp(ia,ib,lo)],y0,f.y+top);
+          // Reverse the opening volume's jamb/sill/head faces into the aperture.
+          for(const [start,end] of [[0,36],[54,72],[90,108]])for(let t=start;t<end;t+=9)
+            wall.push(...opening.slice(t,t+3),...opening.slice(t+6,t+9),...opening.slice(t+3,t+6));
+        }
         box(
-          a[0] + dx * mid + nx * (lod === "near" ? -.1 : .025),
+          a[0] + dx * mid + nx * -.1,
           (y0 + f.y + top) / 2,
-          a[1] + dz * mid + nz * (lod === "near" ? -.1 : .025),
+          a[1] + dz * mid + nz * -.1,
           width,
           f.y + top - y0,
-          lod === "near" ? .06 : .02,
+          .06,
           p.glass,
           -Math.atan2(dz, dx),
           true,

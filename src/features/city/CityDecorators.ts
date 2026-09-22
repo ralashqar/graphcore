@@ -19,7 +19,7 @@ export function loadDecorators(): Promise<DecoratorPack> {
   pending = new GLTFLoader().loadAsync("/city/decorators/decorators.glb?v=9")
     .then((gltf) => {
       const out: DecoratorPack = new Map(),
-        materials = new Map<Material, MeshStandardMaterial>();
+        materials = new Map<Material, Material>();
       gltf.scene.updateMatrixWorld(true);
       for (const root of gltf.scene.children) {
         const pieces: Piece[] = [];

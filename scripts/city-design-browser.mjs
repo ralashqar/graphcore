@@ -84,6 +84,7 @@ if(process.env.CITY_TRIM_AUDIT === "1") {
 }
 const errors = [];
 const browser = await chromium.launch({
+  ...(process.env.CITY_BROWSER_CHANNEL?{channel:process.env.CITY_BROWSER_CHANNEL}:{}),
   headless: true,
   args: ["--use-angle=d3d11"],
 });
@@ -158,14 +159,56 @@ try {
   });
   const page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.stack || e.message));
-  if(process.env.CITY_LIGHTING_AUDIT === "1") page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+  if(process.env.CITY_LIGHTING_AUDIT === "1" || process.env.CITY_AO_AUDIT === "1") page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
   await page.goto(`${origin}/city/manage`);
   await page.getByRole("region", { name: "Live 3D building designer" })
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if(process.env.CITY_AO_AUDIT === "1"){
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
+    await page.locator(".city-look-controls summary").click();
+    await page.waitForFunction(()=>Number(document.querySelector(".city-design-canvas canvas")?.dataset.cityPreparedBuildings)>0,{},{timeout:120000});
+    await page.waitForTimeout(2000);
+    const images=[];
+    for(const mode of ["off","architectural","screen"]){
+      console.log("AO checking",mode);
+      await page.getByLabel("Ambient occlusion",{exact:true}).selectOption(mode);
+      if(mode==="screen")await page.waitForFunction(()=>document.querySelector(".city-design-canvas canvas")?.dataset.cityScreenAo==="half-resolution");
+      await page.waitForTimeout(900);
+      await page.locator(".city-look-controls").evaluate(el=>{el.open=false;});
+      images.push(await page.locator(".city-design-canvas canvas").screenshot({path:`output/playwright/city-ao-${mode}.png`}));
+      await page.locator(".city-look-controls").evaluate(el=>{el.open=true;});
+    }
+    assert.deepEqual(errors,[]);
+    assert.ok(!images[0].equals(images[1]),"Architectural AO must visibly change rendered pixels");
+    assert.ok(!images[1].equals(images[2]),"Enhanced AO must render a distinct result");
+    console.log("AO reload");
+    await page.reload();await page.locator(".city-look-controls summary").click();
+    assert.equal(await page.getByLabel("Ambient occlusion",{exact:true}).inputValue(),"screen");
+    await page.getByLabel("Ambient occlusion",{exact:true}).selectOption("architectural");
+    await page.waitForFunction(()=>!document.querySelector(".city-design-canvas canvas")?.dataset.cityScreenAo);
+    await page.setViewportSize({width:390,height:844});
+    await page.locator(".city-look-controls").evaluate(el=>{el.open=true;});
+    const box=await page.locator(".city-look-controls>div").boundingBox();assert.ok(box.x>=0 && box.x+box.width<=390);
+    if(process.env.CITY_RENDERER_RECOVERY==="1"){
+      await page.waitForFunction(()=>document.querySelector(".city-design-canvas canvas")?.dataset.cityBackend);
+      await page.waitForFunction(()=>Number(document.querySelector(".city-design-canvas canvas")?.dataset.cityPreparedBuildings)>0);
+      console.log("Destroying test GPU device");
+      assert.equal(await page.locator(".city-design-canvas canvas").getAttribute("data-city-backend"),"webgpu");
+      await page.evaluate(async()=>{const url=performance.getEntriesByType('resource').map(r=>r.name).find(n=>n.includes('/@react-three_fiber.js?'));const {_roots}=await import(url);const canvas=document.querySelector('.city-design-canvas canvas');const renderer=_roots.get(canvas).store.getState().gl;renderer.onDeviceLost({api:'WebGPU',reason:'unknown',message:'Deliberate recovery audit'});renderer.backend.device.destroy();});
+      await page.waitForFunction(()=>document.querySelector('.city-design-canvas canvas')?.dataset.cityBackend==='webgl2');
+      await page.waitForFunction(()=>Number(document.querySelector('.city-design-canvas canvas')?.dataset.cityPreparedBuildings)>0);
+      console.log("Recovered to compatibility backend");
+      await page.getByLabel("Ambient occlusion",{exact:true}).selectOption("screen");
+      await page.waitForFunction(()=>document.querySelector('.city-design-canvas canvas')?.dataset.cityScreenAo==='half-resolution');
+      await page.locator('.city-design-canvas canvas').screenshot({path:'output/playwright/city-webgpu-recovered.png'});
+      console.log("Destroyed native device recovered to WebGL2, including enhanced AO");
+    }
+    assert.equal(saved,0);assert.deepEqual(errors,[]);console.log("AO off/baked/enhanced rendering, persistence, disposal and mobile controls passed.");await browser.close();process.exit(0);
+  }
   if(process.env.CITY_LIGHTING_AUDIT === "1"){
-    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.locator(".city-look-controls summary").click();
     for(const look of ["daylight","afternoon","overcast"]){
       await page.getByLabel("Scene lighting",{exact:true}).selectOption(look);
@@ -193,7 +236,7 @@ try {
     assert.deepEqual(errors,[]);console.log("Lighting looks, quality switching, persistence and mobile controls passed.");await browser.close();process.exit(0);
   }
   if(process.env.CITY_KIT_AUDIT === "1"){
-    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.waitForTimeout(2200);
     const cv=page.locator(".city-design-canvas canvas");await cv.scrollIntoViewIfNeeded();const cb=await cv.boundingBox();await page.mouse.move(cb.x+cb.width/2,cb.y+cb.height/2);for(let i=0;i<5;i++)await page.mouse.wheel(0,-120);await page.waitForTimeout(500);
     await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-kit-slate.png"});
@@ -231,7 +274,7 @@ try {
     assert.deepEqual(errors,[]);console.log("Architectural kit presets, native rendering, save/reload, undo and mobile passed.");await browser.close();process.exit(0);
   }
   if(process.env.CITY_ENTRANCE_AUDIT === "1"){
-   page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+   page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
    await page.waitForTimeout(1800);
    const canvas=page.locator(".city-design-canvas canvas");await canvas.scrollIntoViewIfNeeded();const b=await canvas.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);
    for(let i=0;i<10;i++){await page.mouse.wheel(0,-120);await page.waitForTimeout(35);}
@@ -247,7 +290,7 @@ try {
    assert.deepEqual(errors,[]);console.log("Native entrance and brick colour fixture rendered without errors.");await browser.close();process.exit(0);
   }
   if (process.env.CITY_NATIVE_CATALOGUE_AUDIT === "1") {
-    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
     const picker=page.getByLabel("Quaternius facade module",{exact:true});
     const ids=await picker.locator("option").evaluateAll(options=>options.map(o=>o.value));
@@ -278,7 +321,7 @@ try {
     await browser.close();process.exit(0);
   }
   if(process.env.CITY_TRIM_AUDIT === "1") {
-    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.waitForTimeout(1800);
     await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-solid-trim.png"});
     await page.getByLabel("Corner assemblies",{exact:true}).selectOption({label:"No extra corner columns"});
@@ -322,7 +365,7 @@ try {
     await browser.close();process.exit(0);
   }
   if (process.env.CITY_TEXTURE_AUDIT === "1") {
-    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.getByRole("button",{name:/^Glass headquarters /}).click();
     await page.getByLabel("Building finish",{exact:true}).selectOption("facade");
     await page.getByLabel("Side stairs",{exact:true}).selectOption("concrete");

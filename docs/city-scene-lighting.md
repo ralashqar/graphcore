@@ -38,6 +38,29 @@ Reproduce with `CITY_TEST_ORIGIN`, `CITY_DESIGN_VERSION=3` and `CITY_OFFICE_BENC
 
 The lighting audit in `scripts/city-design-browser.mjs` uses `CITY_LIGHTING_AUDIT=1` and checks look/quality switching, persistence, no renderer errors and mobile-width controls. The existing driving test also accepts `CITY_SCENE_QUALITY=high` and checks that scene settings do not appear while driving.
 
-No physical mobile device has been validated. High quality is opt-in and is not a promise of mobile performance. Screen-space AO remains deferred: adding the tested React postprocessing wrapper encountered the repository's React/Fiber peer dependency conflict. No forced dependency upgrade or new package is included. No production deployment, backend contract, migration or provider spending is part of this frontend change.
+No physical mobile device has been validated. High quality is opt-in and is not a promise of mobile performance. Screen-space AO now uses the optional GT-VBAO node pipeline; see [City WebGPU](city-webgpu.md). The React postprocessing wrapper remains unused because of its React/Fiber peer dependency conflict. No production deployment, backend contract, migration or provider spending is part of this frontend change.
 
 Completed checks: `npx tsc --noEmit`, `npm run build`, fresh `npm run dev` startup on temporary port 5199, lighting browser audit against both 5188 and the fresh server, driving/browser controls in Balanced and High, and the 400-property Balanced/High benchmarks. The temporary verification server was stopped; the original 5188 server remains running. Build warnings about existing large chunks and an unresolved landing-page image remain outside this change.
+
+
+## Architectural occlusion addition
+
+The local Scene controls now expose **Off**, **Architectural — baked detail** (default), and **Enhanced — screen-space AO**. These do not alter published business recipes. Driving inherits the setting without adding controls over the game.
+
+Architectural AO traces five deterministic short hemisphere rays against assembled procedural box, roof and custom-shell triangles in the existing background preparation worker. Boxes carry four samples per face, packed into six floats per instance; custom shells carry vertex AO. The original WebGL implementation attenuated indirect diffuse only. The WebGPU/node migration uses the standard material AO hook for indirect illumination; direct sun and unlit branding remain intact. This is low-resolution architectural shading, not a full global-illumination bake. Imported Quaternius meshes are not approximated as solid bounding boxes, and therefore do not receive a native asset bake. Neighbouring businesses do not participate.
+
+Equivalent recipes reuse bounded content caches and object-local caches; equivalent refreshed server snapshots adopt their prepared data. Changed recipes invalidate the bake. Camera motion and local lighting changes never trigger a bake. A failed worker uses the existing main-thread fallback; that fallback can still pause briefly during a complex recipe. Preparation now includes an AO cost; the measured 400-property desktop fixture took about 7.2 seconds including navigation and initial assembly.
+
+Enhanced now lazily loads the GT-VBAO node pipeline with half-resolution AO/denoise and full-resolution scene colour; the earlier GTAO composer has been replaced. It recreates camera-dependent passes when entering/exiting driving, disposes resources on disable, excludes invisible shadow proxies and nonphysical ground stamps, and falls back to the normal renderer on a caught rendering failure. Software/low-power scene detection leaves architectural shading in place. Enhanced is opt-in.
+
+The final architectural run on the same Intel UHD 400-property fixture retained **48 calls / 565,712 triangles / 8 textures**, with **50 ms p95 / 35.50 average FPS** and approximately **254 MB reported JS heap**. The earlier committed balanced baseline was 50 ms / 43.05 FPS: matching p95 does not mean zero overhead. The 390 x 844 desktop-GPU viewport measured 16.7 ms p95 / 53.23 FPS; reported heap was highly variable (747 MB in that run), and is not GPU memory. Physical mobile remains unvalidated.
+
+Reproduce with the existing benchmark and `CITY_AO_MODE=architectural` or `screen`. Logs: `output/city-ao-final-benchmark.log` and `output/city-ao-screen-benchmark.log`. AO is intentionally reversible locally through Off; no performance guarantee is made across devices.
+
+
+Enhanced measured **50.1 ms p95 / 25.84 FPS**, **94 aggregate pass calls / 1,117,684 triangles / 16 textures** in the desktop fixture. The small viewport measured 49.9 ms / 39.94 FPS. Counters intentionally include all composer passes. Enhanced is best treated as an optional close-up quality setting on this GPU, not the city performance default.
+
+Focused verification includes deterministic isolation/overhang/coplanar/glass tests and six actual commercial/curved/connected fixtures, equivalent-snapshot cache reuse and edit invalidation, editor Off/Architectural/Enhanced pixel differences and persistence/disposal, and driving movement, braking, camera return/re-entry and small-screen controls with Enhanced enabled. Renderer error checks passed in both browser flows.
+
+
+Final AO checks passed: `npx tsc --noEmit`, `npm run build`, the AO geometry/cache suite, editor AO audit on the existing server and a freshly started `npm run dev` server at 5199, and Enhanced driving regression. The temporary server was stopped; the original 5188 server remains available. Existing public-manifest import warnings during development and build asset/chunk warnings are outside this change. No deployment or paid service was used.

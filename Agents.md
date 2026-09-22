@@ -1,6 +1,23 @@
 # GraphCore AI Agents
 
+## Playful City driving (September 2026)
+
+The City uses a locally bundled CC0 Kenney hatchback, wheel/body animation, fixed-step arcade handling and render-independent spatial-hash plot collision. Pavements are driveable; plots and central structures remain protected. The same collision queries support camera obstruction and recovery. No schema, backend or provider change. Native and WebGL2 fallback controls are tested; 72-property frame time remained ~33.5 ms p95 with ~0.2 ms simulation/camera work. The 400-property baseline and physical-mobile acceptance remain outstanding. Details: [docs/city-playful-driving.md](docs/city-playful-driving.md).
+
+## City WebGPU renderer (September 2026)
+
+Three.js/types are pinned to r186. City map, driving and building preview use WebGPURenderer with shared TSL surfaces, atlas signs, baked AO and lazy GT-VBAO. Unsupported devices use the WebGL2 node backend; device loss remounts City canvases in compatibility mode while preserving editor state. Other app canvases retain their existing renderer. Native Edge driving and fallback rendering are verified locally; physical mobile remains unverified. Camera/fog identity, bounded camera-specific AO caches and quantized instance capacity address a measured transition regression: Enhanced AO map return fell from 11.7–13.2 s to 0.38–0.77 s in local Edge development runs; first-use shader warm-up remains costly. No backend/provider or deployment changes. Scope, driver limits and verification: [docs/city-webgpu.md](docs/city-webgpu.md).
+
+
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
+
+## Recessed city-detail windows (September 2026)
+
+Office near/medium representations now both retain real apertures and inset glazing; far silhouettes omit panes. Legacy procedural windows and alternating infill receive the same no-surface-panel correction without changing authored recipes or footprints. Shared editor/city geometry remains merged and instanced. No schema, migration or provider change. See [docs/city-inset-windows.md](docs/city-inset-windows.md) for scope and verification.
+
+## City architectural occlusion (September 2026)
+
+City building preparation now bakes bounded deterministic local occlusion in the existing worker, reuses equivalent recipes and carries packed face/vertex samples through instancing. Architectural shading is the local default; optional lazy GT-VBAO uses half-resolution AO targets and is disabled on the existing low-power path. Business recipes, APIs and deployments are unchanged. The 400-property Intel UHD run retained draw calls and 50 ms p95, with lower average FPS; physical-mobile validation remains outstanding. Controls, preparation cost, measured limits and verification: [docs/city-scene-lighting.md](docs/city-scene-lighting.md).
 
 ## City lighting and reflection budgets (September 2026)
 

@@ -1,5 +1,7 @@
+import {createCityRenderer,cityGpu,useCityRendererEpoch} from "./cityRenderer";
 import { CityEnvironment } from "./CityEnvironment";
 import { CityAdaptiveResolution } from "./CityAdaptiveResolution";
+import {preloadCityCar} from "./CityDriveCar";
 import { CityDriving } from "./CityDriving";
 import { streamRadius } from "../../domain/cityStreaming";
 import { CityArrivalContext } from "./CityInstances";
@@ -21,13 +23,14 @@ import {
   type ComponentRef,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { MapControls, OrthographicCamera } from "@react-three/drei";
-import { MOUSE, TOUCH, Vector3 } from "three";
+import { MapControls } from "@react-three/drei";
+import { MOUSE, TOUCH, Vector3, OrthographicCamera, PerspectiveCamera } from "three";
 import { type CityProperty } from "../../domain/city";
 import { CityMapLayoutContext, estateMapLayout, standardMapLayout, useCityMapLayout } from "./CityMapLayout";
 import { CityKit } from "./CityKit";
@@ -38,6 +41,18 @@ let savedCityCamera: {
   zoom: number;
   selection: string;
 } | null = null;
+/** Stable cameras keep node-renderer programs reusable across map/drive switches. */
+function CityCameras({driving,cameras}:{driving:boolean;cameras:{map:OrthographicCamera;drive:PerspectiveCamera}}){
+ const {set,size}=useThree();
+ useLayoutEffect(()=>{
+  cameras.map.left=-size.width/2;cameras.map.right=size.width/2;
+  cameras.map.top=size.height/2;cameras.map.bottom=-size.height/2;
+  cameras.map.updateProjectionMatrix();
+  cameras.drive.aspect=size.width/Math.max(1,size.height);cameras.drive.updateProjectionMatrix();
+ },[cameras,size.width,size.height]);
+ useLayoutEffect(()=>{set({camera:driving?cameras.drive:cameras.map});},[set,cameras,driving]);
+ return null;
+}
 function CameraRig({
   target,
   home,
@@ -302,13 +317,15 @@ function ContextGuard({ onFailure }: { onFailure: () => void }) {
     if (sample.current >= 1) {
       sample.current = 0;
       gl.domElement.dataset.cityRenderStats = JSON.stringify({
-        calls: gl.info.render.calls,
+        calls: cityGpu(gl).info.render.drawCalls,
         triangles: gl.info.render.triangles,
         geometries: gl.info.memory.geometries,
         textures: gl.info.memory.textures,
+        backend: gl.domElement.dataset.cityBackend,
+        gpuBytes: cityGpu(gl).info.memory.total,
       });
     }
-  });
+  }, -1);
   useEffect(() => {
     const canvas = gl.domElement;
     const lost = (e: Event) => {
@@ -316,7 +333,9 @@ function ContextGuard({ onFailure }: { onFailure: () => void }) {
       onFailure();
     };
     canvas.addEventListener("webglcontextlost", lost);
-    return () => canvas.removeEventListener("webglcontextlost", lost);
+    canvas.addEventListener("city-device-lost",lost);
+    return () => {canvas.removeEventListener("webglcontextlost", lost);
+      canvas.removeEventListener("city-device-lost",lost);};
   }, [gl, onFailure]);
   return null;
 }
@@ -453,6 +472,13 @@ function CitySceneContent({
   onDiscoverySelect?: (item: CustomerItem) => void;
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
+  const rendererEpoch=useCityRendererEpoch();
+  useEffect(()=>{void preloadCityCar();},[]);
+  const cameras=useMemo(()=>{
+   const map=new OrthographicCamera(-1,1,1,-1,.1,5000);map.position.set(420,380,420);map.zoom=3.8;map.lookAt(0,0,0);
+   const drive=new PerspectiveCamera(60,1,.2,1200);drive.position.set(0,4.8,24);
+   return {map,drive};
+  },[]);
   const { plotAxis: position, plotSize } = useCityMapLayout();
   const presetDemo = estateDemo && [null, "presets"].includes(new URLSearchParams(window.location.search).get("cityRender"));
   const spriteMode = estateDemo && !presetDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
@@ -477,19 +503,19 @@ function CitySceneContent({
   useEffect(() => { residents.current = arrivals; }, [arrivals]);
   return (
     <SceneBoundary onFailure={onFailure}>
-      <Canvas
+      <Canvas key={rendererEpoch}
         data-city-resident-count={visible.length}
         dpr={softwareRenderer ? 0.75 : Math.min(pixelBudget, driving ? 1 : Math.max(1, window.devicePixelRatio || 1))}
-        shadows={false}
-        gl={{ antialias: true, powerPreference: "high-performance" }}
+        shadows={{enabled:false,type:1}}
+        gl={createCityRenderer}
         onCreated={({ gl }) => {
           gl.setClearColor(presetDemo ? "#c8deeb" : "#e4e5dc");
-          const context = gl.getContext(),
-            info = context.getExtension("WEBGL_debug_renderer_info");
+          const context = gl.domElement.dataset.cityBackend==="webgpu" ? null : gl.getContext(),
+            info = context?.getExtension("WEBGL_debug_renderer_info");
           if (
             info &&
             /SwiftShader|llvmpipe|software/i.test(
-              String(context.getParameter(info.UNMASKED_RENDERER_WEBGL)),
+              String(context!.getParameter(info.UNMASKED_RENDERER_WEBGL)),
             )
           ) {
             setSoftwareRenderer(true);
@@ -498,13 +524,7 @@ function CitySceneContent({
       >
         <ContextGuard onFailure={onFailure} />
         <CityAdaptiveResolution onChange={setPixelBudget} />
-        {!driving && <OrthographicCamera
-          makeDefault
-          position={[420, 380, 420]}
-          zoom={3.8}
-          near={0.1}
-          far={5000}
-        />}
+        <CityCameras driving={driving} cameras={cameras}/>
         {!spriteMode && <CityStreetActivity
           properties={matches ? visible.filter(p=>matches.includes(p.id)) : visible}
           reduced={reduced}
@@ -580,7 +600,7 @@ function CitySceneContent({
             paused={!!playback}
           />
         )}
-        {driving ? <CityDriving capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{if(residentDrive)return;setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
+        {driving ? <CityDriving properties={properties} hasPavilion={!spriteMode && !!pavilion} launchPlaza={!spriteMode && (launches.length>0 || launchFocus)} viewCamera={cameras.drive} capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{if(residentDrive)return;setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
           launchFocus={launchFocus}
           central={central}
           viewport={viewport}

@@ -1,6 +1,8 @@
+import {MeshBasicNodeMaterial} from "three/webgpu";
+import {uv,abs,max,smoothstep,float,vec3} from "three/tsl";
 import {useFrame} from "@react-three/fiber";
 import {useEffect,useMemo,useRef,useState} from "react";
-import {BoxGeometry,CylinderGeometry,Vector3,MeshBasicMaterial,PlaneGeometry,ShaderMaterial} from "three";
+import {BoxGeometry,CylinderGeometry,Vector3,MeshBasicMaterial,PlaneGeometry} from "three";
 import {buildingMasses} from "../../domain/cityBuildingDesign";
 import type {CityProperty} from "../../domain/city";
 import {Batch,type Instance} from "./CityInstances";
@@ -17,9 +19,12 @@ export function CityBuildingGrounding({properties,center,reduced=true}:{properti
  const resources=useMemo(()=>({
    plane:new PlaneGeometry(1,1).rotateX(-Math.PI/2),box:new BoxGeometry(1,1,1),cylinder:new CylinderGeometry(.5,.5,1,16),
    proxy:new MeshBasicMaterial({colorWrite:false,depthWrite:false}),
-   contact:new ShaderMaterial({transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1,
-     vertexShader:`varying vec2 vGround; void main(){vGround=uv;gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(position,1.0);}`,
-     fragmentShader:`varying vec2 vGround;void main(){float edge=max(abs(vGround.x-.5),abs(vGround.y-.5));float shade=1.0-smoothstep(.43,.5,edge);gl_FragColor=vec4(.055,.075,.09,shade*.3);\n#include <colorspace_fragment>\n}`}),
+   contact:(()=>{
+     const m=new MeshBasicNodeMaterial({transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
+     m.colorNode=vec3(.055,.075,.09);
+     m.opacityNode=float(1).sub(smoothstep(.43,.5,max(abs(uv().x.sub(.5)),abs(uv().y.sub(.5))))).mul(.3);
+     return m;
+   })(),
  }),[]);
  useEffect(()=>()=>Object.values(resources).forEach(r=>r.dispose()),[resources]);
  const data=useMemo(()=>{

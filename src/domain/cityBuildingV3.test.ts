@@ -117,14 +117,14 @@ test("scoped seeds preserve shape, branding and the other subsystem", () => {
   assert.notDeepEqual(r.parts, facade.parts);
   assert.notDeepEqual(r.slots, grounds.slots);
 });
-test("composition preserves brand palette and version two geometry retains the slab-overlap correction", () => {
+test("composition preserves brand palette and version two geometry retains recessed openings and slab clearance", () => {
   const d = newDesign("a");
   assert.deepEqual(applyComposition(d, 2).palette, d.palette);
   assert.equal(
     createHash("sha256").update(
       JSON.stringify(resolveDesign(DEFAULT_DESIGN_V2, "#335577")),
     ).digest("hex"),
-    "e1e1c70dba6136c6185b8a087a68184d637e86a2a1e6c826a7a8e2e4c92ea6b8",
+    "e8e062d790367c89f6a78e1612ba5ffd712366c0cc900d0a521a50df4315a85e",
   );
 });
 

@@ -922,20 +922,8 @@ export function resolveV3(
       if (y === .65 && d.base === "plinth") continue;
       const panel = y > .65 && d.rhythm === "alternating" &&
         (Math.round(offset / bayWidth) + d.facadeSeed) % 2 === 0;
-      if (panel) {
-        box(
-          wx + nx * .04,
-          y + height / 2,
-          wz + nz * .04,
-          horizontal ? bayWidth : .08,
-          height - .6,
-          horizontal ? .08 : bayWidth,
-          p.trim,
-        );
-        continue;
-      }
-      const balcony=residential && !!d.connectedArchitecture?.balconies && y>.65 && nz===1 && offset>=0 && offset<1.3 && z+1.3<10.6;
-      const winH = balcony?2.35: residential ? (d.connectedArchitecture?.openingLayout==="compact"?1.2:1.4) : Math.min(
+      const balcony=!panel && residential && !!d.connectedArchitecture?.balconies && y>.65 && nz===1 && offset>=0 && offset<1.3 && z+1.3<10.6;
+      const winH = panel?height-.6:balcony?2.35: residential ? (d.connectedArchitecture?.openingLayout==="compact"?1.2:1.4) : Math.min(
         height - .65,
         y === .65
           ? (d.base === "storefront" ? height - .75 : height - 1.1)
@@ -945,7 +933,7 @@ export function resolveV3(
           ? height - .75
           : 1.7,
       );
-      const windowCenter=balcony?y+.18+winH/2:residential?y+.9+winH/2:y+height*.5;
+      const windowCenter=panel?y+height/2:balcony?y+.18+winH/2:residential?y+.9+winH/2:y+height*.5;
       if(balcony){
         balconyCount++;
         box(wx,y+.1,wz+.6,2.2,.16,1.3,p.trim);
@@ -961,12 +949,12 @@ export function resolveV3(
         horizontal ? bayWidth : .04,
         winH,
         horizontal ? .04 : bayWidth,
-        p.glass,
+        panel ? p.trim : p.glass,
         facadeEnabled && d.rhythm !== "ribbon" && y > .65
           ? "facade"
           : undefined,
       );
-      if(d.windowFamily==="arched" && d.finish==="procedural") {
+      if(!panel && d.windowFamily==="arched" && d.finish==="procedural") {
         const pane=parts.at(-1)!;
         pane.kind="archedPane";
         pane.size=[bayWidth,winH,.04];pane.rotation=angle;
@@ -1003,7 +991,7 @@ export function resolveV3(
       const innerHeight=height-.36;
       const bays=openings.map(o=>({center:o.offset,width:bayWidth,bottom:o.centerY-y-.18-o.height/2,top:o.centerY-y-.18+o.height/2}));
       const doorCuts=extensionWall===wall ? [{left:-NATIVE_MODULES.Door_1.width/2-.06,right:NATIVE_MODULES.Door_1.width/2+.06,bottom:stairLanding-y-.18,top:stairLanding-y-.18+NATIVE_MODULES.Door_1.height+.06}] : [];
-      if(connected && y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2) doorCuts.push({left:-x-1,right:-x+1,bottom:0,top:2.4-.18});
+      if(d.finish!=="facade" && y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2) doorCuts.push({left:-x-1,right:-x+1,bottom:0,top:2.4-.18});
       for(const rect of partitionNativeWall(length,innerHeight,bays,doorCuts)){
         if(rect.kind!=="solid")continue;
         const left=connected && d.generatorRevision==="city-connected-3" && Math.abs(rect.left+length/2)<.00001?range.left:Math.max(rect.left,range.left),right=connected && d.generatorRevision==="city-connected-3" && Math.abs(rect.right-length/2)<.00001?range.right:Math.min(rect.right,range.right);
@@ -1017,7 +1005,7 @@ export function resolveV3(
   }
   if(d.finish==="procedural" && d.doorFamily && d.doorFamily!=="automatic")parts.push(...proceduralEntrance(d.doorFamily,d.doorSurround||"framed",!!d.doorTransom,entrance.z,p,lod));
   else {
-  box(0, 1.85, entrance.z + (d.generatorRevision !== "city-grammar-1" && d.finish === "procedural" ? -.16 : .12), 2, 2.4, d.generatorRevision !== "city-grammar-1" && d.finish === "procedural" ? .04 : .2, p.glass);
+  box(0, 1.85, entrance.z + (d.finish === "procedural" ? -.16 : .12), 2, 2.4, d.finish === "procedural" ? .04 : .2, p.glass);
   if(d.finish!=="procedural"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=[entryAsset,entryLeaf];}
   }
   const frontAssembly=frontStructure(chosenEntry?"standard":d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim);

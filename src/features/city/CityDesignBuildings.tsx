@@ -1,3 +1,4 @@
+import {useCityLook} from "./CityLook";
 import { useCityReflection } from "./cityReflections";
 import { CityBuildingGrounding } from "./CityBuildingGrounding";
 import { spiralRailPositions, spiralTreadPositions } from "../../domain/citySpiralStair";
@@ -52,6 +53,7 @@ function BuildingBatches(
 ) {
   const invalidate=useThree(s=>s.invalidate);
   const reflection=useCityReflection();
+  const {occlusion}=useCityLook();
   const { plotAxis, plotSize } = useCityMapLayout();
   const [pack, setPack] = useState<DecoratorPack | null>(null);
   const needsPack = !CITY_LIGHT_MODE && properties.some((p) =>
@@ -152,18 +154,21 @@ function BuildingBatches(
           const [x, y, z] = part.position;
           // Unit-box chamfers grow with instance length and pull long rail/trim ends
           // away from their adjoining pieces. Keep slender connectors square-ended.
+          const baked=resolved?.occlusion?.[index];
           const dimensions = [...part.size].sort((a, b) => b - a);
           const connector = part.kind === "box" && (dimensions[0] > dimensions[1] * 10 || ("squareEdges" in part && part.squareEdges));
           let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : connector ? "joinedBox" : part.kind;
           if(part.kind==="mesh" && part.vertices){
             let hash=2166136261,second=5381;for(const v of part.vertices){const n=Math.round(v*1e6);hash=Math.imul(hash^n,16777619);second=Math.imul(second,33)^n;}
+            for(const v of baked?.vertices||[]){hash=Math.imul(hash^Math.round(v*10000),16777619);}
             key=`mesh:${hash>>>0}:${second>>>0}:${part.vertices.length}`;
-            if(!resources.custom.has(key)){const g=new BufferGeometry();g.setAttribute("position",new Float32BufferAttribute(part.vertices,3));g.computeVertexNormals();resources.custom.set(key,g);}
+            if(!resources.custom.has(key)){const g=new BufferGeometry();g.setAttribute("position",new Float32BufferAttribute(part.vertices,3));g.computeVertexNormals();if(baked?.vertices)g.setAttribute("cityVertexAO",new Float32BufferAttribute(baked.vertices,1));resources.custom.set(key,g);}
           }
           if (simple && key === "box") key = "joinedBox";
           const texture = d.version === 3 && key !== "glassBox" && key !== "archedPane" ? ("textureRole" in part && part.textureRole === "none" ? undefined : "textureRole" in part && part.textureRole === "roof" ? d.textures?.roof : "textureRole" in part && part.textureRole === "wall" ? d.textures?.wall : "textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
           if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
+            occlusion:baked?.corners,
             detail: center ? representation : undefined,
             key: `${p.id}:${index}`,
             property: p,
@@ -223,6 +228,7 @@ function BuildingBatches(
     const used=new Set(Object.keys(batches).map(k=>k.split("|")[0]));
     resources.custom.forEach((geometry,key)=>{if(!used.has(key)){geometry.dispose();resources.custom.delete(key);}});
   },[batches,resources]);
+  useEffect(()=>{for(const material of [resources.material,resources.glass,...resources.textured.values()])material.userData.cityOcclusion.value=occlusion==="off"?0:1;invalidate();},[occlusion,resources,batches,invalidate]);
   const textureMaterial=(id:string)=>{
     if(!resources.textured.has(id))resources.textured.set(id,citySurfaceMaterial(false,id as CityTextureId,invalidate));
     return resources.textured.get(id)!;
@@ -264,6 +270,8 @@ function BuildingBatches(
 }
 
 export function CityDesignBuildings(props: Parameters<typeof BuildingBatches>[0]) {
- const prepared=usePreparedCity(props.properties,!!props.center);
+ const prepared=usePreparedCity(props.properties,true,!props.center);
+ const canvas=useThree(s=>s.gl.domElement);
+ useEffect(()=>{canvas.dataset.cityPreparedBuildings=String(prepared.length);return()=>{delete canvas.dataset.cityPreparedBuildings;};},[canvas,prepared]);
  return <CityVisibility properties={prepared} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props} properties={prepared}/><CityBuildingGrounding properties={prepared} center={props.center} reduced={props.reduced}/></CityVisibility>;
 }

@@ -1,3 +1,4 @@
+import { partitionNativeWall } from "./cityNativeShell.ts";
 import type {
   BuildingMass,
   BuildingPart,
@@ -324,6 +325,7 @@ export function resolveDesign(
     const { x, z, nx, nz, y, height, length } = wall,
       angle = Math.atan2(nx, nz),
       horizontal = nz !== 0;
+    const wallIndex=parts.length, openings:{center:number;width:number;bottom:number;top:number}[]=[];
     box(
       x - nx * .075,
       y + height / 2,
@@ -372,13 +374,14 @@ export function resolveDesign(
         height - .65,
         d.architecture === "glass" || y === .65 ? height - .75 : 1.7,
       );
+      openings.push({center:offset,width:bayWidth,bottom:height*.5-winH/2-.18,top:height*.5+winH/2-.18});
       box(
-        wx + nx * .04,
+        wx - nx * .14,
         y + height * .5,
-        wz + nz * .04,
-        horizontal ? bayWidth : .08,
+        wz - nz * .14,
+        horizontal ? bayWidth : .04,
         winH,
-        horizontal ? .08 : bayWidth,
+        horizontal ? .04 : bayWidth,
         p.glass,
         d.finish === "facade" && y > .65 ? "facade" : undefined,
       );
@@ -414,6 +417,15 @@ export function resolveDesign(
           );}
       }
     }
+    // Every visible pane owns a real aperture, including legacy and fallback designs.
+    parts.splice(wallIndex,1);
+    const doors=y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2
+      ? [{left:-x-1,right:-x+1,bottom:0,top:2.22}]:[];
+    for(const rect of partitionNativeWall(length,height-.36,openings,doors)){
+      if(rect.kind!=="solid")continue;
+      const along=(rect.left+rect.right)/2,w=rect.right-rect.left,h=rect.top-rect.bottom;
+      box(x+(horizontal?along:0)-nx*.15,y+.18+rect.bottom+h/2,z+(horizontal?0:along)-nz*.15,horizontal?w:.3,h,horizontal?.3:w,p.wall);
+    }
     if (
       d.finish !== "procedural" && lod === "near" && top && d.roof !== "pitched"
     ) {
@@ -440,7 +452,7 @@ export function resolveDesign(
       }
     }
   }
-  box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);
+  box(0, 1.85, entrance.z - .14, 2, 2.4, .04, p.glass);
   if (d.canopy) {
     box(0, d.groundHeight - .4, entrance.z + .7, 3.4, .2, 1.6, brand);
   }

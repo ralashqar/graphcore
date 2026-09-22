@@ -1,3 +1,4 @@
+import {createCityRenderer,useCityRendererEpoch} from "./cityRenderer";
 import { CityLookControls } from "./CityLook";
 import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../domain/cityProceduralEntrances";
 import { WINDOW_FAMILIES } from "../../domain/cityWindowFamilies";
@@ -58,6 +59,11 @@ function FitCamera({ height }: { height: number }) {
   const { camera, size, invalidate } = useThree();
   useEffect(() => {
     if (!size.width || !size.height) return;
+    if ("isOrthographicCamera" in camera) {
+      const orthographic=camera as import("three").OrthographicCamera;
+      orthographic.left=-size.width/2;orthographic.right=size.width/2;
+      orthographic.top=size.height/2;orthographic.bottom=-size.height/2;
+    }
     camera.zoom = Math.min(size.width, size.height) / Math.max(56, height + 32);
     camera.updateProjectionMatrix();
     invalidate();
@@ -276,6 +282,7 @@ export function CityBuildingDesigner(
     onChange: (design: CityBuildingDesign) => void;
   },
 ) {
+  const rendererEpoch=useCityRendererEpoch();
   const [initial] = useState(() => {
     let id = businessId;
     if (!id) {
@@ -488,10 +495,10 @@ export function CityBuildingDesigner(
             data-floors={design.floors}
           >
             <DesignBoundary>
-              <Canvas
+              <Canvas key={rendererEpoch}
                 events={previewEvents}
                 orthographic
-                shadows={false}
+                shadows={{enabled:false,type:1}}
                 frameloop="demand"
                 dpr={[1, 1.5]}
                 camera={{
@@ -500,7 +507,7 @@ export function CityBuildingDesigner(
                   near: .1,
                   far: 250,
                 }}
-                gl={{ antialias: true, alpha: true }}
+                gl={createCityRenderer}
               >
                 <CityPreviewEnvironment />
                 <FitCamera height={height} />
