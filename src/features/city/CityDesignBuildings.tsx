@@ -1,12 +1,19 @@
+import { spiralRailPositions, spiralTreadPositions } from "../../domain/citySpiralStair";
+import { usePreparedCity } from "./usePreparedCity";
+import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { borderTexture } from "../../domain/cityTexturePresets";
 import { useThree } from "@react-three/fiber";
 import type { CityTextureId } from "../../domain/cityTexturePresets";
 import { bevelCityGeometry } from "./CityBevelGeometry";
 import { citySurfaceMaterial } from "./CitySurfaceMaterial";
-import { residentDetails, type CityDetail } from "../../domain/cityStreaming";
+import { type CityDetail } from "../../domain/cityStreaming";
+import { CityVisibility } from "./CityVisibility";
+import { cachedCityDesign } from "./cityDesignCache";
 import { pitchedRoofPositions } from "../../domain/cityBuildingSurfaces";
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Shape,
+  ExtrudeGeometry,
   BoxGeometry,
   CylinderGeometry,
   BufferGeometry,
@@ -15,7 +22,6 @@ import {
   IcosahedronGeometry,
   MeshLambertMaterial,
 } from "three";
-import { resolveCurrent } from "../../domain/cityBuildingV3";
 import { type DecoratorPack, loadDecorators } from "./CityDecorators";
 import { CityDesignSigns } from "./CityDesignSigns";
 import { buildingParts } from "../../domain/cityBuildingDesign";
@@ -24,7 +30,7 @@ import { Batch, type Instance } from "./CityInstances";
 import { useCityMapLayout } from "./CityMapLayout";
 
 /** Shared by the editor and world. Procedural primitives and each curated geometry/material are instanced across properties. */
-export function CityDesignBuildings(
+function BuildingBatches(
   {
     properties,
     onSelect,
@@ -32,7 +38,6 @@ export function CityDesignBuildings(
     matchIds,
     selectedId,
     center,
-    zoom = 20,
   }: {
     properties: CityProperty[];
     onSelect?: (property: CityProperty) => void;
@@ -45,37 +50,11 @@ export function CityDesignBuildings(
 ) {
   const invalidate=useThree(s=>s.invalidate);
   const { plotAxis, plotSize } = useCityMapLayout();
-  const nearby = useMemo(() =>
-    new Set(
-      [...properties].sort((a, b) => {
-        if (a.id === selectedId) return -1;
-        if (b.id === selectedId) return 1;
-        const distance = (p: CityProperty) =>
-          center
-            ? Math.max(Math.abs(p.x - center.x), Math.abs(p.z - center.z))
-            : 0;
-        return distance(a) - distance(b);
-      }).filter((p) =>
-        !center || p.id === selectedId ||
-        (zoom >= 2 &&
-          Math.max(Math.abs(p.x - center.x), Math.abs(p.z - center.z)) <= 3)
-      ).slice(0, 12).map((p) => p.id),
-    ), [properties, center?.x, center?.z, zoom, selectedId]);
-  // Detail is selected once per residency, not reranked on every camera pan.
-  // Changing the top-12 list used to replace walls/props on still-visible buildings.
-  const residentDetail = useRef(new Map<string, CityDetail>());
-  const detail = useMemo(() => {
-    const candidates = new Map<string, CityDetail>();
-    for (const p of properties) candidates.set(p.id,
-      (nearby.has(p.id) ? "near" : center && Math.max(Math.abs(p.x-center.x), Math.abs(p.z-center.z)) > 6 ? "far" : "medium"));
-    const next = residentDetails(residentDetail.current, candidates);
-    residentDetail.current = next;
-    return next;
-  }, [properties, nearby, center?.x, center?.z]);
   const [pack, setPack] = useState<DecoratorPack | null>(null);
-  const needsPack = properties.some((p) =>
+  const needsPack = !CITY_LIGHT_MODE && properties.some((p) =>
     !p.profile.buildingArt &&
     p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
+    !(p.profile.buildingDesign.version === 3 && p.profile.buildingDesign.generatorRevision === "city-office-4") &&
     (p.profile.buildingDesign.finish !== "procedural" || (p.profile.buildingDesign.version === 3 && p.profile.buildingDesign.stairExtension === "fire-escape"))
   );
   useEffect(() => {
@@ -91,11 +70,16 @@ export function CityDesignBuildings(
   }, [needsPack, pack]);
   const resources = useMemo(
     () => ({
+      archedPane: (()=>{const shape=new Shape();shape.moveTo(-.5,-.5);shape.lineTo(.5,-.5);shape.lineTo(.5,0);shape.absarc(0,0,.5,0,Math.PI,false);shape.closePath();return new ExtrudeGeometry(shape,{depth:1,bevelEnabled:false,curveSegments:CITY_LIGHT_MODE?4:12}).translate(0,0,-.5);})(),
+      archInfill: (()=>{const shape=new Shape();shape.moveTo(-.5,0);shape.lineTo(-.5,.5);shape.lineTo(.5,.5);shape.lineTo(.5,0);shape.absarc(0,0,.5,0,Math.PI,false);shape.closePath();return new ExtrudeGeometry(shape,{depth:1,bevelEnabled:false,curveSegments:CITY_LIGHT_MODE?4:12}).translate(0,0,-.5);})(),
       box: bevelCityGeometry(new BoxGeometry(1, 1, 1)),
       pane: new BoxGeometry(1, 1, 1),
       tree: new IcosahedronGeometry(1, 1),
+      mansard: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("mansard"), 3)); g.computeVertexNormals(); return bevelCityGeometry(g); })(),
       hip: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("hip"), 3)); g.computeVertexNormals(); return bevelCityGeometry(g); })(),
       shed: (() => { const g = new BufferGeometry(); g.setAttribute("position", new Float32BufferAttribute(pitchedRoofPositions("shed"), 3)); g.computeVertexNormals(); return bevelCityGeometry(g); })(),
+      stairRail: (()=>{const g=new BufferGeometry();g.setAttribute("position",new Float32BufferAttribute(spiralRailPositions(),3));g.computeVertexNormals();return g;})(),
+      stairTread: (()=>{const g=new BufferGeometry();g.setAttribute("position",new Float32BufferAttribute(spiralTreadPositions(),3));g.computeVertexNormals();return g;})(),
       column: new CylinderGeometry(.5, .5, 1, 12),
       pediment: (() => {
         const g = new BufferGeometry();
@@ -113,6 +97,7 @@ export function CityDesignBuildings(
         g.computeVertexNormals();
         return bevelCityGeometry(g);
       })(),
+      custom: new Map<string,BufferGeometry>(),
       textured: new Map<string, ReturnType<typeof citySurfaceMaterial>>(),
       material: citySurfaceMaterial(),
       glass: citySurfaceMaterial(true),
@@ -120,6 +105,12 @@ export function CityDesignBuildings(
     [],
   );
   useEffect(() => () => {
+    resources.archInfill.dispose();
+    resources.archedPane.dispose();
+    resources.mansard.dispose();
+    resources.custom.forEach(g=>g.dispose());
+    resources.stairTread.dispose();
+    resources.stairRail.dispose();
     resources.box.dispose();
     resources.pane.dispose();
     resources.column.dispose();
@@ -135,6 +126,7 @@ export function CityDesignBuildings(
   const batches = useMemo(() => {
     const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [], hip: [], shed: [] };
     for (const p of properties) {
+     for (const representation of (CITY_LIGHT_MODE ? ["simple"] as const : center ? ["full", "simple"] as const : ["full"] as const)) {
       const d = p.profile.buildingDesign;
       if (!d || p.profile.buildingArt) continue;
       const scale = plotSize / 24,
@@ -142,11 +134,12 @@ export function CityDesignBuildings(
         c = Math.cos(angle),
         s = Math.sin(angle);
       const dim = matchIds && !matchIds.has(p.id) && p.id !== selectedId;
-      const lod = detail.get(p.id) || "medium";
+      const simple = representation === "simple";
+      const lod: CityDetail = simple && (center || d.version!==3 || (d.generatorRevision!=="city-connected-3" && d.generatorRevision!=="city-office-4")) ? "medium" : "near";
       const resolved = d.version !== 1
-        ? resolveCurrent(d, p.profile.color, lod)
+        ? cachedCityDesign(d, p.profile.color, lod, simple)
         : null;
-      const kit = pack && d.version !== 1 && (lod === "near" || (d.version === 3 && lod === "medium")) && (d.finish !== "procedural" || (d.version === 3 && d.stairExtension === "fire-escape"));
+      const kit = !CITY_LIGHT_MODE && !simple && pack && d.version !== 1 && (lod === "near" || (d.version === 3 && lod === "medium")) && (d.finish !== "procedural" || (d.version === 3 && d.stairExtension === "fire-escape"));
       const legacyComplete = kit && resolved?.attachments.every(a => pack.has(a.asset));
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {
@@ -158,16 +151,23 @@ export function CityDesignBuildings(
           const dimensions = [...part.size].sort((a, b) => b - a);
           const connector = part.kind === "box" && (dimensions[0] > dimensions[1] * 10 || ("squareEdges" in part && part.squareEdges));
           let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : connector ? "joinedBox" : part.kind;
-          const texture = d.version === 3 && key !== "glassBox" ? ("textureRole" in part && part.textureRole === "wall" ? d.textures?.wall : "textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
+          if(part.kind==="mesh" && part.vertices){
+            let hash=2166136261,second=5381;for(const v of part.vertices){const n=Math.round(v*1e6);hash=Math.imul(hash^n,16777619);second=Math.imul(second,33)^n;}
+            key=`mesh:${hash>>>0}:${second>>>0}:${part.vertices.length}`;
+            if(!resources.custom.has(key)){const g=new BufferGeometry();g.setAttribute("position",new Float32BufferAttribute(part.vertices,3));g.computeVertexNormals();resources.custom.set(key,g);}
+          }
+          if (simple && key === "box") key = "joinedBox";
+          const texture = d.version === 3 && key !== "glassBox" && key !== "archedPane" ? ("textureRole" in part && part.textureRole === "none" ? undefined : "textureRole" in part && part.textureRole === "roof" ? d.textures?.roof : "textureRole" in part && part.textureRole === "wall" ? d.textures?.wall : "textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
           if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
+            detail: center ? representation : undefined,
             key: `${p.id}:${index}`,
             property: p,
             x: plotAxis(p.x) + (x * c + z * s) * scale,
             y: y * scale,
             z: plotAxis(p.z) + (z * c - x * s) * scale,
             scale: part.size.map((v) => v * scale) as [number, number, number],
-            rotation: angle,
+            rotation: angle + (part.rotation || 0),
             color: texture && texture!=="none" ? (dim ? "#8c8c8c" : "#ffffff") : dim
               ? `#${new Color(part.color).multiplyScalar(.55).getHexString()}`
               : part.color,
@@ -188,6 +188,7 @@ export function CityDesignBuildings(
             if(texture && texture!=="none") key+="|"+texture;
             const tint = d.palette[a.role === "paving" ? "trim" : role];
           (out[key] ||= []).push({
+            detail: center ? representation : undefined,
               key: `${p.id}:asset:${index}`,
               property: p,
               x: plotAxis(p.x) + (x * c + z * s) * scale,
@@ -202,6 +203,7 @@ export function CityDesignBuildings(
           });
         }
       }
+     }
     }
     return out;
   }, [
@@ -210,11 +212,13 @@ export function CityDesignBuildings(
     plotSize,
     matchIds,
     selectedId,
-    detail,
     pack,
-    center?.x,
-    center?.z,
+    !!center,
   ]);
+  useEffect(()=>{
+    const used=new Set(Object.keys(batches).map(k=>k.split("|")[0]));
+    resources.custom.forEach((geometry,key)=>{if(!used.has(key)){geometry.dispose();resources.custom.delete(key);}});
+  },[batches,resources]);
   const textureMaterial=(id:string)=>{
     if(!resources.textured.has(id))resources.textured.set(id,citySurfaceMaterial(false,id as CityTextureId,invalidate));
     return resources.textured.get(id)!;
@@ -229,8 +233,8 @@ export function CityDesignBuildings(
           pieces={kind.startsWith("asset|")
             ? [{...pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])], ...(kind.split("|")[3] ? {material:textureMaterial(kind.split("|")[3])} : {})}]
             : [{
-              geometry: (kind === "glassBox" || kind.split("|")[0] === "joinedBox") ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed"],
-              material: kind === "glassBox" ? resources.glass : kind.includes("|") ? textureMaterial(kind.split("|")[1]) : resources.material,
+              geometry: kind.startsWith("mesh:") ? resources.custom.get(kind.split("|")[0])! : (kind === "glassBox" || kind.split("|")[0] === "joinedBox") ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed" | "mansard" | "stairTread" | "stairRail" | "archedPane" | "archInfill"],
+              material: kind === "glassBox" || kind === "archedPane" ? resources.glass : kind.includes("|") ? textureMaterial(kind.split("|")[1]) : resources.material,
             }]}
           instances={items}
           onSelect={onSelect}
@@ -240,6 +244,7 @@ export function CityDesignBuildings(
       ))}
       {properties.some((p) =>
         p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
+    !(p.profile.buildingDesign.version === 3 && p.profile.buildingDesign.generatorRevision === "city-office-4") &&
         !p.profile.buildingArt
       ) && (
         <CityDesignSigns
@@ -252,4 +257,9 @@ export function CityDesignBuildings(
       )}
     </>
   );
+}
+
+export function CityDesignBuildings(props: Parameters<typeof BuildingBatches>[0]) {
+ const prepared=usePreparedCity(props.properties,!!props.center);
+ return <CityVisibility properties={prepared} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props} properties={prepared}/></CityVisibility>;
 }

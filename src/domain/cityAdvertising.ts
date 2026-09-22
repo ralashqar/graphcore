@@ -1,3 +1,4 @@
+import {spiralStair,straightStair} from "./citySpiralStair.ts";
 import { fireEscape } from "./cityFireEscape.ts";
 import { frontStructure } from "./cityBuildingEntrances.ts";
 import type { BuildingMass } from "./cityBuildingDesign.ts";
@@ -18,7 +19,7 @@ export function advertisingLayout(d:CityBuildingDesignV3,masses:BuildingMass[],s
  const c=Math.round(Math.cos(angle)),s=Math.round(Math.sin(angle));
  const walls=exposedWalls(masses);
  const entranceEnvelope=frontStructure(d.entranceStyle,d.blueprint,masses[0].z+masses[0].depth/2,masses[0].width,d.groundHeight,d.palette.wall,d.palette.trim).envelope;
- const escapeClearance=d.stairExtension==="fire-escape"?fireEscape(walls,masses,[]).bounds:null;
+ const escapeClearance=d.stairExtension==="fire-escape"?fireEscape(walls,masses,[]).bounds:(d.stairExtension==="spiral" || d.stairExtension==="straight")?(d.stairExtension==="straight"?straightStair:spiralStair)(masses,d.palette.trim).bounds:null;
  const obstacles=[...(escapeClearance?[escapeClearance]:[]),...slots.filter(slot=>slot.active),...(entranceEnvelope?[entranceEnvelope]:[])];
  const parts:DesignPart[]=[], signs:DesignSign[]=[], fits:AdFit[]=[];
  const local=(x:number,z:number):[number,number]=>[x*c-z*s,x*s+z*c];

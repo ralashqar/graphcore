@@ -2,6 +2,34 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## Connected office envelopes (September 2026)
+
+Opt-in v3 revision `city-office-4` adds six procedural office compositions, shared-floor skybridges, arc-length spaced faceted curved facades, setback towers and glazed atrium campuses. Curated `officeArchitecture` choices are strict shared-profile data; legacy recipes retain their resolver. Editor controls, thumbnails, demo fixtures and shared instancing use the same envelope geometry. No migration or provider changes. Matching City endpoints and profile-consuming world worker `2026-09-22-city-design-3.18` require designated staging rollout, which remains unspecified; no production activation. Native replacements and non-integrated attachments remain unavailable on these new envelopes. Details and verification: docs/city-office-architecture.md.
+
+## Connected residential architecture (September 2026)
+
+Opt-in v3 generator revision `city-connected-3` adds eight residential compositions, fitted residential openings, connected planar roof envelopes, roof-hosted dormers, porch/support assemblies and bounded exterior details. Optional `connectedArchitecture` stores authored choices, not generated mesh data; strict shared validation rejects new choices on old revisions. Legacy revisions retain their paths. Editor and city share the resolver and background preparation; generated roof meshes are cached and instanced by geometry identity, with small details removed at city distance. Light-mode editor previews retain nearby procedural details. No database migration or provider changes. Matching City profile endpoints and world worker revision `2026-09-22-city-design-3.17` require designated-staging rollout; staging identifiers and physical-mobile acceptance remain outstanding, with no production activation. See docs/city-connected-residential.md.
+
+## Window-fitted kiosk accents (September 2026)
+
+Removed fixed kiosk ledges and floating accent strips. Procedural serving counters now derive their span and elevation from eligible front ground-floor window openings; missing openings produce no counter. Native facade presets retain their native window details. No stored recipe or API change. Local geometry, browser and build verification applies; no hosted rollout.
+
+## Closed exterior stairs (September 2026)
+
+Spiral treads now have closed radial walls. Optional v3 `stairExtension: straight` supplies procedural apartment flights and landings in light mode, reserving a flattened side and flat roof. Shared profile validation and world worker revision `2026-09-22-city-design-3.16` need the existing paired designated-staging rollout. No migration, production deployment or provider spending.
+
+## City procedural entrance families (September 2026)
+
+Optional v3 `doorFamily`, `doorSurround` and `doorTransom` configure one bounded procedural entrance assembly. Glazed/sidelight, double glass, French, panelled, sliding and arched designs reuse the existing wall aperture; native Quaternius entrances remain sole owners in native finishes. The Entrances tab exposes these options and existing canopy/portico/pediment structures with undo. New details are instanced, static exterior geometry, not operable interior doors. The strict shared profile validator accepts only curated choices; no migration or provider changes. City profile consumers and world worker revision `2026-09-22-city-design-3.15` require matching designated-staging rollout. No production deployment. See docs/city-procedural-entrances.md.
+
+## City window families, spiral access and worker preparation (September 2026)
+
+Optional v3 `windowFamily` adds bounded procedural storefront/warehouse/sash/picture treatments. `stairExtension: spiral` generates closed tread and rail assemblies to a flat roof, using a reserved, aligned side strip and actual floor elevations. The demo walks all preset indices and includes spiral examples. Browser workers pre-resolve city recipes and warm the shared cache; customiser edits remain synchronous, with a paced cancellation-safe fallback for worker failure. Shared strict validation preserves old recipes and accepts the curated new values. No provider, database, auth or credit changes. The same City profile-consuming endpoints and world worker require matching designated-staging deployment; worker revision `2026-09-22-city-design-3.14`. Production remains excluded. See docs/city-architectural-details.md.
+
+## City connected procedural shell (September 2026)
+
+New designs use `city-shell-2` within the existing v3 recipe. Legacy `city-grammar-1` remains accepted and has an explicit editor upgrade. Procedural walls share convex-corner ownership and reserve main entrance openings at every detail level. Closed mansard roofs and four compositions extend the shared editor/city renderer. The strict profile validator accepts both revisions and the mansard enum; no migration, provider or ownership change is introduced. The actual world-worker import path is `city-campus-worker` → `city.ts` → `city-building-design-schema`; worker revision is `2026-09-22-city-design-3.13`. Deploy City API, command, reconcile, building-art and Stripe webhook plus world worker to designated staging together. Staging remains undesignated; no production activation. See docs/city-connected-shell.md.
+
 ## City native architectural assemblies (September 2026)
 
 Optional v3 `architecturalKit` settings add matched storey columns, three connected cornice styles, measured frame/leaf entrances with optional native steps, three unbranded storefronts, rectangular slate roofs/dormers, connected planters, matching stair rails and bounded ornaments/AC units. Existing recipes retain their renderer behavior. Native assets remain offline prepared CC0 modules, lazy loaded and instanced; no generation provider is called. Strict shared profile validation accepts only curated settings. The City endpoints and world worker `2026-09-22-city-design-3.10` consume this boundary and require paired designated-staging rollout with the frontend. No migration, production activation or spending is included; staging remains undesignated. See [docs/city-architectural-assemblies.md](docs/city-architectural-assemblies.md) for fitting rules, verification and limitations.

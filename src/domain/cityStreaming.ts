@@ -22,3 +22,11 @@ export function residentDetails(previous: ReadonlyMap<string, CityDetail>, candi
   }
   return result;
 }
+
+export type CityRepresentation = "full" | "simple" | "hidden";
+/** Pixel-space hysteresis applies to a complete building, never its individual parts. */
+export function cityRepresentation(previous: CityRepresentation | undefined, pixels: number, visible: boolean, moving = false): CityRepresentation {
+  if(moving)return previous === "full" ? "full" : "simple";
+  if(!visible)return "hidden";
+  return pixels > (previous === "full" ? 210 : 290) ? "full" : "simple";
+}

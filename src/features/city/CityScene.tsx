@@ -1,3 +1,4 @@
+import { CityAdaptiveResolution } from "./CityAdaptiveResolution";
 import { CityDriving } from "./CityDriving";
 import { streamRadius } from "../../domain/cityStreaming";
 import { CityArrivalContext } from "./CityInstances";
@@ -458,11 +459,12 @@ function CitySceneContent({
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [zoom, setZoom] = useState(3.8);
   const [center, setCenter] = useState({ x: 0, z: 0 });
+  const [pixelBudget, setPixelBudget] = useState(1.5);
   const [softwareRenderer, setSoftwareRenderer] = useState(false);
   const residentDrive = driving && properties.length <= 100;
   const residents = useRef(new Map<string, number>());
   const visible = useMemo(() => {
-    if (residentDrive) return properties;
+    if (properties.length <= 100) return properties;
     const radius = driving ? 520 : streamRadius(window.innerWidth, window.innerHeight, zoom);
     return properties.filter(p => {
       const distance = Math.hypot(position(p.x) - position(center.x), position(p.z) - position(center.z));
@@ -476,7 +478,7 @@ function CitySceneContent({
     <SceneBoundary onFailure={onFailure}>
       <Canvas
         data-city-resident-count={visible.length}
-        dpr={softwareRenderer ? 0.75 : driving ? 1 : [1, 1.5]}
+        dpr={softwareRenderer ? 0.75 : Math.min(pixelBudget, driving ? 1 : Math.max(1, window.devicePixelRatio || 1))}
         shadows={false}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
@@ -494,6 +496,7 @@ function CitySceneContent({
         }}
       >
         <ContextGuard onFailure={onFailure} />
+        <CityAdaptiveResolution onChange={setPixelBudget} />
         {!driving && <OrthographicCamera
           makeDefault
           position={[420, 380, 420]}

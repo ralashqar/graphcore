@@ -1,3 +1,4 @@
+import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { BusinessLaunchHistory, LaunchBrowser, useLaunchPlaza } from "./CityLaunches";
 import {
   LaunchReminder,
@@ -713,6 +714,7 @@ export function CityApp() {
                 <option value="empty">Roads &amp; plots</option>
                 <option value="offices">3D offices</option>
               </select></label>
+              <label><input type="checkbox" aria-label="Light mode" checked={CITY_LIGHT_MODE} onChange={e=>{const url=new URL(window.location.href);url.searchParams.set("cityLight",e.target.checked?"1":"0");window.location.assign(url.toString());}} /> Light mode</label>
               <a href="/city">
                 View live city <ArrowUpRight size={14} />
               </a>

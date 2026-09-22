@@ -1542,3 +1542,7 @@ body:has(.city-app) {
 .city-is-driving > :not(.city-map-shell) { display:none !important; }
 .city-is-driving .city-map-shell { position:absolute; inset:0; width:100%; height:100dvh; min-height:0; margin:0; border-radius:0; }
 .city-is-driving .city-canvas { position:absolute; inset:0; height:100%; }
+
+/* Nested architectural groups must shrink with the mobile editor. */
+.city-design-fields fieldset { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.city-design-fields fieldset select { max-width: 100%; }

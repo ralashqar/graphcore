@@ -4,7 +4,7 @@ import { pitchedRoofPositions } from "./cityBuildingSurfaces.ts";
 import { DEFAULT_DESIGN_V2, resolveDesign } from "./cityBuildingV2.ts";
 import { newDesign, resolveV3 } from "./cityBuildingV3.ts";
 
-for (const profile of ["gable", "hip", "shed"] as const) test(`${profile} roof is watertight with every triangle facing outward`, () => {
+for (const profile of ["gable", "hip", "shed", "mansard"] as const) test(`${profile} roof is watertight with every triangle facing outward`, () => {
   const positions = pitchedRoofPositions(profile);
   const edges = new Map<string, number>();
   for (let i = 0; i < positions.length; i += 9) {
@@ -26,7 +26,7 @@ for (const profile of ["gable", "hip", "shed"] as const) test(`${profile} roof i
 });
 
 test("wall shells meet floor slabs without overlapping their visible side faces", () => {
-  for (const result of [resolveDesign(DEFAULT_DESIGN_V2, "#8866aa", "near"), resolveV3(newDesign("surface-test"), "#8866aa", "near")]) {
+  for (const result of [resolveDesign(DEFAULT_DESIGN_V2, "#8866aa", "far"), resolveV3({...newDesign("surface-test"), generatorRevision:"city-grammar-1"}, "#8866aa", "far")]) {
     for (const wall of result.walls) {
       const shell = result.parts.find((part) => part.kind === "box" &&
         Math.abs(part.position[0] - (wall.x - wall.nx*.075)) < 1e-6 &&

@@ -22,6 +22,8 @@ const design = process.env.CITY_DESIGN_VERSION === "3"
     landscaping: true,
     rotation: 0,
   };
+const officeModule=process.env.CITY_OFFICE_BENCHMARK==="1"?await import("../src/domain/cityBuildingV3.ts"):null;
+const residentialModule=process.env.CITY_RESIDENTIAL_BENCHMARK==="1"?await import("../src/domain/cityBuildingV3.ts"):null;
 const origin = process.env.CITY_TEST_ORIGIN || "http://127.0.0.1:5184";
 const browser = await chromium.launch({
   headless: true,
@@ -61,6 +63,9 @@ try {
           name: `Fixture ${i + 1}`,
           buildingDesign: {
             ...design,
+            ...(officeModule && i%2===0 ? officeModule.applyComposition(officeModule.newDesign("benchmark"),26+(i/2)%6) : {}),
+            ...(residentialModule && i%2===0 ? residentialModule.applyComposition(residentialModule.newDesign("benchmark"),18+(i/2)%8) : {}),
+            ...(process.env.CITY_DETAIL_BENCHMARK==="1" && design.version===3 ? {windowFamily:["storefront","warehouse","sash","picture","arched"][i%5],stairExtension:i%40===5?"spiral":"none",roof:"flat",roofVariant:"standard"}:{}),
             ...(design.version !== 1
               ? {
                 architecture: ["glass", "brick", "boutique", "creative"][i % 4],
@@ -97,6 +102,7 @@ try {
     await page
       .getByRole("button", { name: "01 Fixture 1", exact: true })
       .waitFor();
+    await page.waitForFunction(min=>Number(document.querySelector("[data-city-resident-count]")?.getAttribute("data-city-resident-count"))>=min,mobile?200:280,{timeout:60000});
     await page.waitForTimeout(2000);
     const performance = await page.evaluate(
       () =>
@@ -151,7 +157,9 @@ try {
       "zooming in releases distant property instances",
     );
     assert.deepEqual(errors, []);
+    const gpu=await page.evaluate(()=>{const gl=document.querySelector("canvas")?.getContext("webgl2");const ext=gl?.getExtension("WEBGL_debug_renderer_info");return ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):"unavailable";});
     results.push({
+      gpu,
       viewport: mobile ? "mobile-viewport-on-desktop-GPU" : "desktop",
       properties: 400,
       initialResidents,

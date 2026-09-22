@@ -1,3 +1,9 @@
+import {officeMasses,officeSlots,resolveOffice,type OfficeArchitecture} from "./cityOfficeArchitecture.ts";
+import {connectedRoof,connectedPorch,type ConnectedArchitecture,type AssemblyEnvelope} from "./cityConnectedArchitecture.ts";
+import {proceduralEntrance,type DoorFamily,type DoorSurround} from "./cityProceduralEntrances.ts";
+import { spiralStair, straightStair } from "./citySpiralStair.ts";
+import { windowDetails, type WindowFamily } from "./cityWindowFamilies.ts";
+import { joinedWallRange } from "./cityConnectedShell.ts";
 import { fireEscape, flattenEscapeSide, type EscapeBounds } from "./cityFireEscape.ts";
 import { attachmentBounds, architecturalDetails, kitEntrance, kitRoofReason, type ArchitecturalKit } from "./cityArchitecturalKit.ts";
 import { KIT_DIMENSIONS } from "./cityKitDimensions.ts";
@@ -47,16 +53,22 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  officeArchitecture?: OfficeArchitecture;
+  connectedArchitecture?: ConnectedArchitecture;
   architecturalKit?: ArchitecturalKit;
+  doorFamily?: DoorFamily;
+  doorSurround?: DoorSurround;
+  doorTransom?: boolean;
+  windowFamily?: WindowFamily;
   nativeFacade?: NativeFacadeId;
   textures?: CityTextureChoices;
   solidSideWalls?: boolean;
-  stairExtension?: "none" | "concrete" | "marble" | "fire-escape";
+  stairExtension?: "none" | "concrete" | "marble" | "fire-escape" | "spiral" | "straight";
   advertising?: Advertising;
   version: 3;
-  generatorRevision: "city-grammar-1";
+  generatorRevision: "city-grammar-1" | "city-shell-2" | "city-connected-3" | "city-office-4";
   entranceStyle?: typeof ENTRANCE_STYLES[number];
-  base: "storefront" | "lobby" | "plinth";
+  base: "storefront" | "lobby" | "plinth" | "residential";
   middleFloors: number;
   rhythm: "vertical" | "ribbon" | "alternating";
   crown: "none" | "recessed" | "penthouse" | "terrace";
@@ -91,6 +103,8 @@ export type Corner = {
   kind: "convex" | "concave" | "end";
 };
 export type ResolvedV3 = ResolvedDesign & {
+  roofContours?:[number,number][][];
+  assemblyEnvelopes?:AssemblyEnvelope[];
   kitNotes: string[];
   extensionReason: string | null;
   slots: Slot[];
@@ -107,7 +121,7 @@ export function newDesign(id: string): CityBuildingDesignV3 {
   return {
     ...DEFAULT_DESIGN_V2,
     version: 3,
-    generatorRevision: "city-grammar-1",
+    generatorRevision: "city-shell-2",
     nativeFacade: "automatic",
     base: "lobby",
     middleFloors: 2,
@@ -162,11 +176,12 @@ export function normalizeV3(d: CityBuildingDesignV3): CityBuildingDesignV3 {
     version: 3,
     width: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 12, d.finish === "procedural" ? d.width : Math.round(d.width / 2) * 2),
     depth: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 10, d.finish === "procedural" ? d.depth : Math.round(d.depth / 2) * 2),
+    ...(d.generatorRevision === "city-connected-3" ? {roof:d.roof}:{}),
     middleFloors,
     floors: 1 + middleFloors + (d.crown === "none" ? 0 : 1),
     canopy: d.slots["canopy.entrance"] === "canopy",
     ...(d.roofVariant && !roofVariants(d).includes(d.roofVariant) ? {roofVariant:"standard" as const} : {}),
-    ...(d.massing === "hall-wings" && d.roof === "pitched" ? {roof:"parapet" as const} : {}),
+    ...(d.generatorRevision !== "city-connected-3" && d.massing === "hall-wings" && d.roof === "pitched" ? {roof:"parapet" as const} : {}),
   };
 }
 export const COMPOSITIONS: {
@@ -189,7 +204,7 @@ export const COMPOSITIONS: {
   },
   {
     name: "Glass headquarters",
-    patch: {
+    patch: { windowFamily: "picture",
       blueprint: "office",
       base: "lobby",
       middleFloors: 4,
@@ -201,7 +216,7 @@ export const COMPOSITIONS: {
   },
   {
     name: "Brick creative studio",
-    patch: {
+    patch: { windowFamily: "arched",
       blueprint: "office",
       base: "storefront",
       middleFloors: 2,
@@ -225,7 +240,7 @@ export const COMPOSITIONS: {
   },
   {
     name: "Courtyard workspace",
-    patch: {
+    patch: { windowFamily: "sash",
       blueprint: "courtyard",
       base: "lobby",
       middleFloors: 2,
@@ -253,9 +268,28 @@ export const COMPOSITIONS: {
   { name: "Village shop", patch: { archetype: "shop", blueprint: "office", width: 12, depth: 10, middleFloors: 1, crown: "none", podium: false, base: "storefront", architecture: "boutique", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "checker" } },
   { name: "Canopy kiosk", patch: { archetype: "kiosk", blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "creative", roof: "flat", entranceStyle: "wide-canopy", grounds: "urban" } },
   { name: "Gabled kiosk", patch: { archetype: "kiosk", blueprint: "office", width: 8, depth: 8, middleFloors: 0, crown: "none", podium: false, groundHeight: 3, base: "storefront", architecture: "brick", roof: "pitched", slots: { "canopy.entrance": null }, pavingPattern: "terracotta" } },
-  { name: "City museum", patch: { archetype: "museum", massing: "hall-wings", blueprint: "office", width: 16, depth: 12, middleFloors: 1, crown: "recessed", podium: true, base: "lobby", architecture: "creative", roof: "flat", entranceStyle: "portico", slots: { "canopy.entrance": null }, pavingPattern: "ribbon", grounds: "minimal" } },
-  { name: "Civic bank", patch: { archetype: "bank", blueprint: "office", width: 18, depth: 12, middleFloors: 1, crown: "none", podium: false, base: "plinth", architecture: "boutique", roof: "parapet", entranceStyle: "pediment", slots: { "canopy.entrance": null }, pavingPattern: "checker", grounds: "urban" } },
+  { name: "City museum", patch: { windowFamily: "arched", archetype: "museum", massing: "hall-wings", blueprint: "office", width: 16, depth: 12, middleFloors: 1, crown: "recessed", podium: true, base: "lobby", architecture: "creative", roof: "flat", entranceStyle: "portico", slots: { "canopy.entrance": null }, pavingPattern: "ribbon", grounds: "minimal" } },
+  { name: "Civic bank", patch: { windowFamily: "arched", archetype: "bank", blueprint: "office", width: 18, depth: 12, middleFloors: 1, crown: "none", podium: false, base: "plinth", architecture: "boutique", roof: "parapet", entranceStyle: "pediment", slots: { "canopy.entrance": null }, pavingPattern: "checker", grounds: "urban" } },
   { name: "Boutique hotel", patch: { archetype: "hotel", slots: { "canopy.entrance": null }, blueprint: "terraces", width: 14, depth: 12, middleFloors: 3, crown: "penthouse", podium: true, base: "lobby", architecture: "boutique", roof: "planted", grounds: "planted", pavingPattern: "basalt" } },
+  { name: "Mansard townhouse", patch: { windowFamily: "sash", archetype:"shop", blueprint:"office", width:10, depth:12, middleFloors:2, crown:"none", podium:false, architecture:"brick", base:"storefront", rhythm:"vertical", roof:"flat", roofVariant:"mansard", grounds:"minimal" } },
+  { name: "Industrial workshop", patch: { windowFamily: "warehouse", blueprint:"office", width:18, depth:14, middleFloors:0, crown:"none", podium:false, groundHeight:4.5, architecture:"creative", base:"storefront", rhythm:"vertical", roof:"flat", roofVariant:"sawtooth", grounds:"urban" } },
+  { name: "Garden courtyard cafe", patch: { archetype:"cafe", blueprint:"courtyard", width:18, depth:16, middleFloors:1, crown:"terrace", podium:false, architecture:"boutique", base:"storefront", roof:"planted", grounds:"planted" } },
+  { name: "Stepped theatre", patch: { blueprint:"terraces", width:18, depth:14, middleFloors:2, crown:"penthouse", podium:false, architecture:"boutique", rhythm:"vertical", base:"lobby", roof:"parapet", entranceStyle:"wide-canopy", grounds:"urban" } },
+
+  {name:"Garden bungalow",patch:{generatorRevision:"city-connected-3",archetype:"bungalow",blueprint:"office",width:12,depth:10,middleFloors:0,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"flat",roofVariant:"hip",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"balanced",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"entrance",supportStyle:"timber",gutters:true,chimney:false,balconies:false}}},
+  {name:"Gabled cottage",patch:{generatorRevision:"city-connected-3",archetype:"cottage",blueprint:"office",width:10,depth:10,middleFloors:0,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"pitched",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"compact",roofPitch:45,roofOverhang:.3,ridgeDirection:"x",porch:"entrance",supportStyle:"timber",gutters:true,chimney:true,balconies:false}}},
+  {name:"Detached family house",patch:{generatorRevision:"city-connected-3",archetype:"detached",blueprint:"office",width:12,depth:12,middleFloors:1,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"pitched",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"balanced",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"entrance",supportStyle:"timber",gutters:true,chimney:false,balconies:false}}},
+  {name:"Terraced townhouse",patch:{generatorRevision:"city-connected-3",archetype:"townhouse",blueprint:"office",width:8,depth:12,middleFloors:2,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"pitched",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"paired",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"none",supportStyle:"timber",gutters:true,chimney:false,balconies:false}}},
+  {name:"Modern suburban house",patch:{generatorRevision:"city-connected-3",archetype:"modern-house",blueprint:"terraces",width:14,depth:12,middleFloors:1,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"flat",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"balanced",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"entrance",supportStyle:"timber",gutters:true,chimney:false,balconies:false}}},
+  {name:"Courtyard villa",patch:{generatorRevision:"city-connected-3",archetype:"villa",blueprint:"l-shape",width:16,depth:14,middleFloors:0,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"flat",roofVariant:"hip",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"paired",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"courtyard",supportStyle:"timber",gutters:true,chimney:false,balconies:false}}},
+  {name:"Farmhouse",patch:{generatorRevision:"city-connected-3",archetype:"farmhouse",blueprint:"office",width:16,depth:12,middleFloors:1,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"pitched",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"balanced",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"veranda",supportStyle:"timber",gutters:true,chimney:true,balconies:false}}},
+  {name:"Small apartment house",patch:{generatorRevision:"city-connected-3",archetype:"apartment",blueprint:"office",width:14,depth:12,middleFloors:2,crown:"none",podium:false,groundHeight:3,base:"residential",architecture:"brick",finish:"procedural",windowFamily:"sash",doorFamily:"panelled",doorSurround:"framed",roof:"flat",roofVariant:"standard",entranceStyle:"standard",grounds:"planted",pavingPattern:"ribbon",slots:{"brand.entrance":"brand","canopy.entrance":null},connectedArchitecture:{openingLayout:"paired",roofPitch:35,roofOverhang:.3,ridgeDirection:"x",porch:"entrance",supportStyle:"timber",gutters:true,chimney:false,balconies:true}}},
+  {name:"Twin-Tower HQ",patch:{generatorRevision:"city-office-4",archetype:"twin-tower",blueprint:"office",width:18,depth:14,middleFloors:5,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"glass",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"international"}}},
+  {name:"Round Tower",patch:{generatorRevision:"city-office-4",archetype:"round-tower",blueprint:"office",width:14,depth:14,middleFloors:5,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"glass",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"international"}}},
+  {name:"Elliptical HQ",patch:{generatorRevision:"city-office-4",archetype:"ellipse-tower",blueprint:"office",width:18,depth:10,middleFloors:4,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"glass",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"international"}}},
+  {name:"Rounded Office",patch:{generatorRevision:"city-office-4",archetype:"rounded-office",blueprint:"office",width:16,depth:12,middleFloors:3,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"glass",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"international"}}},
+  {name:"Art Deco Setback Tower",patch:{generatorRevision:"city-office-4",archetype:"art-deco",blueprint:"office",width:16,depth:14,middleFloors:6,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"boutique",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"deco"}}},
+  {name:"Atrium Campus",patch:{generatorRevision:"city-office-4",archetype:"atrium-campus",blueprint:"office",width:18,depth:14,middleFloors:2,crown:"none",podium:false,groundHeight:3.6,base:"lobby",architecture:"glass",finish:"procedural",roof:"flat",roofVariant:"standard",grounds:"planted",pavingPattern:"classic",rhythm:"vertical",slots:{"brand.entrance":"brand","canopy.entrance":null},officeArchitecture:{bridgeFloor:3,towerGap:4,shorterTower:0,style:"international"}}},
 ];
 export function applyComposition(d: CityBuildingDesignV3, index: number) {
   const p = COMPOSITIONS[index];
@@ -277,6 +311,7 @@ export function applyComposition(d: CityBuildingDesignV3, index: number) {
   });
 }
 export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
+  if(d.generatorRevision==="city-office-4")return officeMasses(normalizeV3(d));
   const n = normalizeV3(d),
     raw = massesV2({ ...n, version: 2 }),
     last = raw.at(-1)!.y,
@@ -288,6 +323,10 @@ export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
       raw.push({...m, width:centerWidth});
       if (m.y === .65 || m.y < last) for (const side of [-1,1]) raw.push({...m, x:side*m.width*3/8, z:-m.depth*.175, width:m.width/4, depth:m.depth*.65});
     }
+  }
+  if(n.generatorRevision==="city-connected-3" && n.archetype==="farmhouse") {
+    const original=[...raw];raw.length=0;
+    for(const m of original){raw.push({...m,x:-m.width*.15,width:m.width*.7});if(m.y===.65)raw.push({...m,x:m.width*.35,width:m.width*.3,height:3});}
   }
   for (const y of [...new Set(raw.map((m) => m.y))]) {
     const previous = result.length
@@ -321,7 +360,7 @@ export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
       }
     }
   }
-  return n.stairExtension === "fire-escape" ? flattenEscapeSide(result) : result;
+  return (n.stairExtension === "fire-escape" || (n.stairExtension === "spiral" || n.stairExtension === "straight")) ? flattenEscapeSide(result,(n.stairExtension === "spiral" || n.stairExtension === "straight")) : result;
 }
 export function classifyCorners(masses: BuildingMass[]): Corner[] {
   const walls = exposedWalls(masses), seen = new Map<string, Corner>();
@@ -368,6 +407,7 @@ export function buildingSlots(
   d: CityBuildingDesignV3,
   masses = massesV3(d),
 ): Slot[] {
+  if(d.generatorRevision==="city-office-4")return officeSlots(d);
   const ground = masses[0],
     top = masses.find((m) => m.y === masses.at(-1)!.y)!,
     front = ground.z + ground.depth / 2,
@@ -400,6 +440,10 @@ export function buildingSlots(
     [3.2, structure.depth ? .45 : .55, .3],
     ["brand"],
   );
+  if(d.generatorRevision==="city-connected-3" && d.connectedArchitecture?.porch && !["none","side"].includes(d.connectedArchitecture.porch)){
+    const porch=connectedPorch(masses,d.connectedArchitecture,d.palette,front);
+    if(porch.envelopes.length){const e=porch.envelopes[0];slots[0].position=[0,ground.y+ground.height-.66,e.position[2]+e.size[2]/2+.07];slots[0].size=[2.4,.24,.12];}
+  }
   put(
     "brand.facade",
     "Façade sign",
@@ -465,7 +509,7 @@ export function buildingSlots(
         : null,
     );
   }
-  const escapeClearance=d.stairExtension==="fire-escape"?fireEscape(exposedWalls(masses),masses,[]).bounds:null;
+  const escapeClearance=d.stairExtension==="fire-escape"?fireEscape(exposedWalls(masses),masses,[]).bounds:(d.stairExtension==="spiral" || d.stairExtension==="straight")?(d.stairExtension==="straight"?straightStair:spiralStair)(masses,d.palette.trim).bounds:null;
   const occupied: Slot[] = [];
   for (const slot of slots) {
     if (
@@ -512,17 +556,22 @@ export function resolveV3(
   brand: string,
   lod: "near" | "medium" | "far" = "near",
 ): ResolvedV3 {
-  const d = normalizeV3(input),
+  const authored = normalizeV3(input);
+  if(authored.generatorRevision==="city-office-4")return resolveOffice(authored,brand,lod);
+  const residential = authored.generatorRevision === "city-connected-3" && authored.base === "residential";
+  const d = residential ? {...authored,finish:"procedural" as const} : authored,
     p = d.palette,
     masses = massesV3(d),
     walls = exposedWalls(masses),
     parts: DesignPart[] = [],
     attachments: Attachment[] = [];
+  const openingEnvelopes:AssemblyEnvelope[]=[];
+  let balconyCount=0;
   const requestedArchitecture = ({ brick: "brick", "white-brick": "creative", marble: "boutique", metal: "glass" } as const)[d.detailSet as "brick" | "white-brick" | "marble" | "metal"] ?? d.architecture;
   const nativeChoice=nativeFacadeChoice(d.nativeFacade,requestedArchitecture);
   const detailArchitecture=nativeChoice?.family ?? requestedArchitecture;
   const facadeEnabled = d.finish === "facade";
-  const kit=d.finish!=="procedural"?d.architecturalKit:undefined;
+  const kit=d.finish!=="procedural" && d.base!=="residential"?d.architecturalKit:undefined;
   const roofReason=kitRoofReason(kit,d.blueprint,d.massing);
   const roofActive=!!kit?.roof && kit.roof!=="existing" && !roofReason;
   const chosenEntry=kitEntrance(kit?.entrance);
@@ -591,7 +640,7 @@ export function resolveV3(
   let stairLanding=1.26;
   let extensionWall: typeof walls[number] | undefined;
   let extensionReason: string | null = null;
-  if (d.stairExtension && d.stairExtension !== "none" && d.stairExtension !== "fire-escape") {
+  if (d.stairExtension && d.stairExtension !== "none" && d.stairExtension !== "fire-escape" && d.stairExtension !== "spiral" && d.stairExtension !== "straight") {
     extensionReason = d.finish === "procedural" ? "Choose Quaternius accents or facade for native stairs." : "No clear side wall has room for stairs inside this plot.";
     if (d.finish !== "procedural") {
       for (const wall of walls.filter(w=>w.y===.65 && w.nx!==0 && w.length>=4).sort((a,b)=>b.nx-a.nx || a.z-b.z)) {
@@ -704,7 +753,7 @@ export function resolveV3(
     attach(cornerAsset,c.x-(cx*Math.cos(angle)+cz*Math.sin(angle)),c.y,c.z-(cz*Math.cos(angle)-cx*Math.sin(angle)),angle,scale,"facade");
     attachments.at(-1)!.axisScale=[scale,c.height/3,scale];
   }
-  const bayWidth = facadeEnabled
+  const bayWidth = residential ? (d.connectedArchitecture?.openingLayout==="compact"?.8:1.2) : facadeEnabled
     ? (detailArchitecture === "boutique" || detailArchitecture === "creative" ? 4 : 2)
     : d.architecture === "glass"
     ? 2.8
@@ -713,8 +762,10 @@ export function resolveV3(
     const { x, z, nx, nz, y, height, length } = wall,
       angle = Math.atan2(nx, nz),
       horizontal = nz !== 0;
+    const connected = d.generatorRevision !== "city-grammar-1" && d.finish === "procedural";
+    const range = connected ? joinedWallRange(wall, walls, .3,d.generatorRevision==="city-connected-3") : {left:-length/2,right:length/2};
     const wallIndex = parts.length;
-    const openings: {offset:number;height:number}[] = [];
+    const openings: {offset:number;height:number;centerY:number}[] = [];
     box(
       x - nx * .075,
       y + height / 2,
@@ -750,7 +801,7 @@ export function resolveV3(
         p.trim,
       );
     }
-    if (lod === "far") continue;
+    if (lod === "far" && !connected) continue;
     const detailAllowed = d.finish !== "procedural" && (d.detailScope === "entrance" ? y === .65 : d.detailScope === "crown" ? top : true);
     const column = ({brick:["Brick_Column_Small",.25,3,.35],creative:["WhiteBrick_Column_Half",.72,4,.25],boutique:["Marble_BevelColumn_Center",.57489,4,.20441],glass:["Metal_Column_Small_Center",.24888,3,.24911]} as const)[detailArchitecture];
     // Wall panels stop at slabs, but corner framing must bridge those slab margins.
@@ -808,6 +859,7 @@ export function resolveV3(
         ? [-x-frontageClearWidth/2-.15-width/2,-x+frontageClearWidth/2+.15+width/2]
         : fitBays(usable,width,gap,.1).map(offset=>offset+shift);
       const bays=offsets.filter((offset,index)=>{
+        if((d.stairExtension==="spiral" || d.stairExtension==="straight") && nx===1 && Math.abs(z+offset)<width/2+(d.stairExtension==="straight"?3.7:1.3))return false;
         if(extensionWall===wall && Math.abs(offset)<width/2+1.1)return false;
         if((d.solidSideWalls && nx!==0)||(y===.65 && d.base==="plinth")||(y>.65 && d.rhythm==="alternating" && (index+d.facadeSeed)%2===0))return false;
         const bounds={position:[x+(horizontal?offset:0),y+height/2,z+(horizontal?0:offset)],size:[horizontal?width:.6,height,horizontal?.6:width]};
@@ -848,7 +900,7 @@ export function resolveV3(
       continue;
     }
     for (
-      const offset of fitBays(length, bayWidth, facadeEnabled ? 0 : .35)
+      const offset of fitBays(length, bayWidth, residential ? .65 : facadeEnabled ? 0 : .35, residential ? (d.connectedArchitecture?.openingLayout==="paired"?.55:1.2) : undefined)
     ) {
       const wx = x + (horizontal ? offset : 0),
         wz = z + (horizontal ? 0 : offset);
@@ -866,7 +918,7 @@ export function resolveV3(
         }, s)
       );
       const serviceDoor=extensionWall===wall && Math.abs(offset)<bayWidth/2+NATIVE_MODULES.Door_1.width/2+.12;
-      if (door || reserved || serviceDoor) continue;
+      if (door || reserved || serviceDoor || ((d.stairExtension==="spiral" || d.stairExtension==="straight") && nx===1 && Math.abs(wz)<bayWidth/2+(d.stairExtension==="straight"?3.7:1.3))) continue;
       if (y === .65 && d.base === "plinth") continue;
       const panel = y > .65 && d.rhythm === "alternating" &&
         (Math.round(offset / bayWidth) + d.facadeSeed) % 2 === 0;
@@ -882,7 +934,8 @@ export function resolveV3(
         );
         continue;
       }
-      const winH = Math.min(
+      const balcony=residential && !!d.connectedArchitecture?.balconies && y>.65 && nz===1 && offset>=0 && offset<1.3 && z+1.3<10.6;
+      const winH = balcony?2.35: residential ? (d.connectedArchitecture?.openingLayout==="compact"?1.2:1.4) : Math.min(
         height - .65,
         y === .65
           ? (d.base === "storefront" ? height - .75 : height - 1.1)
@@ -892,10 +945,18 @@ export function resolveV3(
           ? height - .75
           : 1.7,
       );
-      openings.push({offset,height:winH});
+      const windowCenter=balcony?y+.18+winH/2:residential?y+.9+winH/2:y+height*.5;
+      if(balcony){
+        balconyCount++;
+        box(wx,y+.1,wz+.6,2.2,.16,1.3,p.trim);
+        box(wx,y+.75,wz+1.22,2.2,1.1,.07,p.trim);
+        for(const side of [-1,1])box(wx+side*1.07,y+.75,wz+.6,.06,1.1,1.2,p.trim);
+      }
+      openings.push({offset,height:winH,centerY:windowCenter});
+      if(residential && y===.65)openingEnvelopes.push({label:"Window opening",position:[wx,windowCenter,wz],size:horizontal?[bayWidth,winH,.08]:[.08,winH,bayWidth]});
       box(
         wx - nx * .14,
-        y + height * .5,
+        windowCenter,
         wz - nz * .14,
         horizontal ? bayWidth : .04,
         winH,
@@ -905,25 +966,60 @@ export function resolveV3(
           ? "facade"
           : undefined,
       );
+      if(d.windowFamily==="arched" && d.finish==="procedural") {
+        const pane=parts.at(-1)!;
+        pane.kind="archedPane";
+        pane.size=[bayWidth,winH,.04];pane.rotation=angle;
+        parts.push({kind:"archInfill",position:[wx-nx*.15,windowCenter,wz-nz*.15],size:[bayWidth,winH,.3],rotation:angle,color:p.wall,textureRole:"wall"});
+      }
 
     }
-    if (openings.length || extensionWall===wall) {
+    if(d.windowFamily && d.finish==="procedural" && lod!=="far" && (!residential || lod==="near"))for(const opening of openings){
+      for(const detail of windowDetails(d.windowFamily,bayWidth,opening.height,p.trim)) {
+        const [dx,dy,dz]=detail.position;
+        parts.push({...detail,position:[x+(horizontal?opening.offset+dx:0)+nx*dz,opening.centerY+dy,z+(horizontal?0:opening.offset+dx)+nz*dz],size:horizontal?detail.size:[detail.size[2],detail.size[1],detail.size[0]]});
+      }
+    }
+    // A serving counter belongs to a real front window, never to an arbitrary
+    // preset coordinate. It ends at the jambs and sits below the glass.
+    if(d.archetype==="kiosk" && d.finish==="procedural" && y===.65 && nz===1 && lod!=="far") {
+      for(const opening of openings){
+        const sillY=y+height/2-opening.height/2;
+        box(x+opening.offset,sillY-.07,z+.14,bayWidth,.14,.38,p.trim);
+      }
+    }
+    if(residential && lod==="near")for(const opening of openings){
+      const cx=x+(horizontal?opening.offset:0),cz=z+(horizontal?0:opening.offset),bottom=opening.centerY-opening.height/2;
+      const detail=(offset:number,cy:number,w:number,h:number,depth:number,color:string)=>box(cx+(horizontal?offset:0)+nx*.1,cy,cz+(horizontal?0:offset)+nz*.1,horizontal?w:depth,h,horizontal?depth:w,color);
+      detail(0,bottom-.06,bayWidth+.16,.12,.28,p.trim);
+      detail(0,bottom+opening.height+.06,bayWidth+.16,.12,.2,p.trim);
+      if(d.connectedArchitecture?.shutters && openings.every(o=>o===opening||Math.abs(o.offset-opening.offset)>bayWidth+1) && Math.abs(opening.offset)+bayWidth/2+.55<length/2-.3)for(const side of [-1,1])detail(side*(bayWidth/2+.24),opening.centerY,.4,opening.height,.13,p.roof);
+      if(d.connectedArchitecture?.windowBoxes && y===.65)detail(0,bottom-.23,bayWidth,.25,.42,"#6c8254");
+    }
+    if (connected || openings.length || extensionWall===wall) {
       // Windows and service doors reserve actual holes in the procedural shell.
       // Leaving a default wall pier here previously put it through the door.
       parts.splice(wallIndex,1);
       const innerHeight=height-.36;
-      const bays=openings.map(o=>({center:o.offset,width:bayWidth,bottom:(innerHeight-o.height)/2,top:(innerHeight+o.height)/2}));
+      const bays=openings.map(o=>({center:o.offset,width:bayWidth,bottom:o.centerY-y-.18-o.height/2,top:o.centerY-y-.18+o.height/2}));
       const doorCuts=extensionWall===wall ? [{left:-NATIVE_MODULES.Door_1.width/2-.06,right:NATIVE_MODULES.Door_1.width/2+.06,bottom:stairLanding-y-.18,top:stairLanding-y-.18+NATIVE_MODULES.Door_1.height+.06}] : [];
+      if(connected && y===.65 && nz===1 && Math.abs(z-entrance.z)<.01 && Math.abs(x)<length/2) doorCuts.push({left:-x-1,right:-x+1,bottom:0,top:2.4-.18});
       for(const rect of partitionNativeWall(length,innerHeight,bays,doorCuts)){
         if(rect.kind!=="solid")continue;
-        const along=(rect.left+rect.right)/2,w=rect.right-rect.left,h=rect.top-rect.bottom;
+        const left=connected && d.generatorRevision==="city-connected-3" && Math.abs(rect.left+length/2)<.00001?range.left:Math.max(rect.left,range.left),right=connected && d.generatorRevision==="city-connected-3" && Math.abs(rect.right-length/2)<.00001?range.right:Math.min(rect.right,range.right);
+        if(right-left<.00001)continue;
+        const along=(left+right)/2,w=right-left,h=rect.top-rect.bottom;
         box(x+(horizontal?along:0)-nx*.15,y+.18+rect.bottom+h/2,z+(horizontal?0:along)-nz*.15,
           horizontal?w:.3,h,horizontal?.3:w,p.wall);
+        if(connected)parts.at(-1)!.squareEdges=true;
       }
     }
   }
-  box(0, 1.85, entrance.z + .12, 2, 2.4, .2, p.glass);
+  if(d.finish==="procedural" && d.doorFamily && d.doorFamily!=="automatic")parts.push(...proceduralEntrance(d.doorFamily,d.doorSurround||"framed",!!d.doorTransom,entrance.z,p,lod));
+  else {
+  box(0, 1.85, entrance.z + (d.generatorRevision !== "city-grammar-1" && d.finish === "procedural" ? -.16 : .12), 2, 2.4, d.generatorRevision !== "city-grammar-1" && d.finish === "procedural" ? .04 : .2, p.glass);
   if(d.finish!=="procedural"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=[entryAsset,entryLeaf];}
+  }
   const frontAssembly=frontStructure(chosenEntry?"standard":d.entranceStyle, d.blueprint, entrance.z, masses[0].width, d.groundHeight, p.wall, p.trim);
   if(facadeEnabled && lod!=="far" && d.entranceStyle==="portico" && !frontAssembly.reason && frontAssembly.envelope){
     const archScale=Math.min(d.groundHeight/4.44324,frontAssembly.envelope.size[0]/4.04074,frontAssembly.envelope.size[2]/1.22758);
@@ -932,7 +1028,7 @@ export function resolveV3(
   }
   parts.push(...frontAssembly.parts);
   const canopy = slots.find((s) => s.id === "canopy.entrance")!;
-  if (canopy.active) {
+  if (canopy.active && !(d.generatorRevision==="city-connected-3" && d.connectedArchitecture?.porch && d.connectedArchitecture.porch!=="none")) {
     box(...canopy.position, ...canopy.size, brand);
     if(kit?.frontage && kit.frontage!=="existing"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAsset="Prop_Awning_Long";}
   }
@@ -961,15 +1057,15 @@ export function resolveV3(
   const entranceWall = walls.find(w => w.y === .65 && w.nz === 1 && Math.abs(w.z - entrance.z) < .001 && Math.abs(w.x) < w.length / 2);
   const frontage = entranceWall ? 2 * Math.min(entranceWall.length / 2 - entranceWall.x, entranceWall.length / 2 + entranceWall.x) : masses[0].width;
   parts.push(...archetypeParts(d.archetype, frontage, masses[0].depth, entrance.z, d.groundHeight, p.trim, brand, lod, d.finish!=="procedural" ? [entryAsset,entryLeaf] : undefined));
-  if (!roofActive && d.roofVariant && d.roofVariant !== "standard") {
+  if (d.generatorRevision!=="city-connected-3" && !roofActive && d.roofVariant && d.roofVariant !== "standard") {
     const tops = masses.filter(m => !masses.some(upper => Math.abs(upper.y-m.y-m.height)<.001 && Math.abs(upper.x-m.x)<upper.width/2 && Math.abs(upper.z-m.z)<upper.depth/2));
     for (const m of tops) {
       const count = d.roofVariant === "sawtooth" ? 3 : 1;
-      for (let i=0;i<count;i++) parts.push({kind:d.roofVariant === "hip" ? "hip" : "shed", position:[m.x,m.y+m.height+.7,m.z-m.depth/2+(i+.5)*m.depth/count],size:[m.width,1.4,m.depth/count],color:p.roof});
+      for (let i=0;i<count;i++) parts.push({kind:d.roofVariant === "mansard" ? "mansard" : d.roofVariant === "hip" ? "hip" : "shed", position:[m.x,m.y+m.height+(d.roofVariant==="mansard"?1.1:.7),m.z-m.depth/2+(i+.5)*m.depth/count],size:[m.width,d.roofVariant==="mansard"?2.2:1.4,m.depth/count],color:p.roof});
     }
   }
   const lastY = masses.at(-1)!.y;
-  if (!roofActive && d.roof === "pitched" && (!d.roofVariant || d.roofVariant === "standard")) {
+  if (d.generatorRevision!=="city-connected-3" && !roofActive && d.roof === "pitched" && (!d.roofVariant || d.roofVariant === "standard")) {
     const m = masses.at(-1)!;
     parts.push({
       kind: "roof",
@@ -1074,14 +1170,48 @@ export function resolveV3(
     attachments.push(...escape.attachments);
   }
 
+  if((d.stairExtension==="spiral" || d.stairExtension==="straight")){
+    const stairs=(d.stairExtension==="straight"?straightStair:spiralStair)(masses,p.trim);
+    extensionReason=stairs.reason;
+    if(d.roof!=="flat" || roofActive || (d.roofVariant && d.roofVariant!=="standard"))extensionReason="Exterior roof access requires a flat roof without a native roof assembly.";
+    if(!extensionReason && stairs.bounds){
+      const conflict=signs.some(sign=>overlaps(stairs.bounds!,{position:[sign.x,sign.y,sign.z],size:[sign.rotation?.6:sign.width,sign.height,sign.rotation?sign.width:.6]}));
+      if(conflict)extensionReason="A sign occupies the stair clearance. Move that sign to enable the stairs.";
+      else {
+        for(let i=attachments.length-1;i>=0;i--){const a=attachments[i];if(["cornice","column","accent","band","canopy","planter","rails"].includes(a.role)&&KIT_DIMENSIONS[a.asset]&&overlaps(stairs.bounds,attachmentBounds(a)))attachments.splice(i,1);}
+        parts.push(...stairs.parts);
+      }
+    }
+  }
+  const connectedNotes:string[]=[],assemblyEnvelopes:AssemblyEnvelope[]=[...openingEnvelopes],roofContours:[number,number][][]=[];
+  if(d.generatorRevision==="city-connected-3"){
+    const o=d.connectedArchitecture||{};
+    if(o.balconies && !balconyCount)connectedNotes.push("Balconies need an upper-floor front opening and clear space inside the plot. The selection is retained.");
+    const profile=d.roofVariant&&d.roofVariant!=="standard"?d.roofVariant:d.roof==="pitched"?"gable":"flat";
+    const roof=connectedRoof(masses,profile,o,p,lod);
+    if(!roofActive){parts.push(...roof.parts);roofContours.push(...roof.faces.map(f=>f.polygon));}
+    else connectedNotes.push("The native roof assembly owns this roof. Select Existing roof to use the procedural roof controls.");
+    connectedNotes.push(...roof.notes);
+    const porch=connectedPorch(masses,o,p,entrance.z);
+    const conflict=porch.envelopes.some(e=>signs.some(sign=>!(slots[0].active && sign.x===slots[0].position[0] && sign.y===slots[0].position[1]) && overlaps(e,{position:[sign.x,sign.y,sign.z],size:[sign.rotation?.6:sign.width,sign.height,sign.rotation?sign.width:.6]})));
+    const stairBounds=d.stairExtension==="straight"?straightStair(masses,p.trim).bounds:d.stairExtension==="spiral"?spiralStair(masses,p.trim).bounds:escape?.bounds;
+    const stairConflict=!!stairBounds && porch.envelopes.some(e=>overlaps(e,stairBounds));
+    if(stairConflict)connectedNotes.push("The porch intersects the exterior stairs. Choose a different porch to restore it.");
+    else if(conflict)connectedNotes.push("The porch intersects a sign. Move the sign to restore the porch.");
+    else {parts.push(...porch.parts);assemblyEnvelopes.push(...porch.envelopes);}
+    connectedNotes.push(...porch.notes);
+    if(residential && authored.finish!=="procedural")connectedNotes.push("Residential openings retain their fitted procedural assembly; native facade choices are preserved for compatible commercial designs.");
+  }
   return {
+    roofContours,
+    assemblyEnvelopes,
     parts,
     attachments,
     walls,
     masses,
     entrance,
     sign,
-    kitNotes:[...(roofReason?[roofReason]:[]),...kitResult.notes],
+    kitNotes:[...connectedNotes,...(roofReason?[roofReason]:[]),...kitResult.notes],
     extensionReason,
     slots,
     signs,

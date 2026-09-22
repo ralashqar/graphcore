@@ -1,3 +1,6 @@
+import {OFFICE_TYPES} from "../../../src/domain/cityOfficeArchitecture.ts";
+import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../../src/domain/cityProceduralEntrances.ts";
+import { WINDOW_FAMILIES } from "../../../src/domain/cityWindowFamilies.ts";
 import { KIT_CORNERS,KIT_ROOFLINES,KIT_ENTRANCES,KIT_FRONTAGES,KIT_ROOFS } from "../../../src/domain/cityArchitecturalKit.ts";
 import { NATIVE_FACADE_IDS } from "../../../src/domain/cityNativeFacades.ts";
 import { TEXTURE_IDS } from "../../../src/domain/cityTexturePresets.ts";
@@ -53,11 +56,23 @@ import { COMPONENTS, SLOT_IDS } from "../../../src/domain/cityBuildingV3.ts";
 const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
-  generatorRevision: z.literal("city-grammar-1"),
+  generatorRevision: z.enum(["city-grammar-1", "city-shell-2", "city-connected-3", "city-office-4"]),
+  officeArchitecture:z.object({bridgeFloor:z.number().int().min(1).max(7).optional(),towerGap:z.number().min(2).max(6).optional(),shorterTower:z.number().int().min(0).max(3).optional(),style:z.enum(["international","deco","brutalist"]).optional()}).strict().optional(),
+  connectedArchitecture:z.object({
+    openingLayout:z.enum(["compact","balanced","paired"]).optional(),
+    roofPitch:z.number().min(15).max(50).optional(),roofOverhang:z.number().min(0).max(.6).optional(),ridgeDirection:z.enum(["x","z"]).optional(),
+    porch:z.enum(["none","entrance","veranda","side","courtyard"]).optional(),supportStyle:z.enum(["timber","classical","metal"]).optional(),
+    dormers:z.union([z.literal(0),z.literal(1),z.literal(2)]).optional(),dormerRoof:z.enum(["gable","shed"]).optional(),
+    shutters:z.boolean().optional(),windowBoxes:z.boolean().optional(),chimney:z.boolean().optional(),gutters:z.boolean().optional(),balconies:z.boolean().optional(),
+  }).strict().optional(),
   architecturalKit: z.object({corners:z.enum(KIT_CORNERS).optional(),roofline:z.enum(KIT_ROOFLINES).optional(),entrance:z.enum(KIT_ENTRANCES).optional(),frontage:z.enum(KIT_FRONTAGES).optional(),roof:z.enum(KIT_ROOFS).optional(),entranceSteps:z.boolean().optional(),connectedPlanters:z.boolean().optional(),stairRails:z.boolean().optional(),ornaments:z.boolean().optional(),rooftopUnits:z.boolean().optional()}).strict().optional(),
+  doorFamily:z.enum(DOOR_FAMILIES).optional(),
+  doorSurround:z.enum(DOOR_SURROUNDS).optional(),
+  doorTransom:z.boolean().optional(),
+  windowFamily: z.enum(WINDOW_FAMILIES).optional(),
   nativeFacade: z.enum(NATIVE_FACADE_IDS).optional(),
   solidSideWalls: z.boolean().optional(),
-  stairExtension: z.enum(["none","concrete","marble","fire-escape"]).optional(),
+  stairExtension: z.enum(["none","concrete","marble","fire-escape","spiral","straight"]).optional(),
   textures: z.object({wall:z.enum(TEXTURE_IDS).optional(),roof:z.enum(TEXTURE_IDS).optional(),ground:z.enum(TEXTURE_IDS).optional(),wallBorder:z.enum([...TEXTURE_IDS,"primary"]).optional(),groundBorder:z.enum([...TEXTURE_IDS,"primary"]).optional()}).strict().optional(),
   advertising: z.object({placements:z.array(z.enum(AD_PLACEMENTS)).max(2).refine(v=>new Set(v).size===v.length,"Duplicate placements"),width:z.number().min(3).max(18),height:z.number().min(2).max(24),style:z.enum(["image","text"])}).strict().optional(),
   entranceStyle: z.enum(ENTRANCE_STYLES).optional(),
@@ -70,7 +85,7 @@ const v3 = z.object({
   pavingPattern: z.enum(PAVING_PATTERNS).optional(),
   detailSet: z.enum(DETAIL_SETS).optional(),
   detailScope: z.enum(DETAIL_SCOPES).optional(),
-  base: z.enum(["storefront", "lobby", "plinth"]),
+  base: z.enum(["storefront", "lobby", "plinth", "residential"]),
   middleFloors: z.number().int().min(0).max(7),
   rhythm: z.enum(["vertical", "ribbon", "alternating"]),
   crown: z.enum(["none", "recessed", "penthouse", "terrace"]),
@@ -80,10 +95,13 @@ const v3 = z.object({
   density: z.enum(["restrained", "full"]),
   slots: z.partialRecord(z.enum(SLOT_IDS), z.enum(COMPONENTS).nullable()),
 }).strict().superRefine((d, ctx) => {
+  if(d.generatorRevision==="city-office-4" && !OFFICE_TYPES.some(t=>t===d.archetype))ctx.addIssue({code:"custom",message:"Connected office envelopes require a matching preset."});
+  if(d.generatorRevision!=="city-office-4" && (d.officeArchitecture || OFFICE_TYPES.some(t=>t===d.archetype)))ctx.addIssue({code:"custom",message:"Office architecture requires its generator revision."});
+  if(d.generatorRevision!=="city-connected-3" && (d.connectedArchitecture || d.base==="residential"))ctx.addIssue({code:"custom",message:"Connected architecture requires an explicit generator upgrade."});
   if (d.massing === "hall-wings" && (d.blueprint !== "office" || d.width < 12 || d.depth < 10 || d.roof === "pitched")) ctx.addIssue({code:"custom", message:"Hall and wings require a rectangular 12 by 10 m footprint and compatible roof."});
   if (d.roofVariant && !roofVariants(d).includes(d.roofVariant)) ctx.addIssue({code:"custom", message:"Roof variant is incompatible with this archetype."});
   if (d.blueprint !== "office" && (d.width < 12 || d.depth < 10)) ctx.addIssue({code:"custom", message:"Compact dimensions require a rectangular building."});
-  if (d.roof === "pitched" && d.blueprint !== "office") {
+  if (d.generatorRevision !== "city-connected-3" && d.roof === "pitched" && d.blueprint !== "office") {
     ctx.addIssue({ code: "custom", message: "Pitched roofs require office." });
   }
   if (d.finish !== "procedural" && (d.width % 2 || d.depth % 2)) {

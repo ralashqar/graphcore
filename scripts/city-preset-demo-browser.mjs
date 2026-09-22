@@ -18,7 +18,7 @@ try {
    root.store.getState().scene.traverse(mesh => {
      if (!mesh.isInstancedMesh) return;
      for (const [i,item] of (mesh.userData.cityInstances || []).entries()) {
-       if (!item.property) continue;
+       if (!item.property || !item.detail) continue;
        const key = item.key + ':' + mesh.geometry.attributes.position.count;
        result[key] = Array.from(mesh.instanceMatrix.array.slice(i*16,i*16+16));
      }

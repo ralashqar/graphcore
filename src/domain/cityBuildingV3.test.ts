@@ -37,11 +37,12 @@ test("all compositions and shape extremes have supported floors and bounded part
               assert.equal(new Set(r.masses.map((m) => m.y)).size, d.floors);
               for (const p of r.parts) {
                 assert.ok(p.size.every((v) => v > 0));
-                assert.ok(Math.abs(p.position[0]) + p.size[0] / 2 <= 12);
-                assert.ok(Math.abs(p.position[2]) + p.size[2] / 2 <= 12);
+                const c=Math.abs(Math.cos(p.rotation||0)),s=Math.abs(Math.sin(p.rotation||0));
+                assert.ok(Math.abs(p.position[0]) + (p.size[0]*c+p.size[2]*s) / 2 <= 12);
+                assert.ok(Math.abs(p.position[2]) + (p.size[2]*c+p.size[0]*s) / 2 <= 12);
               }
               for (
-                const m of r.masses.filter((m) => m.y > .65)
+                const m of r.masses.filter((m) => m.y > .65 && !(d.generatorRevision==="city-office-4" && d.archetype==="twin-tower" && Math.abs(m.y-(.65+d.groundHeight+((d.officeArchitecture?.bridgeFloor??3)-1)*3))<.001))
               ) {
                 assert.ok(
                   r.masses.some((s) =>

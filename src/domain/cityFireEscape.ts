@@ -44,8 +44,8 @@ export function fireEscape(walls: Wall[], masses: BuildingMass[], obstacles: Esc
 
 /** A supported side core joins every storey. Clip the original rectangles against it
  * so the adapted shape has no overlapping boxes or internal facade surfaces. */
-export function flattenEscapeSide(masses: BuildingMass[]): BuildingMass[] {
- if(new Set(masses.map(m=>m.y)).size<2)return masses;
+export function flattenEscapeSide(masses: BuildingMass[], allowSingle=false): BuildingMass[] {
+ if(!allowSingle && new Set(masses.map(m=>m.y)).size<2)return masses;
  const levels=[...new Set(masses.map(m=>m.y))].sort((a,b)=>a-b);
  const right=Math.min(8.1,Math.max(...masses.filter(m=>m.y===levels[0]).map(m=>m.x+m.width/2)));
  const left=Math.min(right-2,...levels.map(y=>Math.max(...masses.filter(m=>m.y===y).map(m=>m.x+m.width/2))-1));

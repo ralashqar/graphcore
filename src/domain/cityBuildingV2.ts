@@ -234,7 +234,7 @@ export type Attachment = {
   axisScale?: [number, number, number];
   role: string;
 };
-export type DesignPart = BuildingPart & { squareEdges?: boolean; textureRole?: "groundBorder" | "wall"; fallback?: "facade" | "props"; fallbackAsset?: string; fallbackAssets?: string[] };
+export type DesignPart = BuildingPart & { squareEdges?: boolean; textureRole?: "groundBorder" | "wall" | "roof" | "none"; fallback?: "facade" | "props"; fallbackAsset?: string; fallbackAssets?: string[] };
 export type ResolvedDesign = {
   parts: DesignPart[];
   attachments: Attachment[];

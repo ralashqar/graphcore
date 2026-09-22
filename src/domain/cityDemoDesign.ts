@@ -34,8 +34,20 @@ export function demoBuildingDesign(index: number, color: string) {
   const random = demoRandom(index);
   const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)];
   // Coprime stride covers every complete preset, including the first visible rings.
-  const d = applyComposition(newDesign(`demo-${index}`), (index * 9 + 1) % COMPOSITIONS.length);
+  const d = applyComposition(newDesign(`demo-${index}`), (index * (COMPOSITIONS.length-1) + 1) % COMPOSITIONS.length);
+  if(d.generatorRevision==="city-office-4"){d.palette=brandPalette(color);d.finish="procedural";d.enclosure=pick(ENCLOSURES);d.textures={wall:"plaster",roof:"metal",ground:"pavers",groundBorder:"concrete"};return normalizeV3(d);}
+  if(d.base==="residential"){
+    d.palette=brandPalette(color);d.finish="procedural";
+    d.textures={wall:pick(["plaster","brick","none"] as const),roof:"terracotta",ground:"grass-meadow",wallBorder:"none",groundBorder:"concrete"};
+    d.connectedArchitecture={...d.connectedArchitecture,shutters:index%3===0,windowBoxes:index%4===0};
+    if(d.archetype==="apartment"&&index%2===0)d.stairExtension="straight";
+    return normalizeV3(d);
+  }
+  d.doorFamily=(["glazed","double-glass","french","panelled","sliding","arched"] as const)[index%6];
+  d.doorSurround=(["minimal","framed","classical","industrial"] as const)[index%4];
+  d.doorTransom=index%3===0;
   d.palette = brandPalette(color);
+  d.windowFamily=(["storefront","warehouse","sash","picture","arched"] as const)[index%5];
   d.architecture = pick(ARCHITECTURES);
   d.finish = pick(FINISHES);
   d.enclosure = pick(ENCLOSURES);
@@ -81,6 +93,7 @@ export function demoBuildingDesign(index: number, color: string) {
     if(result.middleFloors===0 && result.crown==="none")result.middleFloors=1;
     Object.assign(result,normalizeV3(result));
   }
+  if(index%12===5){result.stairExtension="spiral";result.roof="flat";result.roofVariant="standard";result.architecturalKit.roof="existing";}
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);

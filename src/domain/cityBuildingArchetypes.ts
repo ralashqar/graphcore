@@ -1,26 +1,29 @@
+import {OFFICE_TYPES} from "./cityOfficeArchitecture.ts";
+import {RESIDENTIAL_TYPES} from "./cityConnectedArchitecture.ts";
 import type { DesignPart } from "./cityBuildingV2.ts";
-export const ARCHETYPES = ["cafe", "shop", "kiosk", "museum", "bank", "hotel"] as const;
-export const ROOF_VARIANTS = ["standard", "hip", "shed", "sawtooth"] as const;
+export const ARCHETYPES = ["cafe", "shop", "kiosk", "museum", "bank", "hotel", ...RESIDENTIAL_TYPES, ...OFFICE_TYPES] as const;
+export const ROOF_VARIANTS = ["standard", "hip", "shed", "sawtooth", "mansard"] as const;
 export type ArchetypeChoices = {
   archetype?: typeof ARCHETYPES[number];
   massing?: "standard" | "hall-wings";
   roofVariant?: typeof ROOF_VARIANTS[number];
 };
-export function roofVariants(d: ArchetypeChoices & {blueprint: string}) {
+export function roofVariants(d: ArchetypeChoices & {blueprint: string;generatorRevision?:string}): typeof ROOF_VARIANTS[number][] {
   const allowed: typeof ROOF_VARIANTS[number][] = ["standard"];
+  if (d.generatorRevision === "city-connected-3") return ["standard","hip","shed","mansard"];
   if (d.blueprint !== "office") return allowed;
-  allowed.push("hip");
+  allowed.push("hip", "mansard");
   if (!d.archetype || ["cafe", "shop", "kiosk"].includes(d.archetype)) allowed.push("shed");
   if (!d.archetype || d.archetype === "museum") allowed.push("sawtooth");
   return allowed;
 }
 export function presetCategory(archetype: ArchetypeChoices["archetype"]) {
-  return archetype === "cafe" || archetype === "shop" || archetype === "kiosk" ? "Food & Retail"
+  return RESIDENTIAL_TYPES.some(t=>t===archetype) ? "Residential" : archetype === "cafe" || archetype === "shop" || archetype === "kiosk" ? "Food & Retail"
     : archetype === "museum" || archetype === "bank" ? "Civic"
     : archetype === "hotel" ? "Hospitality" : "Workspaces";
 }
 /** Coherent, low-detail exterior features; nothing occupies the central entrance route. */
-export function archetypeParts(archetype: ArchetypeChoices["archetype"], width: number, depth: number, front: number, groundHeight: number, trim: string, brand: string, lod: "near" | "medium" | "far", nativeEntranceAssets?: string[]) {
+export function archetypeParts(archetype: ArchetypeChoices["archetype"], width: number, _depth: number, front: number, groundHeight: number, trim: string, brand: string, lod: "near" | "medium" | "far", nativeEntranceAssets?: string[]) {
   const parts: DesignPart[] = [];
   const box = (x:number,y:number,z:number,w:number,h:number,d:number,color:string) => parts.push({kind:"box",position:[x,y,z],size:[w,h,d],color});
   if (archetype === "shop") {
@@ -30,13 +33,8 @@ export function archetypeParts(archetype: ArchetypeChoices["archetype"], width: 
       if(nativeEntranceAssets){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAssets=nativeEntranceAssets;}
     }
   }
-  if (archetype === "kiosk") {
-    for (const x of [-width/2+1.25,width/2-1.25]) box(x,1.55,front+.3,2,.16,.6,trim);
-    box(width/2+.25,1.55,0,.5,.16,depth-1,trim);
-    if (lod !== "far") {
-      for (const x of [-width/2+1.25,width/2-1.25]) box(x,2.72,front+.12,1.8,.22,.22,brand);
-    }
-  }
+  // Kiosk counters are fitted to actual window openings by the facade resolver.
+  // Fixed-height ledges here used to cross glazing and float across bay boundaries.
   if (archetype === "cafe" && lod !== "far" && front+3.25 < 10.8) {
     for (const x of [-4,4]) {
       box(x,1.02,front+2.35,1.3,.14,1.3,trim);

@@ -326,13 +326,160 @@ try {
     assert.deepEqual(errors,[]);
     console.log("Texture choices, shader compilation and mocked save/reload passed.");await browser.close();process.exit(0);
   }
+  if(process.env.CITY_DOOR_UI_AUDIT === "1"){
+    await page.getByRole("button",{name:/^Gabled kiosk /}).click();
+    await page.getByRole("button",{name:"Entrances",exact:true}).click();
+    const choices=page.getByRole("group",{name:"Door styles"});
+    assert.equal(await choices.getByRole("button").count(),7);
+    for(const label of ["Glazed door & sidelight","Double glass doors","French doors","Panelled door & sidelight","Sliding storefront","Arched glass entrance"]){
+      await choices.getByRole("button",{name:label,exact:true}).click();await page.waitForTimeout(120);
+    }
+    assert.equal(await page.getByLabel("Door surround",{exact:true}).isDisabled(),true);
+    await choices.getByRole("button",{name:"French doors",exact:true}).click();
+    await page.getByLabel("Door surround",{exact:true}).selectOption("classical");
+    await page.getByLabel("Glazed transom above the door",{exact:true}).check();
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.doorFamily,"french");
+    assert.equal(business.draft.buildingDesign.doorSurround,"classical");
+    assert.equal(business.draft.buildingDesign.doorTransom,true);
+    await page.reload();await page.getByRole("button",{name:"Entrances",exact:true}).click();
+    assert.equal(await page.getByRole("button",{name:"French doors",exact:true}).getAttribute("aria-pressed"),"true");
+    await page.getByRole("button",{name:"Panelled door & sidelight",exact:true}).click();await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await page.getByRole("button",{name:"French doors",exact:true}).getAttribute("aria-pressed"),"true");
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-french-entrance.png"});
+    await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    assert.deepEqual(errors,[]);console.log("Door variations, fitted options, save/reload, undo and mobile passed.");await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_WINDOW_UI_AUDIT === "1"){
+    await page.getByRole("button",{name:"Windows",exact:true}).click();
+    const choices=page.getByRole("group",{name:"Window styles"});
+    assert.equal(await choices.getByRole("button").count(),6);
+    await choices.getByRole("button",{name:"Arched",exact:true}).click();
+    assert.equal(await choices.getByRole("button",{name:"Arched",exact:true}).getAttribute("aria-pressed"),"true");
+    await choices.getByRole("button",{name:"Sash",exact:true}).click();
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await choices.getByRole("button",{name:"Arched",exact:true}).getAttribute("aria-pressed"),"true");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.windowFamily,"arched");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    await choices.screenshot({path:"output/playwright/city-window-controls.png"});
+    assert.deepEqual(errors,[]);console.log("Window tab, six visual choices, undo, saved choice and mobile layout passed.");await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_OFFICE_AUDIT === "1"){
+    const {COMPOSITIONS}=await import("../src/domain/cityBuildingV3.ts");
+    for(const preset of COMPOSITIONS.filter(p=>p.patch.generatorRevision==="city-office-4")){
+      await page.getByRole("button",{name:new RegExp(`^${preset.name} `)}).click();
+      await page.getByRole("button",{name:"City camera",exact:true}).click();await page.waitForTimeout(350);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/office-${preset.patch.archetype}.png`});
+    }
+    await page.getByRole("button",{name:/^Twin-Tower HQ /}).click();
+    await page.getByLabel("Bridge storey",{exact:true}).fill("2");
+    await page.getByLabel("Office character",{exact:true}).selectOption("brutalist");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.officeArchitecture.bridgeFloor,2);
+    await page.reload();await page.getByLabel("Bridge storey",{exact:true}).waitFor();assert.equal(await page.getByLabel("Office character",{exact:true}).inputValue(),"brutalist");
+    await page.getByLabel("Office character",{exact:true}).selectOption("deco");await page.getByRole("button",{name:"Undo",exact:true}).click();assert.equal(await page.getByLabel("Office character",{exact:true}).inputValue(),"brutalist");
+    await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    assert.deepEqual(errors,[]);console.log("Six office presets, bridge controls, mock save/reload, undo and mobile viewport passed.");await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_RESIDENTIAL_AUDIT === "1"){
+    const {COMPOSITIONS}=await import("../src/domain/cityBuildingV3.ts");
+    for(const preset of COMPOSITIONS.filter(p=>p.patch.base==="residential")){
+      await page.getByRole("button",{name:new RegExp(`^${preset.name} `)}).click();
+      await page.getByRole("button",{name:"City camera",exact:true}).click();
+      await page.waitForTimeout(250);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/residential-${preset.patch.archetype}.png`});
+    }
+    await page.getByRole("button",{name:/^Detached family house /}).click();
+    await page.getByLabel("Dormer count",{exact:true}).fill("2");
+    await page.getByLabel("Fitted shutters",{exact:true}).check();
+    await page.getByLabel("Porch supports",{exact:true}).selectOption("classical");
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.generatorRevision,"city-connected-3");
+    assert.equal(business.draft.buildingDesign.connectedArchitecture.dormers,2);
+    await page.reload();await page.getByLabel("Porch supports",{exact:true}).waitFor();
+    assert.equal(await page.getByLabel("Porch supports",{exact:true}).inputValue(),"classical");
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/residential-dormers.png"});
+    await page.getByLabel("Porch supports",{exact:true}).selectOption("metal");
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await page.getByLabel("Porch supports",{exact:true}).inputValue(),"classical");
+    await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    await page.route("**/city/decorators/**",route=>route.abort());
+    await page.goto(`${origin}/city/manage?cityLight=0`);
+    await page.getByLabel("Porch supports",{exact:true}).waitFor();
+    assert.equal(await page.getByLabel("Porch supports",{exact:true}).inputValue(),"classical");
+    assert.ok(await page.locator(".city-design-canvas canvas").isVisible());
+    await page.getByRole("button",{name:"Reset to preset",exact:true}).click();
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.archetype,"detached");
+    assert.deepEqual(errors,[]);console.log("Eight residential presets, connected options, save/reload, undo and mobile passed.");await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_ASSEMBLY_MODE_AUDIT === "1"){
+    const field=page.locator("fieldset[aria-describedby=city-native-assembly-mode]");
+    assert.equal(await field.getAttribute("disabled"),"");
+    assert.equal(await page.getByLabel("Connected roofline",{exact:true}).isEnabled(),false);
+    const link=page.getByRole("link",{name:"Open full-detail editor in a new tab"});
+    assert.equal(new URL(await link.getAttribute("href")).searchParams.get("cityLight"),"0");
+    await page.getByRole("button",{name:"Edit procedural entrances",exact:true}).click();
+    await page.getByRole("button",{name:/French/}).waitFor();
+    assert.deepEqual(errors,[]);console.log("Native controls disabled honestly in light mode; procedural shortcut and full-detail URL passed.");await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_DETAIL_AUDIT === "1"){
+    const stairChoice=process.env.CITY_STAIR_CHOICE || "spiral";
+    await page.getByRole("button",{name:/^Glass headquarters /}).click();
+    for(const family of ["storefront","sash","picture","arched","warehouse"]){
+      await page.getByLabel("Procedural window family",{exact:true}).selectOption(family);
+      await page.waitForTimeout(150);
+      if(family==="arched")await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-arched-windows.png"});
+    }
+    await page.getByLabel("Side stairs",{exact:true}).selectOption(stairChoice);
+    await page.getByRole("button",{name:"City camera",exact:true}).click();
+    await page.waitForTimeout(700);
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-stairs-windows.png"});
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.stairExtension,stairChoice);
+    assert.equal(business.draft.buildingDesign.windowFamily,"warehouse");
+    await page.reload();await page.getByLabel("Side stairs",{exact:true}).waitFor();
+    assert.equal(await page.getByLabel("Side stairs",{exact:true}).inputValue(),stairChoice);
+    assert.equal(await page.getByLabel("Procedural window family",{exact:true}).inputValue(),"warehouse");
+    await page.getByLabel("Procedural window family",{exact:true}).selectOption("sash");
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    assert.equal(await page.getByLabel("Procedural window family",{exact:true}).inputValue(),"warehouse");
+    assert.deepEqual(errors,[]);console.log("Window families, spiral stairs, undo and saved-recipe recovery passed.");await browser.close();process.exit(0);
+  }
+  if (process.env.CITY_SHELL_AUDIT === "1") {
+    await page.getByRole("button",{name:/^Mansard townhouse /}).click();
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.generatorRevision,"city-shell-2");
+    assert.equal(business.draft.buildingDesign.roofVariant,"mansard");
+    await page.reload();
+    await page.getByRole("button",{name:/^Mansard townhouse /}).waitFor();
+    await page.getByRole("button",{name:/^Industrial workshop /}).click();
+    await page.getByRole("button",{name:"Undo",exact:true}).click();
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.roofVariant,"mansard");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    assert.deepEqual(errors,[]);
+    console.log("Connected-shell preset, undo, save/reload and mobile checks passed.");
+    await browser.close();process.exit(0);
+  }
   if (process.env.CITY_PRESET_THUMBNAILS === "1") {
     const {COMPOSITIONS} = await import("../src/domain/cityBuildingV3.ts");
     const {mkdir, writeFile} = await import("node:fs/promises");
     const sharp = (await import("sharp")).default;
     await mkdir("public/city/presets", {recursive:true});
     await page.getByRole("button", {name:"City camera", exact:true}).click();
-    for (const preset of COMPOSITIONS) {
+    for (const preset of COMPOSITIONS.filter(p=>process.env.CITY_OFFICE_THUMBNAILS!=="1" || p.patch.generatorRevision==="city-office-4")) {
       await page.getByRole("button", {name:new RegExp(`^${preset.name} `)}).click();
       await page.waitForTimeout(250);
       const shot = await page.locator(".city-design-canvas").screenshot();
@@ -340,7 +487,7 @@ try {
     }
     await writeFile("public/city/presets/README.md", "# City preset previews\n\nRendered from the shared City building recipes using the mocked business editor, with a fixed camera and neutral SynArc identity. No AI generation or external asset provider. Regenerate with CITY_PRESET_THUMBNAILS=1 and CITY_TEST_ORIGIN set to the local dev server, then run node --experimental-strip-types scripts/city-design-browser.mjs.\n");
     assert.deepEqual(errors, []);
-    console.log(`Rendered ${COMPOSITIONS.length} preset thumbnails.`);
+    console.log(`Rendered ${COMPOSITIONS.filter(p=>process.env.CITY_OFFICE_THUMBNAILS!=="1" || p.patch.generatorRevision==="city-office-4").length} preset thumbnails.`);
     await browser.close();
     process.exit(0);
   }

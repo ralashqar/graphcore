@@ -1,3 +1,6 @@
+import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../domain/cityProceduralEntrances";
+import { WINDOW_FAMILIES } from "../../domain/cityWindowFamilies";
+import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { KIT_CORNERS, KIT_ROOFLINES, KIT_ENTRANCES, KIT_FRONTAGES, KIT_ROOFS } from "../../domain/cityArchitecturalKit";
 import { NATIVE_FACADES, type NativeFacadeId } from "../../domain/cityNativeFacades";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
@@ -108,6 +111,7 @@ function Blueprint(
     onSlot?: (id: SlotId) => void;
   },
 ) {
+  const office = design.version === 3 && design.generatorRevision === "city-office-4";
   const resolved = design.version !== 1
     ? resolveCurrent(design, "#547364")
     : null;
@@ -149,7 +153,8 @@ function Blueprint(
             fillOpacity=".6"
           />
         )}
-        {buildingMasses(
+        {office && resolved && "roofContours" in resolved && (resolved.roofContours as number[][][] | undefined)?.slice(0,1).map((poly,i)=><polygon key={"office"+i} points={poly.map(v=>v.join(",")).join(" ")} fill="currentColor" fillOpacity=".2" stroke="currentColor" strokeWidth=".12"/>)}
+        {!office && buildingMasses(
           design.version === 3
             ? { ...design, middleFloors: 0, crown: "none", floors: 1 }
             : { ...design, floors: 1 },
@@ -167,7 +172,7 @@ function Blueprint(
           />
         ))}
         {resolved && !mini &&
-          resolved.masses.filter((m) => m.y === resolved.masses.at(-1)!.y).map((
+          resolved.masses.filter((m) => !office && m.y === resolved.masses.at(-1)!.y).map((
             m,
             i,
           ) => (
@@ -183,6 +188,8 @@ function Blueprint(
               strokeDasharray=".3 .2"
             />
           ))}
+        {resolved && !mini && "roofContours" in resolved && (resolved.roofContours as number[][][]|undefined)?.map((poly,i)=><polygon key={"roof"+i} points={poly.map(v=>v.join(",")).join(" ")} fill="none" stroke="#8a7756" strokeWidth=".06" strokeDasharray=".2 .1"><title>Roof surface and connections</title></polygon>)}
+        {resolved && !mini && "assemblyEnvelopes" in resolved && (resolved.assemblyEnvelopes as {label:string;position:number[];size:number[]}[]|undefined)?.map((e,i)=><rect key={"assembly"+i} x={e.position[0]-e.size[0]/2} y={e.position[2]-e.size[2]/2} width={e.size[0]} height={e.size[2]} fill="#69a3aa" fillOpacity=".15" stroke="#397781" strokeWidth=".12"><title>{e.label}</title></rect>)}
         {resolved && !mini &&
           resolved.attachments.filter((a) => a.role !== "facade").map((
             a,
@@ -196,7 +203,7 @@ function Blueprint(
               fill="#907249"
             />
           ))}
-        {design.version === 3 && !mini && advertisingLayout(design, buildingMasses(design), buildingSlots(design)).fits.filter(f=>f.selected && !f.reason).map(f=>(
+        {design.version === 3 && !office && !mini && advertisingLayout(design, buildingMasses(design), buildingSlots(design)).fits.filter(f=>f.selected && !f.reason).map(f=>(
           <line key={f.id} x1={f.x-Math.cos(f.rotation)*f.width/2} y1={f.z+Math.sin(f.rotation)*f.width/2}
             x2={f.x+Math.cos(f.rotation)*f.width/2} y2={f.z-Math.sin(f.rotation)*f.width/2} stroke="#315b77" strokeWidth=".35"><title>{AD_LABELS[f.id]}</title></line>
         ))}
@@ -427,6 +434,7 @@ export function CityBuildingDesigner(
           yours.
         </p>
       </div>
+      {CITY_LIGHT_MODE && <p role="status">Light mode is on: the preview uses clean procedural geometry. Your saved finish choices are retained.</p>}
       <div className="city-building-workbench">
         <div className="city-studio-stage">
           <div className="city-studio-toolbar">
@@ -543,7 +551,8 @@ export function CityBuildingDesigner(
                       0,
                       COMPOSITIONS.findIndex((p) =>
                         p.patch.blueprint === d.blueprint &&
-                        p.patch.architecture === d.architecture
+                        p.patch.architecture === d.architecture &&
+                        ((d.base!=="residential" && d.generatorRevision!=="city-office-4") || p.patch.archetype===d.archetype)
                       ),
                     ),
                   ),
@@ -573,10 +582,12 @@ export function CityBuildingDesigner(
             role="group"
             aria-label="Design controls"
           >
-            {["Presets", "Advertising", "Branding", "Grounds"].map((t) => (
+            {["Presets", "Windows", "Entrances", "Advertising", "Branding", "Grounds"].map((t) => (
               <button
                 key={t}
                 type="button"
+                disabled={d.generatorRevision==="city-office-4" && ["Windows","Entrances","Advertising"].includes(t)}
+                title={d.generatorRevision==="city-office-4" ? "Connected office openings and integrated branding are controlled under Presets." : undefined}
                 aria-pressed={tab === t}
                 onClick={() => { setTab(t); if (t === "Advertising") setView("fixed"); }}
               >
@@ -585,12 +596,63 @@ export function CityBuildingDesigner(
             ))}
           </div>
           <fieldset className="city-design-fields" disabled={legacy}>
+            {tab === "Entrances" && (
+              <div className="city-art-controls">
+                <h3>Doors & entrances</h3>
+                <p className="city-studio-note">Choose a complete door assembly. It fits the existing opening, keeps the entrance clear and switches the finish to clean procedural.</p>
+                <div className="city-preset-picker" role="group" aria-label="Door styles">
+                  {DOOR_FAMILIES.map(f=>{
+                    const labels={automatic:"Automatic",glazed:"Glazed door & sidelight","double-glass":"Double glass doors",french:"French doors",panelled:"Panelled door & sidelight",sliding:"Sliding storefront",arched:"Arched glass entrance"};
+                    return <button type="button" key={f} aria-pressed={(d.doorFamily||"automatic")===f && d.finish==="procedural"} onClick={()=>commit({...d,doorFamily:f,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}>
+                      <svg viewBox="0 0 100 80" width="100" height="80" aria-hidden="true" style={{display:"block",maxWidth:"100%"}}>
+                        <rect x="12" y="3" width="76" height="74" fill="#d9d2c4"/>
+                        {f==="arched"?<path d="M22 76V34A28 24 0 0 1 78 34V76Z" fill="#52737c"/>:<rect x="22" y="12" width="56" height="64" fill="#52737c"/>}
+                        {f==="panelled"&&<rect x="22" y="12" width="28" height="64" fill="#6d5845"/>}
+                        {f!=="arched"&&<path d="M50 12V76" stroke="#eee8dc" strokeWidth="3"/>}
+                        {f==="french"&&<path d="M22 34H78 M22 54H78 M36 12V76 M64 12V76" stroke="#eee8dc" strokeWidth="2"/>}
+                        <path d="M45 45V55" stroke="#eee8dc" strokeWidth="3"/>
+                      </svg><strong>{labels[f]}</strong>
+                    </button>;
+                  })}
+                </div>
+                <label>Door surround<select aria-label="Door surround" value={d.doorSurround||"framed"} disabled={!d.doorFamily||d.doorFamily==="automatic"||d.doorFamily==="arched"} onChange={e=>commit({...d,doorSurround:e.target.value as typeof d.doorSurround,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}>{DOOR_SURROUNDS.map(s=><option value={s} key={s}>{s}</option>)}</select></label>
+                <label><input type="checkbox" checked={!!d.doorTransom} disabled={!d.doorFamily||d.doorFamily==="automatic"||d.doorFamily==="arched"} onChange={e=>commit({...d,doorTransom:e.target.checked,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}/>Glazed transom above the door</label>
+                {d.doorFamily==="arched"&&<small>The arch owns its curved surround. Transom and rectangular surround choices are retained for other door styles.</small>}
+                <label>Entrance structure<select aria-label="Entrance structure" value={d.entranceStyle||"standard"} onChange={e=>commit({...d,entranceStyle:e.target.value as typeof d.entranceStyle,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2",slots:{...d.slots,"canopy.entrance":e.target.value==="wide-canopy"?"canopy":null}})}>
+                  <option value="standard">Simple entry</option><option value="wide-canopy">Wide canopy</option><option value="portico">Columned portico</option><option value="pediment">Classical pediment</option>
+                </select></label>
+                {entranceReason&&<small>{entranceReason}</small>}
+                <small>Door leaves, handles, frame and glazing form one assembly. Native Quaternius doors remain available under Presets → Entrance assembly; their own frames take priority in native finishes.</small>
+              </div>
+            )}
+            {tab === "Windows" && (
+              <div className="city-art-controls">
+                <h3>Window style</h3>
+                <p className="city-studio-note">Choose a style to see it on your building immediately. These options use clean procedural windows; choosing one switches the building finish.</p>
+                <div className="city-preset-picker" role="group" aria-label="Window styles">
+                  {WINDOW_FAMILIES.map(f=>{
+                    const labels={automatic:["Automatic","Use the building’s existing window layout."],storefront:["Storefront","Broad glazing with a slim central divider."],warehouse:["Warehouse grid","Multiple panes with fine industrial frames."],sash:["Sash","Traditional divided windows."],picture:["Picture window","Uninterrupted glass with no dividers."],arched:["Arched","Curved glass with fitted solid wall above."]};
+                    return <button type="button" key={f} aria-label={labels[f][0]} aria-pressed={(d.windowFamily || "automatic")===f && d.finish==="procedural"} onClick={()=>commit({...d,windowFamily:f,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}>
+                      <svg viewBox="0 0 100 72" width="100" height="72" aria-hidden="true" style={{display:"block",maxWidth:"100%"}}>
+                        <rect x="8" y="4" width="84" height="64" rx="3" fill="#d9d2c4"/>
+                        {f==="arched"?<path d="M22 59 V34 A28 24 0 0 1 78 34 V59 Z" fill="#52737c"/>:<rect x="22" y="13" width="56" height="46" fill="#52737c"/>}
+                        {["automatic","storefront","warehouse","sash"].includes(f)&&<path d={f==="warehouse"?"M40 13V59 M60 13V59 M22 28H78 M22 44H78":f==="sash"?"M50 13V59 M22 36H78":"M50 13V59"} stroke="#e8e3d8" strokeWidth="3"/>}
+                      </svg>
+                      <strong>{labels[f][0]}</strong><small>{labels[f][1]}</small>
+                    </button>;
+                  })}
+                </div>
+                <p className="city-studio-note">Window positions follow the building’s floor layout and leave doors and signs clear. Use Undo to compare styles.</p>
+                <button type="button" onClick={()=>{setTab("Presets");requestAnimationFrame(()=>{const library=document.getElementById("city-native-facade-library");library?.scrollIntoView({block:"center"});library?.focus({preventScroll:true});});}}>Browse Quaternius window blocks</button>
+                {CITY_LIGHT_MODE && <small>Light mode currently displays procedural windows instead of Quaternius façade blocks.</small>}
+              </div>
+            )}
             {tab === "Presets" && (
               <div className="city-art-controls">
                 <p className="city-studio-note">Choose a complete building, then fine-tune it below. Presets set the footprint, architecture and grounds; your business identity and colours stay intact.</p>
                 <button type="button" onClick={()=>{const library=document.getElementById("city-native-facade-library");library?.scrollIntoView({block:"center"});library?.focus({preventScroll:true});}}>Browse {NATIVE_FACADES.length} Quaternius façade blocks</button>
                 <label>Building type<select aria-label="Building type" value={category} onChange={e => setCategory(e.target.value)}>
-                  {["All", "Food & Retail", "Workspaces", "Civic", "Hospitality"].map(c => <option key={c}>{c}</option>)}
+                  {["All", "Food & Retail", "Workspaces", "Civic", "Hospitality", "Residential"].map(c => <option key={c}>{c}</option>)}
                 </select></label>
                 <div className="city-preset-picker">
                   {COMPOSITIONS.map((p, i) => category !== "All" && presetCategory(p.patch.archetype) !== category ? null : (
@@ -602,12 +664,32 @@ export function CityBuildingDesigner(
                         commit(applyComposition(d, i));
                       }}
                     >
-                      <img className="city-preset-render" src={`/city/presets/${p.name.toLowerCase().replaceAll(" ", "-")}.webp`} alt="" loading="lazy" width="360" height="280" />
+                      <img onError={e=>{e.currentTarget.style.display="none";}} className="city-preset-render" src={`/city/presets/${p.name.toLowerCase().replaceAll(" ", "-")}.webp`} alt="" loading="lazy" width="360" height="280" />
                       <strong>{p.name}</strong>
-                      <small>{p.patch.massing === "hall-wings" ? "Hall and wings" : p.patch.blueprint === "office" ? "Rectangular" : p.patch.blueprint === "terraces" ? "Stepped" : p.patch.blueprint === "courtyard" ? "Courtyard" : "L-shaped"} footprint</small>
+                      <small>{p.patch.generatorRevision === "city-office-4" ? p.patch.archetype?.replaceAll("-"," ") : p.patch.massing === "hall-wings" ? "Hall and wings" : p.patch.blueprint === "office" ? "Rectangular" : p.patch.blueprint === "terraces" ? "Stepped" : p.patch.blueprint === "courtyard" ? "Courtyard" : "L-shaped"} footprint</small>
                     </button>
                   ))}
                 </div>
+                {d.generatorRevision === "city-grammar-1" && <button type="button" onClick={()=>commit({...d,generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}>Upgrade connected walls and openings</button>}
+                {d.generatorRevision!=="city-connected-3" && d.generatorRevision!=="city-office-4" && <button type="button" onClick={()=>commit({...d,generatorRevision:"city-connected-3",connectedArchitecture:{porch:"none",roofPitch:35,roofOverhang:.3}})}>Upgrade connected architecture</button>}
+                {d.generatorRevision==="city-connected-3" && <fieldset><legend>Connected architecture</legend>
+                  <small>Fitted roofs, openings and porches work in light mode. Unsupported attachments retain their selection with a reason.</small>
+                  {([
+                    ["openingLayout","Residential window layout",["compact","balanced","paired"],"balanced"],
+                    ["ridgeDirection","Roof ridge direction",["x","z"],"x"],
+                    ["porch","Porch assembly",["none","entrance","veranda","side","courtyard"],"none"],
+                    ["supportStyle","Porch supports",["timber","classical","metal"],"timber"],
+                    ["dormerRoof","Dormer roof",["gable","shed"],"gable"],
+                  ] as const).map(([key,label,values,fallback])=><label key={key}>{label}<select aria-label={label} value={d.connectedArchitecture?.[key]||fallback} disabled={key==="openingLayout" && d.base!=="residential"} onChange={e=>commit({...d,connectedArchitecture:{...d.connectedArchitecture,[key]:e.target.value}})}>{values.map(v=><option key={v}>{v}</option>)}</select></label>)}
+                  {([["roofPitch","Roof pitch",15,50,1,35],["roofOverhang","Roof overhang",0,.6,.05,.3],["dormers","Dormer count",0,2,1,0]] as const).map(([key,label,min,max,step,fallback])=><label key={key}>{label}<input type="range" aria-label={label} min={min} max={max} step={step} value={d.connectedArchitecture?.[key]??fallback} onChange={e=>commit({...d,connectedArchitecture:{...d.connectedArchitecture,[key]:Number(e.target.value)}})}/><output>{d.connectedArchitecture?.[key]??fallback}{key==="roofPitch"?"°":key==="roofOverhang"?" m":""}</output></label>)}
+                  {([["shutters","Fitted shutters"],["windowBoxes","Window boxes"],["chimney","Chimney"],["gutters","Gutters and downpipes"],["balconies","Upper-floor balconies"]] as const).map(([key,label])=><label key={key}><input type="checkbox" checked={!!d.connectedArchitecture?.[key]} disabled={d.base!=="residential" && ["shutters","windowBoxes","balconies"].includes(key)} onChange={e=>commit({...d,connectedArchitecture:{...d.connectedArchitecture,[key]:e.target.checked}})}/>{label}</label>)}
+                  {assemblyStatus.kitNotes.map(note=><small key={note}>{note}</small>)}
+                </fieldset>}
+                {d.generatorRevision==="city-office-4" && <fieldset><legend>Connected office architecture</legend>
+                  <p>Fitted recessed glazing, flat roof decks and integrated entrance branding. Native modules, custom door kits, exterior stairs and extra advertising slots are unavailable on these envelopes; their saved choices are retained.</p>
+                  <label>Office character<select aria-label="Office character" value={d.officeArchitecture?.style||"international"} onChange={e=>commit({...d,officeArchitecture:{...d.officeArchitecture,style:e.target.value as "international"|"deco"|"brutalist"}})}><option value="international">International glass</option><option value="deco">Art Deco verticals</option><option value="brutalist">Solid civic / narrow windows</option></select></label>
+                  {d.archetype==="twin-tower" && <>{([["bridgeFloor","Bridge storey",1,7,3],["towerGap","Tower separation",2,6,4],["shorterTower","Right tower fewer floors",0,3,0]] as const).map(([key,label,min,max,fallback])=><label key={key}>{label}<input aria-label={label} type="range" min={min} max={max} step="1" value={d.officeArchitecture?.[key]??fallback} onChange={e=>commit({...d,officeArchitecture:{...d.officeArchitecture,[key]:Number(e.target.value)}})}/><output>{d.officeArchitecture?.[key]??fallback}</output></label>)}<small>Bridge storey 1 is the first storey above the shared lobby. Both towers must reach the selected storey.</small></>}
+                </fieldset>}
                 <h3>Fine-tune building</h3>
                 <p className="city-studio-note">Adjust dimensions and details within this building. To change its shape, choose another preset above.</p>
                 <div className="city-art-controls">
@@ -651,7 +733,7 @@ export function CityBuildingDesigner(
                     </label>
                   </details>
                 </div>
-                <details>
+                <fieldset disabled={d.generatorRevision==="city-office-4"}><details>
                   <summary>Advanced floor stack</summary>
                   <label>
                     Ground-floor treatment<select
@@ -660,7 +742,7 @@ export function CityBuildingDesigner(
                       onChange={(e) =>
                         update("base", e.target.value as typeof d.base)}
                     >
-                      {["storefront", "lobby", "plinth"].map((v) => (
+                      {(d.generatorRevision==="city-connected-3"?["storefront", "lobby", "plinth","residential"]:["storefront", "lobby", "plinth"]).map((v) => (
                         <option key={v}>{v}</option>
                       ))}
                     </select>
@@ -733,7 +815,7 @@ export function CityBuildingDesigner(
                     {d.crown === "none" ? 0 : 1} crown = {d.floors} floors
                   </p>
                 </details>
-                <h3>Façade style</h3>
+                </fieldset><h3>Façade style</h3>
                 <div className="city-style-picker">
                   {ARCHITECTURES.map((a) => (
                     <button
@@ -761,7 +843,7 @@ export function CityBuildingDesigner(
                     </button>
                   ))}
                 </div>
-                <label>
+                <fieldset disabled={d.generatorRevision==="city-office-4"}><label>
                   Building finish<select
                     aria-label="Building finish"
                     value={d.finish}
@@ -807,9 +889,17 @@ export function CityBuildingDesigner(
                 {NATIVE_FACADES.filter(p=>p.id===d.nativeFacade).map(p=><small key={p.id}>
                   {p.relief}. Native module {NATIVE_MODULES[p.asset].span.toFixed(1)} x {NATIVE_MODULES[p.asset].height.toFixed(1)} m, {NATIVE_MODULES[p.asset].depth.toFixed(2)} m model depth. Frames keep their proportions; exposed panel edges receive inward returns.
                 </small>)}
-                <fieldset>
-                  <legend>Architectural assemblies</legend>
-                  <small>Coordinated Quaternius parts with measured connections. Existing preserves your current design.</small>
+                {CITY_LIGHT_MODE && <div role="note" className="city-assembly-mode-note">
+                  <strong>Quaternius assemblies need full detail</strong>
+                  <p>Light mode skips native corner pieces, cornices, entrances, storefronts, roofs and props. These saved choices are preserved, but cannot change this preview.</p>
+                  <button type="button" onClick={()=>setTab("Windows")}>Edit procedural windows</button>{" "}
+                  <button type="button" onClick={()=>setTab("Entrances")}>Edit procedural entrances</button>{" "}
+                  <a href={(()=>{const url=new URL(window.location.href);url.searchParams.set("cityLight","0");return url.href;})()} target="_blank" rel="noopener noreferrer">Open full-detail editor in a new tab</a>
+                  <small>Save your draft first to carry changes into the new tab. The current city stays in light mode.</small>
+                </div>}
+                <fieldset disabled={CITY_LIGHT_MODE} aria-describedby={CITY_LIGHT_MODE ? "city-native-assembly-mode" : undefined}>
+                  <legend>Architectural assemblies · Quaternius</legend>
+                  <small id="city-native-assembly-mode">{CITY_LIGHT_MODE ? "Unavailable in light mode. Use full detail to edit and preview these native assemblies." : "Coordinated Quaternius parts with measured connections. Existing preserves your current design."}</small>
                   {([
                     ["corners", "Corner assemblies", KIT_CORNERS, ["No extra corner columns", "Solid matching corner columns"]],
                     ["roofline", "Connected roofline", KIT_ROOFLINES, ["Existing trim", "Restrained metal edge", "Classical masonry cornice", "Industrial metal cornice"]],
@@ -822,7 +912,7 @@ export function CityBuildingDesigner(
                   </select></label>)}
                   <label><input type="checkbox" checked={d.architecturalKit?.entranceSteps ?? !!d.architecturalKit?.entrance?.startsWith("grand-")} onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,entranceSteps:e.target.checked}})}/>Entrance steps (native entrance presets)</label>
                   {([["connectedPlanters","Connected planter runs"],["stairRails","Matching side-stair railings"],["ornaments","Restrained facade ornaments"],["rooftopUnits","Small rooftop AC unit"]] as const).map(([key,label])=><label key={key}>
-                    <input type="checkbox" checked={!!d.architecturalKit?.[key]} onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,[key]:e.target.checked},finish:d.finish==="procedural"?"accents":d.finish})}/>{label}
+                    <input type="checkbox" checked={!!d.architecturalKit?.[key]} onChange={e=>commit({...d,architecturalKit:{...d.architecturalKit,[key]:e.target.checked},...((e.target.value==="spiral" || e.target.value==="straight")?{roof:"flat" as const,roofVariant:"standard" as const,architecturalKit:{...d.architecturalKit,roof:"existing" as const}}:{finish:d.finish==="procedural"?"accents" as const:d.finish})})}/>{label}
                   </label>)}
                   <small>Details appear close up; structural roof and frontage remain at medium distance. Unsupported slate roofs keep the ordinary roof and retain your selection. Side-stair railings require a fitted side-stair extension. AC units fit flat, clear roofs only.</small>
                   {assemblyStatus.kitNotes.map(note=><small key={note}>{note}</small>)}
@@ -836,10 +926,11 @@ export function CityBuildingDesigner(
                   </select>
                 </label>
                 <label><input type="checkbox" checked={!!d.solidSideWalls} onChange={e=>commit({...d,solidSideWalls:e.target.checked,finish:e.target.checked?"facade":d.finish})}/>Solid side walls with native panels</label>
-                <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,finish:d.finish==="procedural"?"accents":d.finish})}>
-                  <option value="none">None</option><option value="fire-escape">Multi-storey apartment fire escape</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
+                <label>Procedural window family<select aria-label="Procedural window family" value={d.windowFamily || "automatic"} onChange={e=>commit({...d,windowFamily:e.target.value as typeof d.windowFamily,finish:"procedural",generatorRevision:d.generatorRevision==="city-connected-3"?"city-connected-3":"city-shell-2"})}>{WINDOW_FAMILIES.map(f=><option key={f} value={f}>{f}</option>)}</select></label>
+                <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,...((e.target.value==="spiral" || e.target.value==="straight")?{roof:"flat" as const,roofVariant:"standard" as const,architecturalKit:{...d.architecturalKit,roof:"existing" as const}}:{finish:d.finish==="procedural"?"accents" as const:d.finish})})}>
+                  <option value="none">None</option><option value="straight">Straight apartment stairs with landings</option><option value="spiral">Spiral roof-access stairs</option><option value="fire-escape">Multi-storey apartment fire escape</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
                 </select></label>
-                {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || (d.stairExtension === "fire-escape" ? "The stair side is flattened across storeys. Other setbacks remain; switching stairs off restores your original shape." : "Decorative side access. Placement preserves the entrance, signs and plot boundary.")}</small>}
+                {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || ((d.stairExtension === "spiral" || d.stairExtension === "straight") ? "Full-height exterior stairs reach the flat roof. Its side is aligned and reserved; selecting it changes the roof to flat." : d.stairExtension === "fire-escape" ? "The stair side is flattened across storeys. Other setbacks remain; switching stairs off restores your original shape." : "Decorative side access. Placement preserves the entrance, signs and plot boundary.")}</small>}
                 <small>Accents add entrances with solid architectural trim. Façade mode builds a native panel shell with connected corners, floor tiles and door openings; accent placement does not limit structural coverage. Windows retain uniform proportions; plain infill panels fit the remaining spans. Unsupported roof shapes retain generated geometry.</small>
                 {d.finish !== "procedural" && (
                   <small>
@@ -861,7 +952,7 @@ export function CityBuildingDesigner(
                     <option value="flat">Flat</option>
                     <option value="parapet">Parapet</option>
                     <option value="planted">Planted terrace</option>
-                    <option value="pitched" disabled={d.blueprint !== "office" || d.massing === "hall-wings"}>
+                    <option value="pitched" disabled={d.generatorRevision!=="city-connected-3" && (d.blueprint !== "office" || d.massing === "hall-wings")}>
                       Pitched (rectangular office only)
                     </option>
                     {roofVariants(d).includes("hip") && <option value="hip">Hip roof</option>}
@@ -897,6 +988,7 @@ export function CityBuildingDesigner(
                   Façade variation {d.facadeSeed}{" "}
                   · Shape and brand colours stay fixed.
                 </small>
+                </fieldset>
               </div>
             )}
             {tab === "Advertising" && (

@@ -23,8 +23,9 @@ test("compatible roof variants preserve building mass and keep all features with
       const r = resolveV3({...d,roofVariant}, "#446655");
       assert.deepEqual(r.masses,resolveV3(d,"#446655").masses);
       for (const p of r.parts) {
-        assert.ok(Math.abs(p.position[0])+p.size[0]/2 <= 11.8);
-        assert.ok(Math.abs(p.position[2])+p.size[2]/2 <= 11.8);
+        const c=Math.abs(Math.cos(p.rotation||0)),s=Math.abs(Math.sin(p.rotation||0));
+        assert.ok(Math.abs(p.position[0])+(p.size[0]*c+p.size[2]*s)/2 <= 11.8);
+        assert.ok(Math.abs(p.position[2])+(p.size[2]*c+p.size[0]*s)/2 <= 11.8);
       }
       if (roofVariant !== "standard") assert.ok(!r.slots.find(s => s.id === "brand.roof")?.active);
     }

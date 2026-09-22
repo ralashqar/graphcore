@@ -21,29 +21,16 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    #endif
    citySurfacePosition = (modelMatrix * cityPoint).xyz;
    #include <project_vertex>`);
-  shader.fragmentShader = `varying vec3 citySurfacePosition;
-   float cityHash(vec3 p) {
-    p=fract(p*0.1031);p+=dot(p,p.yzx+33.33);
-    return fract((p.x+p.y)*p.z);
-   }
-   float cityGrain(vec3 p) {
-    vec3 cell=floor(p),f=fract(p);
-    f=f*f*f*(f*(f*6.0-15.0)+10.0);
-    return mix(mix(mix(cityHash(cell),cityHash(cell+vec3(1,0,0)),f.x),
-     mix(cityHash(cell+vec3(0,1,0)),cityHash(cell+vec3(1,1,0)),f.x),f.y),
-     mix(mix(cityHash(cell+vec3(0,0,1)),cityHash(cell+vec3(1,0,1)),f.x),
-     mix(cityHash(cell+vec3(0,1,1)),cityHash(cell+vec3(1,1,1)),f.x),f.y),f.z);
-   }
-  ` + shader.fragmentShader;
+  shader.fragmentShader = "varying vec3 citySurfacePosition;\n" + shader.fragmentShader;
   if(textures.length){
    Object.assign(shader.uniforms,{cityAlbedo:{value:textures[0]},cityRoughness:{value:textures[1]},cityTextureReady:ready});
    shader.fragmentShader=`uniform sampler2D cityAlbedo; uniform sampler2D cityRoughness; uniform float cityTextureReady;
-    vec4 citySample(sampler2D tex,vec3 p,vec3 weights){return texture2D(tex,p.zy)*weights.x+texture2D(tex,p.xz)*weights.y+texture2D(tex,p.xy)*weights.z;}
+    vec4 citySample(sampler2D tex,vec3 p,vec3 weights,float distanceToCamera){if(distanceToCamera>100.0){if(weights.x>weights.y && weights.x>weights.z)return texture2D(tex,p.zy);if(weights.y>weights.z)return texture2D(tex,p.xz);return texture2D(tex,p.xy);}return texture2D(tex,p.zy)*weights.x+texture2D(tex,p.xz)*weights.y+texture2D(tex,p.xy)*weights.z;}
    `+shader.fragmentShader;
    shader.fragmentShader=shader.fragmentShader.replace("#include <color_fragment>",`#include <color_fragment>
     vec3 cityWeights=pow(abs(inverseTransformDirection(normalize(vNormal),viewMatrix)),vec3(8.0));cityWeights/=max(.0001,cityWeights.x+cityWeights.y+cityWeights.z);
-    vec4 citySurfaceData=citySample(cityRoughness,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights);
-    diffuseColor.rgb=mix(diffuseColor.rgb,citySample(cityAlbedo,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights).rgb*diffuseColor.rgb,cityTextureReady);
+    vec4 citySurfaceData=citySample(cityRoughness,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights,length(vViewPosition));
+    diffuseColor.rgb=mix(diffuseColor.rgb,citySample(cityAlbedo,citySurfacePosition/${preset.meters.toFixed(2)},cityWeights,length(vViewPosition)).rgb*diffuseColor.rgb,cityTextureReady);
    `);
    shader.fragmentShader=shader.fragmentShader.replace("#include <roughnessmap_fragment>",`#include <roughnessmap_fragment>
     roughnessFactor=mix(roughnessFactor,clamp(citySurfaceData.g,.15,1.0),cityTextureReady);
@@ -71,10 +58,6 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
     // Keep a blue-grey body colour even when the authored brand palette is dark.
     diffuseColor.rgb = mix(vec3(0.10, 0.17, 0.20), diffuseColor.rgb * 0.35, 0.20);
    ` : `
-    float grain = cityGrain(citySurfacePosition*3.7+vec3(13.2,7.1,2.6))-.5;
-    float fade = 1.0-smoothstep(25.0,85.0,length(vViewPosition));
-    float pixelFade=1.0-smoothstep(.15,.6,length(fwidth(citySurfacePosition*3.7)));
-    diffuseColor.rgb *= 1.0 + grain * 0.025 * fade * pixelFade;
    `}`);
   if (glass) shader.fragmentShader = shader.fragmentShader.replace("#include <opaque_fragment>", `
    vec3 glassView = normalize(vViewPosition);
@@ -92,6 +75,6 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
    #include <opaque_fragment>
   `);
  };
- material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-5-"+textureId;
+ material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-6-"+textureId;
  return material;
 }

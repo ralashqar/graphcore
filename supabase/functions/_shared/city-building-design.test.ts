@@ -180,3 +180,50 @@ Deno.test("multi-storey exterior stairs persist independently from entrance step
  const recipe={...newDesign("escape"),stairExtension:"fire-escape"};
  assert.deepEqual(buildingDesignSchema.parse(recipe),recipe);
 });
+Deno.test("connected shell recipes and all compositions survive the shared save boundary", async () => {
+ const {COMPOSITIONS,applyComposition,newDesign}=await import("../../../src/domain/cityBuildingV3.ts");
+ for(let i=0;i<COMPOSITIONS.length;i++){
+  const d=applyComposition(newDesign("validation"),i);
+  assert.deepEqual(buildingDesignSchema.parse(d),d,COMPOSITIONS[i].name);
+ }
+ const legacy={...newDesign("old"),generatorRevision:"city-grammar-1"};
+ const parsed=buildingDesignSchema.parse(legacy);
+ assert.ok(parsed.version===3);
+ if(parsed.version===3)assert.equal(parsed.generatorRevision,"city-grammar-1");
+ assert.throws(()=>buildingDesignSchema.parse({...legacy,generatorRevision:"unknown"}));
+});
+Deno.test("window families and spiral access survive strict recipe validation",async()=>{
+ const {newDesign}=await import("../../../src/domain/cityBuildingV3.ts");
+ const {WINDOW_FAMILIES}=await import("../../../src/domain/cityWindowFamilies.ts");
+ for(const windowFamily of WINDOW_FAMILIES)for(const stairExtension of ["spiral","straight"]){
+  const design={...newDesign("details"),windowFamily,stairExtension};
+  assert.deepEqual(buildingDesignSchema.parse(design),design);
+ }
+ assert.throws(()=>buildingDesignSchema.parse({...newDesign("details"),windowFamily:"untrusted-model"}));
+});
+Deno.test("curated door recipes round-trip and reject unknown styles",async()=>{
+ const {newDesign}=await import("../../../src/domain/cityBuildingV3.ts");
+ const {DOOR_FAMILIES,DOOR_SURROUNDS}=await import("../../../src/domain/cityProceduralEntrances.ts");
+ for(const doorFamily of DOOR_FAMILIES)for(const doorSurround of DOOR_SURROUNDS){const d={...newDesign("doors"),doorFamily,doorSurround,doorTransom:true};assert.deepEqual(buildingDesignSchema.parse(d),d);}
+ assert.throws(()=>buildingDesignSchema.parse({...newDesign("doors"),doorFamily:"external-script"}));
+});
+
+Deno.test("connected residential recipes round-trip and reject unsafe assembly inputs",async()=>{
+ const {COMPOSITIONS,applyComposition,newDesign}=await import("../../../src/domain/cityBuildingV3.ts");
+ for(let i=0;i<COMPOSITIONS.length;i++)if(COMPOSITIONS[i].patch.base==="residential"){
+  const d=applyComposition(newDesign("home"),i);assert.deepEqual(buildingDesignSchema.parse(d),d);
+  assert.throws(()=>buildingDesignSchema.parse({...d,connectedArchitecture:{roofPitch:90}}));
+  assert.throws(()=>buildingDesignSchema.parse({...d,connectedArchitecture:{dormers:20}}));
+  assert.throws(()=>buildingDesignSchema.parse({...d,generatorRevision:"city-shell-2"}));
+ }
+});
+
+Deno.test("connected office presets round trip and reject incompatible revisions/options",async()=>{
+ const {COMPOSITIONS,applyComposition,newDesign}=await import("../../../src/domain/cityBuildingV3.ts");
+ for(let i=0;i<COMPOSITIONS.length;i++)if(COMPOSITIONS[i].patch.generatorRevision==="city-office-4"){
+  const d=applyComposition(newDesign("office-schema"),i);assert.deepEqual(buildingDesignSchema.parse(d),d);
+  assert.equal(buildingDesignSchema.safeParse({...d,generatorRevision:"city-shell-2"}).success,false);
+  assert.equal(buildingDesignSchema.safeParse({...d,officeArchitecture:{bridgeFloor:99}}).success,false);
+  assert.equal(buildingDesignSchema.safeParse({...d,officeArchitecture:{script:"bad"}}).success,false);
+ }
+});

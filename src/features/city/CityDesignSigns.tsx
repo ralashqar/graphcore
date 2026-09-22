@@ -1,3 +1,4 @@
+import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -8,8 +9,8 @@ import {
   SRGBColorSpace,
 } from "three";
 import type { CityProperty } from "../../domain/city";
-import { resolveDesign } from "../../domain/cityBuildingV2";
-import { type DesignSign, resolveV3 } from "../../domain/cityBuildingV3";
+import { cachedCitySigns } from "./cityDesignCache";
+import { type DesignSign } from "../../domain/cityBuildingV3";
 import { Batch, type Instance } from "./CityInstances";
 import { useCityMapLayout } from "./CityMapLayout";
 export function CityDesignSigns({
@@ -32,13 +33,7 @@ export function CityDesignSigns({
       properties.flatMap((p) => {
         const d = p.profile.buildingDesign;
         if (!d || d.version === 1 || p.profile.buildingArt) return [];
-        const signs: DesignSign[] = d.version === 3
-          ? resolveV3(d, p.profile.color, "far").signs
-          : [{
-            ...resolveDesign(d, p.profile.color, "far").sign,
-            rotation: 0,
-            campaign: false,
-          }];
+        const signs: DesignSign[] = cachedCitySigns(d,p.profile.color,CITY_LIGHT_MODE);
         return signs.map((designSign) => ({ ...p, designSign }));
       }).slice(0, 2000),
     [properties],
