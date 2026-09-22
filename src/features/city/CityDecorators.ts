@@ -1,3 +1,4 @@
+import {isOpenArchitecturalTrim,solidifyCityTrim} from "./CitySolidTrim";
 import { nativeSurfaceMaterial } from "./CityNativeMaterial";
 import { closeNativePanel, recessNativeFloorSides } from "./CityNativePanelGeometry";
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
@@ -56,6 +57,10 @@ export function loadDecorators(): Promise<DecoratorPack> {
             if(closed!==geometry){geometry.dispose();geometry=closed;}
           }
           if(root.name === "Floor_4x4"){const recessed=recessNativeFloorSides(geometry);geometry.dispose();geometry=recessed;}
+          if(isOpenArchitecturalTrim(root.userData.assetKey || root.name)){
+            const closed=solidifyCityTrim(geometry);
+            if(closed!==geometry){geometry.dispose();geometry=closed;}
+          }
           geometry.computeBoundingBox();
           pieces.push({ geometry, material });
         });

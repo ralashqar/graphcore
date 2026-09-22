@@ -811,7 +811,7 @@ export function CityBuildingDesigner(
                   <legend>Architectural assemblies</legend>
                   <small>Coordinated Quaternius parts with measured connections. Existing preserves your current design.</small>
                   {([
-                    ["corners", "Corner assemblies", KIT_CORNERS, ["Existing corners", "Continuous matching columns"]],
+                    ["corners", "Corner assemblies", KIT_CORNERS, ["No extra corner columns", "Solid matching corner columns"]],
                     ["roofline", "Connected roofline", KIT_ROOFLINES, ["Existing trim", "Restrained metal edge", "Classical masonry cornice", "Industrial metal cornice"]],
                     ["entrance", "Entrance assembly", KIT_ENTRANCES, ["Existing entrance", "Wood frame / Door 2", "Metal-brick frame / Door 3", "Grand marble / Door 4", "Grand concrete / Door 3"]],
                     ["frontage", "Storefront assembly", KIT_FRONTAGES, ["Existing frontage", "Cafe / recessed bays and awning", "Boutique / broad display glazing", "Department store / long canopy"]],

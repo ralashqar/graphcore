@@ -77,6 +77,11 @@ if(process.env.CITY_FIRE_ESCAPE_AUDIT === "1") {
  profile.buildingDesign=normalizeV3({...newDesign("escape-browser"),blueprint:"terraces",width:16,depth:12,podium:true,crown:"recessed",middleFloors:3,finish:"facade",slots:{},solidSideWalls:true});
  business.draft=structuredClone(profile);business.published=structuredClone(profile);
 }
+if(process.env.CITY_TRIM_AUDIT === "1") {
+ const {newDesign,normalizeV3}=await import("../src/domain/cityBuildingV3.ts");
+ profile.buildingDesign=normalizeV3({...newDesign("solid-trim"),blueprint:"office",width:14,depth:10,podium:false,crown:"none",middleFloors:2,architecture:"glass",detailSet:"metal",finish:"facade",slots:{},architecturalKit:{corners:"matching",roofline:"industrial"}});
+ business.draft=profile;business.preview=profile;
+}
 const errors = [];
 const browser = await chromium.launch({
   headless: true,
@@ -241,6 +246,19 @@ try {
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     assert.deepEqual(errors,[]);
     console.log("All 39 native modules, mocked save/reload, undo/redo and mobile layout passed.");
+    await browser.close();process.exit(0);
+  }
+  if(process.env.CITY_TRIM_AUDIT === "1") {
+    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    await page.waitForTimeout(1800);
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-solid-trim.png"});
+    await page.getByLabel("Corner assemblies",{exact:true}).selectOption({label:"No extra corner columns"});
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.architecturalKit.corners,"existing");
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('[aria-label="Corner assemblies"]')?.value === "existing");
+    assert.deepEqual(errors,[]);console.log("Solid corner/cornice rendering and no-extra-columns save/reload passed.");
     await browser.close();process.exit(0);
   }
   if (process.env.CITY_FIRE_ESCAPE_AUDIT === "1") {
