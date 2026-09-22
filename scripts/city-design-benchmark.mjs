@@ -38,6 +38,7 @@ try {
         : { width: 1440, height: 960 },
       deviceScaleFactor: mobile ? 2 : 1,
     });
+    if(process.env.CITY_SCENE_QUALITY)await context.addInitScript(quality=>localStorage.setItem("city-scene-look-v1",JSON.stringify({look:"daylight",quality})),process.env.CITY_SCENE_QUALITY);
     const page = await context.newPage(),
       errors = [];
     page.on("pageerror", (e) => errors.push(e.message));

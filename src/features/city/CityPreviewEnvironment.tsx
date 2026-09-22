@@ -1,3 +1,4 @@
+import { CityEnvironment } from "./CityEnvironment";
 import { useEffect, useMemo } from "react";
 import { BoxGeometry, CircleGeometry } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -30,17 +31,7 @@ export function CityPreviewEnvironment() {
   }, []);
   useEffect(() => () => Object.values(geometry).forEach((g) => g.dispose()), [geometry]);
   return <>
-    <fog attach="fog" args={["#c8deeb", 58, 118]} />
-    <hemisphereLight args={["#dcefff", "#78816c", .85]} />
-    <ambientLight intensity={.35} color="#fff5e4" />
-    <directionalLight
-      position={[-24, 42, 28]} color="#fff0d5" intensity={2.5} castShadow
-      shadow-mapSize={[1024, 1024]} shadow-bias={-.0002} shadow-normalBias={.035}
-      shadow-camera-left={-32} shadow-camera-right={32}
-      shadow-camera-top={38} shadow-camera-bottom={-24}
-      shadow-camera-near={1} shadow-camera-far={110}
-    />
-    <directionalLight position={[25, 16, -22]} color="#c5ddff" intensity={.45} />
+    <CityEnvironment preview/>
     <mesh geometry={geometry.grass} receiveShadow><meshLambertMaterial color="#9bad85" /></mesh>
     <mesh geometry={geometry.roads} receiveShadow><meshLambertMaterial color="#67737a" /></mesh>
     <mesh geometry={geometry.kerbs} receiveShadow><meshLambertMaterial color="#d6d7ce" /></mesh>

@@ -2,6 +2,10 @@
 
 This document outlines the AI agents and autonomous systems that power GraphCore's content generation, game authoring, and UGC creation capabilities.
 
+## City lighting and reflection budgets (September 2026)
+
+City map, preview and driving share three local scene looks with AgX colour response, sky/haze and canvas-scoped prefiltered glass reflections. Balanced quality adds instanced footprint grounding; optional High quality uses a 1024px sun shadow map with at most 24 nearby simplified building casters. Detailed building batches receive but no longer cast shadows. Restricting environment sampling to glass preserves the previous 400-property desktop p95 (50 ms in the measured Intel UHD setup); physical-mobile validation is pending. No business recipe, backend/provider or deployment change. See [docs/city-scene-lighting.md](docs/city-scene-lighting.md) for controls, evidence and limitations.
+
 ## Connected office envelopes (September 2026)
 
 Opt-in v3 revision `city-office-4` adds six procedural office compositions, shared-floor skybridges, arc-length spaced faceted curved facades, setback towers and glazed atrium campuses. Curated `officeArchitecture` choices are strict shared-profile data; legacy recipes retain their resolver. Editor controls, thumbnails, demo fixtures and shared instancing use the same envelope geometry. No migration or provider changes. Matching City endpoints and profile-consuming world worker `2026-09-22-city-design-3.18` require designated staging rollout, which remains unspecified; no production activation. Native replacements and non-integrated attachments remain unavailable on these new envelopes. Details and verification: docs/city-office-architecture.md.

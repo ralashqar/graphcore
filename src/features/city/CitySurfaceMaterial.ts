@@ -1,8 +1,8 @@
 import { CITY_TEXTURES, type CityTextureId } from "../../domain/cityTexturePresets";
 import { MeshStandardMaterial, TextureLoader, RepeatWrapping, SRGBColorSpace } from "three";
-/** Shared instancing-compatible surfaces; packed local maps, no shadow maps. */
+/** Shared instancing-compatible surfaces; packed local maps and optional shared glass reflections. */
 export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "none", onReady?:()=>void) {
- const material = new MeshStandardMaterial({color:"#ffffff",roughness:glass?.08:.85,metalness:glass?.05:textureId==="metal"?.65:0});
+ const material = new MeshStandardMaterial({color:"#ffffff",roughness:glass?.14:.85,envMapIntensity:glass?2.0:.45,metalness:glass?.45:textureId==="metal"?.65:0});
  const preset=CITY_TEXTURES[textureId];
  const ready={value:0};let loaded=0,disposed=false;
  const textures=preset.asset ? ["Color","Surface"].map(role=>{
@@ -50,31 +50,17 @@ export function citySurfaceMaterial(glass = false, textureId: CityTextureId = "n
   `);
   if (glass) shader.fragmentShader = shader.fragmentShader.replace("#include <roughnessmap_fragment>", `
    #include <roughnessmap_fragment>
-   roughnessFactor = 0.08;
+   roughnessFactor = 0.14;
   `);
   shader.fragmentShader = shader.fragmentShader.replace("#include <color_fragment>", `
    #include <color_fragment>
    ${glass ? `
     // Keep a blue-grey body colour even when the authored brand palette is dark.
-    diffuseColor.rgb = mix(vec3(0.10, 0.17, 0.20), diffuseColor.rgb * 0.35, 0.20);
+    diffuseColor.rgb = mix(vec3(0.018, 0.045, 0.065), diffuseColor.rgb * 0.18, 0.20);
    ` : `
    `}`);
-  if (glass) shader.fragmentShader = shader.fragmentShader.replace("#include <opaque_fragment>", `
-   vec3 glassView = normalize(vViewPosition);
-   vec3 glassNormal = normalize(normal);
-   vec3 reflectedWorld = inverseTransformDirection(reflect(-glassView, glassNormal), viewMatrix);
-   float skyAmount = smoothstep(-0.16, 0.18, reflectedWorld.y);
-   vec3 sky = mix(vec3(0.57,0.68,0.72),vec3(0.13,0.32,0.50),smoothstep(0.0,0.85,reflectedWorld.y));
-   // Elevated city views reflect the ground, not the sky. A daylight
-   // ground/horizon keeps those panes readable without emission or shadow maps.
-   vec3 ground = mix(vec3(0.16,0.21,0.23),vec3(0.34,0.40,0.41),smoothstep(-1.0,0.0,reflectedWorld.y));
-   vec3 reflectedSky = mix(ground,sky,skyAmount);
-   float fresnel = 0.48 + 0.42 * pow(1.0-clamp(dot(glassNormal,glassView),0.0,1.0),5.0);
-   float sun = pow(max(0.0,dot(reflectedWorld,normalize(vec3(-120.0,240.0,80.0)))),160.0);
-   outgoingLight = mix(outgoingLight,reflectedSky,fresnel) + vec3(1.0,0.91,0.72)*sun*0.8;
-   #include <opaque_fragment>
-  `);
+
  };
- material.customProgramCacheKey = () => glass ? "city-glass-5" : "city-mineral-6-"+textureId;
+ material.customProgramCacheKey = () => glass ? "city-glass-environment-6" : "city-mineral-6-"+textureId;
  return material;
 }

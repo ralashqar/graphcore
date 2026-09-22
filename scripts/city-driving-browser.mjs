@@ -5,14 +5,17 @@ try {
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
  page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
  page.on("pageerror",e=>{errors.push(e.message);console.log("pageerror",e.message);});
+ if(process.env.CITY_SCENE_QUALITY)await page.addInitScript(quality=>localStorage.setItem("city-scene-look-v1",JSON.stringify({look:"daylight",quality})),process.env.CITY_SCENE_QUALITY);
  await page.goto(`${process.env.CITY_TEST_ORIGIN||"http://localhost:5183"}/city?demo=1`);
  await page.locator("canvas").waitFor();
  await page.getByRole("button",{name:"Drive mode",exact:true}).click();
  await page.getByRole("region",{name:"Driving controls"}).waitFor();
  await page.waitForFunction(()=>document.querySelector("canvas")?.dataset.cityDriving);
  const state=()=>page.locator("canvas").evaluate(el=>JSON.parse(el.dataset.cityDriving));
+ await page.waitForTimeout(process.env.CITY_SCENE_QUALITY === "high" ? 2500 : 0);
  const start=await state();
  assert.equal(await page.locator(".city-header").isVisible(),false);
+ assert.equal(await page.locator(".city-look-controls").count(),0);
  const residents=await page.locator("canvas").getAttribute("data-city-resident-count");
  const bounds=await page.locator("canvas").boundingBox();
  assert.ok(bounds.y===0 && bounds.height===1000);

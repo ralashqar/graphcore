@@ -40,10 +40,12 @@ export function Batch({
   reduced = false,
   animate = false,
   alphaMask,
+  castShadow = false,
 }: {
   pieces: Piece[];
   instances: Instance[];
   onSelect?: (p: CityProperty) => void;
+  castShadow?: boolean;
   reduced?: boolean;
   animate?: boolean;
   alphaMask?: (u: number, v: number) => boolean;
@@ -196,7 +198,7 @@ export function Batch({
             InstancedMesh.prototype.raycast.call(this, raycaster, hits);
             intersections.push(...hits.filter(hit => hit.uv && alphaMask(hit.uv.x, hit.uv.y)));
           } : undefined}
-          castShadow={animate}
+          castShadow={castShadow}
           receiveShadow
           onClick={
             onSelect

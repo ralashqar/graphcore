@@ -1,3 +1,5 @@
+import { useCityReflection } from "./cityReflections";
+import { CityBuildingGrounding } from "./CityBuildingGrounding";
 import { spiralRailPositions, spiralTreadPositions } from "../../domain/citySpiralStair";
 import { usePreparedCity } from "./usePreparedCity";
 import { CITY_LIGHT_MODE } from "./cityRenderMode";
@@ -49,6 +51,7 @@ function BuildingBatches(
   },
 ) {
   const invalidate=useThree(s=>s.invalidate);
+  const reflection=useCityReflection();
   const { plotAxis, plotSize } = useCityMapLayout();
   const [pack, setPack] = useState<DecoratorPack | null>(null);
   const needsPack = !CITY_LIGHT_MODE && properties.some((p) =>
@@ -123,6 +126,7 @@ function BuildingBatches(
     resources.material.dispose();
     resources.glass.dispose();
   }, [resources]);
+  useEffect(()=>{resources.glass.envMap=reflection;resources.glass.needsUpdate=true;invalidate();},[reflection,resources,invalidate]);
   const batches = useMemo(() => {
     const out: Record<string, Instance[]> = { box: [], tree: [], roof: [], column: [], pediment: [], hip: [], shed: [] };
     for (const p of properties) {
@@ -261,5 +265,5 @@ function BuildingBatches(
 
 export function CityDesignBuildings(props: Parameters<typeof BuildingBatches>[0]) {
  const prepared=usePreparedCity(props.properties,!!props.center);
- return <CityVisibility properties={prepared} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props} properties={prepared}/></CityVisibility>;
+ return <CityVisibility properties={prepared} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props} properties={prepared}/><CityBuildingGrounding properties={prepared} center={props.center} reduced={props.reduced}/></CityVisibility>;
 }

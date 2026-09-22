@@ -1,3 +1,4 @@
+import { CityEnvironment } from "./CityEnvironment";
 import { CityAdaptiveResolution } from "./CityAdaptiveResolution";
 import { CityDriving } from "./CityDriving";
 import { streamRadius } from "../../domain/cityStreaming";
@@ -509,16 +510,7 @@ function CitySceneContent({
           reduced={reduced}
           paused={driving || !!playback || launchFocus}
         />}
-        {presetDemo && <hemisphereLight args={["#dcefff", "#78816c", .85]} />}
-        <ambientLight intensity={presetDemo ? .35 : 1.5} color={presetDemo ? "#fff5e4" : "#ffffff"} />
-        <directionalLight
-          position={[-120, 240, 80]}
-          intensity={presetDemo ? 2.5 : 1.6}
-          color={presetDemo ? "#fff0d5" : "#ffffff"}
-
-        />
-        {presetDemo && <directionalLight position={[125, 80, -110]} color="#c5ddff" intensity={.45} />}
-        <fog attach="fog" args={[presetDemo ? "#c8deeb" : "#e4e5dc", driving ? 180 : 850, driving ? 420 : 1500]} />
+        <CityEnvironment driving={driving} lowPower={softwareRenderer}/>
         {!spriteMode && pavilion && <CityPavilion {...pavilion} />}
         {!spriteMode && (launches.length > 0 || launchFocus) && <CityLaunchPlaza items={launches} active={launchFocus && launchActivity && !playback}/>}
         {!living.storefronts && !markers &&

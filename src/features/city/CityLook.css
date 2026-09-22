@@ -1,0 +1,5 @@
+.city-look-controls{position:relative;font-size:12px;z-index:15;color:#263e36}.city-look-controls summary{cursor:pointer;padding:8px 12px;background:#f4f5ef;border:1px solid #c5cec1;border-radius:8px;white-space:nowrap}.city-look-controls>div{position:absolute;right:0;top:100%;margin-top:6px;width:250px;padding:14px;background:#f8f9f3;border:1px solid #c5cec1;border-radius:10px;box-shadow:0 8px 24px #19362826;display:grid;gap:12px}.city-look-controls label{display:grid;gap:5px}.city-look-controls select{width:100%;padding:7px;border-radius:5px;background:white;border:1px solid #bccbbc;color:#263e36}.city-look-controls small{line-height:1.45}.city-studio-toolbar .city-look-controls{margin-left:auto}@media(max-width:520px){.city-look-controls>div{width:220px}}
+.city-studio-toolbar .city-look-controls{margin-left:0}
+.city-studio-toolbar .city-look-controls>div{left:0;right:auto}
+.city-studio-toolbar .city-look-controls label{display:grid;align-items:stretch}
+@media(max-width:899px){.city-app .city-map-tools .city-look-controls>div{left:0;right:auto;top:auto;bottom:calc(100% + 6px)}}

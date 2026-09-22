@@ -158,11 +158,40 @@ try {
   });
   const page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.stack || e.message));
+  if(process.env.CITY_LIGHTING_AUDIT === "1") page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
   await page.goto(`${origin}/city/manage`);
   await page.getByRole("region", { name: "Live 3D building designer" })
     .waitFor();
   await page.locator(".city-design-canvas canvas").waitFor();
   await page.waitForTimeout(800);
+  if(process.env.CITY_LIGHTING_AUDIT === "1"){
+    page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
+    await page.locator(".city-look-controls summary").click();
+    for(const look of ["daylight","afternoon","overcast"]){
+      await page.getByLabel("Scene lighting",{exact:true}).selectOption(look);
+      await page.waitForTimeout(1000);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-light-${look}.png`});
+    }
+    for(const quality of ["fast","balanced","high"]){
+      await page.getByLabel("Scene quality",{exact:true}).selectOption(quality);
+      await page.waitForTimeout(1200);
+      await page.locator(".city-design-canvas").screenshot({path:`output/playwright/city-light-${quality}.png`});
+    }
+    await page.reload();
+    await page.locator(".city-look-controls summary").click();
+    assert.equal(await page.getByLabel("Scene lighting",{exact:true}).inputValue(),"overcast");
+    assert.equal(await page.getByLabel("Scene quality",{exact:true}).inputValue(),"high");
+    await page.getByLabel("Scene lighting",{exact:true}).selectOption("daylight");
+    await page.getByLabel("Scene quality",{exact:true}).selectOption("balanced");
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+    await page.locator(".city-look-controls").evaluate(el=>{el.open=true;});
+    const lightingPanel=page.locator(".city-look-controls>div");
+    const panelBounds=await lightingPanel.boundingBox();assert.ok(panelBounds.x>=0 && panelBounds.x+panelBounds.width<=390);
+    await lightingPanel.screenshot({path:"output/playwright/city-light-mobile-controls.png"});
+    assert.equal(saved,0,"Scene looks must not save or change the business recipe");
+    assert.deepEqual(errors,[]);console.log("Lighting looks, quality switching, persistence and mobile controls passed.");await browser.close();process.exit(0);
+  }
   if(process.env.CITY_KIT_AUDIT === "1"){
     page.on("console",m=>{if(m.type()==="error" && /shader|WebGL|GL_INVALID/i.test(m.text()))errors.push(m.text());});
     await page.waitForTimeout(2200);

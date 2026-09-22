@@ -1,3 +1,4 @@
+import { CityLookControls } from "./CityLook";
 import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../domain/cityProceduralEntrances";
 import { WINDOW_FAMILIES } from "../../domain/cityWindowFamilies";
 import { CITY_LIGHT_MODE } from "./cityRenderMode";
@@ -437,7 +438,7 @@ export function CityBuildingDesigner(
       {CITY_LIGHT_MODE && <p role="status">Light mode is on: the preview uses clean procedural geometry. Your saved finish choices are retained.</p>}
       <div className="city-building-workbench">
         <div className="city-studio-stage">
-          <div className="city-studio-toolbar">
+          <div className="city-studio-toolbar"><CityLookControls/>
             <button
               type="button"
               aria-pressed={view === "3d"}

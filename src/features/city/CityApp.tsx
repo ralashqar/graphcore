@@ -1,3 +1,4 @@
+import { CityLookControls } from "./CityLook";
 import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { BusinessLaunchHistory, LaunchBrowser, useLaunchPlaza } from "./CityLaunches";
 import {
@@ -1214,6 +1215,7 @@ export function CityApp() {
                   </aside>
                 )}
                 <div className="city-map-tools">
+                  {!driving && !directory && <CityLookControls/>}
                   {!directory && <button aria-pressed={driving} onClick={()=>{setDriving(v=>!v);explore();}}>{driving?"Map mode":"Drive mode"}</button>}
 
                   <button
