@@ -10,10 +10,12 @@ The runtime pack is 9,526,332 bytes (previously 9,203,212). Existing lazy loadin
 
 ## Fit rules
 
-At least two storeys, one continuous exposed side plane across every level, enough shared wall width and an unobstructed envelope inside the plot are required. Setbacks/podiums that break the plane retain the authored choice but show an unavailable explanation. Signs, active slots, other building masses and plot margins prevent placement. Projecting architectural decorations respect the reserved envelope. This does not cut new doors through every upper-floor wall.
+Selecting fire escape automatically forms a supported flat side core across all storeys and adds an upper storey if needed. Podiums and setbacks on the opposite side remain. The core is tessellated against the original masses, avoiding overlapping boxes, and reserves side clearance inside the plot. Conflicting signs/slots retain their authored selections but become inactive while the stairs need that space. Turning stairs off restores the authored footprint. Projecting architectural decorations respect the reserved envelope. This does not cut new doors through every upper-floor wall.
 
 ## Verification and rollout
 
-Geometry tests cover varying floor counts/lobby heights, exact landing elevations, one-storey/setback/plot/obstacle rejection and far-detail omission. Browser checks exercise native rendering and mocked draft save/reload. Shared schema tests preserve the new value.
+Geometry tests cover varying floor counts/lobby heights, exact landing elevations, one-storey/setback adaptation, reserved-plot bounds and obstacle rejection and far-detail omission. Browser checks exercise native rendering and mocked draft save/reload. Shared schema tests preserve the new value.
 
 No migration. Shared profile validation is consumed by city-api, city-command, city-building-art, city-reconcile, city-stripe-webhook and the Fly world worker through city-campus-worker. Worker revision: 2026-09-22-city-design-3.12. Matching staging rollout is pending designated targets; production/provider spending excluded.
+
+Demo fixtures now vary all architectural-kit groups (corners, rooflines, entrances, storefronts, compatible slate roofs, planters, rails, ornaments and rooftop units). Twelve of the default 72 buildings use fitted multi-storey stairs, including ranks 1, 9, 13, 25, 29 and 33; all 400 fixtures retain their facade coverage and plot limits.

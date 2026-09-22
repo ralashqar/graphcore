@@ -10,6 +10,14 @@ test("demo designs are stable, varied and bounded across a full city", () => {
  const designs = Array.from({length:400}, (_,i)=>demoBuildingDesign(i,"#506b58"));
  assert.deepEqual(new Set(designs.map(d => d.textures?.ground)), new Set(["pavers", "concrete", "grass-lawn", "grass-meadow", "grass-lush"]));
  assert.ok(designs.every(d => d.pavingPattern !== "checker"));
+ const earlyEscapes=designs.slice(0,40).filter(d=>d.stairExtension==="fire-escape");
+ assert.ok(earlyEscapes.length>=3);
+ for(const d of designs.filter(d=>d.stairExtension==="fire-escape")){
+  const r=resolveV3(d,"#506b58","medium");assert.equal(r.extensionReason,null);assert.ok(r.attachments.some(a=>a.role==="fire-escape"));
+ }
+ assert.equal(new Set(designs.map(d=>d.architecturalKit?.entrance)).size,5);
+ assert.equal(new Set(designs.map(d=>d.architecturalKit?.roofline)).size,4);
+ assert.equal(new Set(designs.map(d=>d.architecturalKit?.roof)).size,3);
  const facades = designs.filter(d => d.finish === "facade");
  assert.deepEqual(new Set(facades.map(d => d.nativeFacade)), new Set(NATIVE_FACADES.map(f => f.id)));
  assert.equal(new Set(facades.slice(0, NATIVE_FACADES.length).map(d => d.nativeFacade)).size, NATIVE_FACADES.length);

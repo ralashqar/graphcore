@@ -1,3 +1,4 @@
+import { KIT_CORNERS, KIT_ROOFLINES, KIT_ENTRANCES, KIT_FRONTAGES, KIT_ROOFS } from "./cityArchitecturalKit.ts";
 import { advertisingLayout } from "./cityAdvertising.ts";
 import { buildingMasses } from "./cityBuildingDesign.ts";
 import { buildingSlots } from "./cityBuildingV3.ts";
@@ -72,6 +73,14 @@ export function demoBuildingDesign(index: number, color: string) {
   }
   result.solidSideWalls = index % 4 === 0;
   result.stairExtension = result.finish === "procedural" || index % 3 !== 0 ? "none" : index % 2 ? "marble" : "concrete";
+  const kitPick=<T,>(values:readonly T[],salt:string)=>values[identitySeed(`city-demo-kit:${index}:${salt}`)%values.length];
+  result.architecturalKit={corners:kitPick(KIT_CORNERS,"corners"),roofline:kitPick(KIT_ROOFLINES,"roofline"),entrance:kitPick(KIT_ENTRANCES,"entrance"),frontage:kitPick(KIT_FRONTAGES,"frontage"),roof:result.blueprint==="office" && result.massing!=="hall-wings"?kitPick(KIT_ROOFS,"roof"):"existing",entranceSteps:index%3===1,connectedPlanters:index%2===0,stairRails:index%3!==0,ornaments:index%4===0,rooftopUnits:index%5===0};
+  // Guaranteed early-ring examples, preserving the existing facade shuffled bag.
+  if(result.finish!=="procedural" && index%4===0){
+    result.stairExtension="fire-escape";
+    if(result.middleFloors===0 && result.crown==="none")result.middleFloors=1;
+    Object.assign(result,normalizeV3(result));
+  }
   result.advertising = { placements: [], width: pick([6, 8, 10, 12]), height: pick([3, 4, 5]), style: pick(["image", "text"] as const) };
   const masses = buildingMasses(result);
   const available = advertisingLayout(result, masses, buildingSlots(result, masses)).fits.filter(f => !f.reason);

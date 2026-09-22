@@ -18,11 +18,13 @@ test("native fire escape connects floor-height landings through the roof",()=>{
   assert.equal(resolveV3(d,"#778899","far").attachments.filter(a=>a.role==="fire-escape").length,0);
  }
 });
-test("fire escape rejects setbacks, one storey and blocked plot space",()=>{
- assert.ok(resolveV3({...design(),middleFloors:0},"#778899").extensionReason);
- assert.ok(resolveV3({...design(),podium:true},"#778899").extensionReason);
+test("fire escape adapts setbacks, one storey and wide plots but rejects blocked space",()=>{
+ assert.equal(resolveV3({...design(),middleFloors:0},"#778899").extensionReason,null);
+ assert.equal(normalizeV3({...design(),middleFloors:0}).middleFloors,1);
+ assert.ok(resolveV3({...design(),finish:"procedural"},"#778899").attachments.some(a=>a.role==="fire-escape"));
+ assert.equal(resolveV3({...design(),podium:true},"#778899").extensionReason,null);
  const m=massesV3(design());assert.ok(fireEscape(exposedWalls(m),m,[{position:[0,10,0],size:[24,40,24]}]).reason);
- assert.ok(resolveV3({...design(),width:20},"#778899").extensionReason);
+ assert.equal(resolveV3({...design(),width:20},"#778899").extensionReason,null);
 });
 
  test("exported stair meshes stay inside their reserved plot envelope",async()=>{
@@ -42,5 +44,17 @@ test("fire escape rejects setbacks, one storey and blocked plot space",()=>{
     }
    }
   }
+ }
+});
+
+test("every footprint gets a supported flat stair side without overlapping masses",()=>{
+ for(const blueprint of ["office","terraces","courtyard","l-shape"] as const)for(const crown of ["none","recessed","penthouse","terrace"] as const)for(const width of [8,20]){
+  const d=normalizeV3({...design(),blueprint,crown,podium:true,width,depth:10,setback:2,crownSetback:2});
+  const m=massesV3(d),r=resolveV3(d,"#778899");assert.equal(r.extensionReason,null,`${blueprint}/${crown}/${width}`);
+  for(let i=0;i<m.length;i++)for(let j=i+1;j<m.length;j++)if(m[i].y===m[j].y){
+   const a=m[i],b=m[j];assert.ok(Math.abs(a.x-b.x)>=(a.width+b.width)/2-.001 || Math.abs(a.z-b.z)>=(a.depth+b.depth)/2-.001);
+  }
+  const original=massesV3({...d,stairExtension:"none"});
+  assert.deepEqual(massesV3({...d,stairExtension:"none"}),original);
  }
 });

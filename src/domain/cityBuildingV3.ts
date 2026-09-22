@@ -1,4 +1,4 @@
-import { fireEscape, type EscapeBounds } from "./cityFireEscape.ts";
+import { fireEscape, flattenEscapeSide, type EscapeBounds } from "./cityFireEscape.ts";
 import { attachmentBounds, architecturalDetails, kitEntrance, kitRoofReason, type ArchitecturalKit } from "./cityArchitecturalKit.ts";
 import { KIT_DIMENSIONS } from "./cityKitDimensions.ts";
 import { nativeFacadeChoice, type NativeFacadeId } from "./cityNativeFacades.ts";
@@ -155,13 +155,15 @@ export function upgradeV3(
   });
 }
 export function normalizeV3(d: CityBuildingDesignV3): CityBuildingDesignV3 {
+  const middleFloors=d.stairExtension==="fire-escape" && d.crown==="none" ? Math.max(1,d.middleFloors) : d.middleFloors;
   return {
     ...d,
     ...normalizeDesign({ ...d, version: 2 }),
     version: 3,
     width: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 12, d.finish === "procedural" ? d.width : Math.round(d.width / 2) * 2),
     depth: Math.max(d.blueprint === "office" && d.massing !== "hall-wings" ? 8 : 10, d.finish === "procedural" ? d.depth : Math.round(d.depth / 2) * 2),
-    floors: 1 + d.middleFloors + (d.crown === "none" ? 0 : 1),
+    middleFloors,
+    floors: 1 + middleFloors + (d.crown === "none" ? 0 : 1),
     canopy: d.slots["canopy.entrance"] === "canopy",
     ...(d.roofVariant && !roofVariants(d).includes(d.roofVariant) ? {roofVariant:"standard" as const} : {}),
     ...(d.massing === "hall-wings" && d.roof === "pitched" ? {roof:"parapet" as const} : {}),
@@ -319,7 +321,7 @@ export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
       }
     }
   }
-  return result;
+  return n.stairExtension === "fire-escape" ? flattenEscapeSide(result) : result;
 }
 export function classifyCorners(masses: BuildingMass[]): Corner[] {
   const walls = exposedWalls(masses), seen = new Map<string, Corner>();
@@ -463,6 +465,7 @@ export function buildingSlots(
         : null,
     );
   }
+  const escapeClearance=d.stairExtension==="fire-escape"?fireEscape(exposedWalls(masses),masses,[]).bounds:null;
   const occupied: Slot[] = [];
   for (const slot of slots) {
     if (
@@ -489,6 +492,7 @@ export function buildingSlots(
       occupied.some((other) => overlaps(slot, other))
     ) slot.reason = "Another selected attachment occupies this space.";
     if (!slot.reason && structure.envelope && slot.id !== "brand.entrance" && overlaps(slot, structure.envelope)) slot.reason = "The entrance structure needs this clearance.";
+    if(!slot.reason && escapeClearance && overlaps(slot,escapeClearance))slot.reason="The exterior stairs reserve this side. Your selection is retained.";
     slot.active = !!slot.selected && !slot.reason;
     if (slot.active) occupied.push(slot);
   }
@@ -616,7 +620,7 @@ export function resolveV3(
     ...slots.filter(s=>s.active).map(s=>({position:s.position,size:s.size})),
     ...advertising.signs.map(s=>({position:[s.x,s.y,s.z],size:[s.rotation?.6:s.width,s.height,s.rotation?s.width:.6]} as EscapeBounds)),
   ]) : null;
-  if(escape)extensionReason=d.finish==="procedural"?"Choose Quaternius accents or facade for exterior stairs.":escape.reason;
+  if(escape)extensionReason=escape.reason;
   const surface =
     { garden: "#8c9d77", limestone: "#d5ceba", slate: "#7b8587" }[d.tile];
   box(0, .05, 0, 23.5, .24, 23.5, p.trim);
@@ -1061,7 +1065,7 @@ export function resolveV3(
   parts.push(...kitResult.parts);
   attachments.push(...kitResult.attachments);
   parts.push(...advertising.parts);
-  if(escape?.bounds && d.finish!=="procedural" && lod!=="far") {
+  if(escape?.bounds && lod!=="far") {
     // The stair envelope owns projecting decoration, never structural wall panels.
     for(let i=attachments.length-1;i>=0;i--) {
       const a=attachments[i];

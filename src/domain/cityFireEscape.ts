@@ -39,5 +39,30 @@ export function fireEscape(walls: Wall[], masses: BuildingMass[], obstacles: Esc
    return {attachments,bounds,reason:null};
   }
  }
- return empty("Needs a continuous flat side wall across all storeys, with clear space inside the plot. Reduce the footprint or remove setbacks/podium on that side.");
+ return empty("Needs a continuous flat side wall across all storeys, with clear space inside the plot. Remove conflicting attachments or increase the available plot clearance.");
+}
+
+/** A supported side core joins every storey. Clip the original rectangles against it
+ * so the adapted shape has no overlapping boxes or internal facade surfaces. */
+export function flattenEscapeSide(masses: BuildingMass[]): BuildingMass[] {
+ if(new Set(masses.map(m=>m.y)).size<2)return masses;
+ const levels=[...new Set(masses.map(m=>m.y))].sort((a,b)=>a-b);
+ const right=Math.min(8.1,Math.max(...masses.filter(m=>m.y===levels[0]).map(m=>m.x+m.width/2)));
+ const left=Math.min(right-2,...levels.map(y=>Math.max(...masses.filter(m=>m.y===y).map(m=>m.x+m.width/2))-1));
+ const z0=-3.3,z1=3.3,out:BuildingMass[]=[];
+ for(const y of levels){
+  const floor=masses.filter(m=>m.y===y);
+  const add=(m:BuildingMass,x0:number,x1:number,a:number,b:number)=>{
+   if(x1-x0>.001 && b-a>.001)out.push({...m,x:(x0+x1)/2,z:(a+b)/2,width:x1-x0,depth:b-a});
+  };
+  for(const m of floor){
+   const x0=m.x-m.width/2,x1=Math.min(right,m.x+m.width/2),a=m.z-m.depth/2,b=m.z+m.depth/2;
+   if(x1<=left || b<=z0 || a>=z1){add(m,x0,x1,a,b);continue;}
+   add(m,x0,Math.min(left,x1),a,b);
+   add(m,Math.max(left,x0),x1,a,Math.min(b,z0));
+   add(m,Math.max(left,x0),x1,Math.max(a,z1),b);
+  }
+  add(floor[0],left,right,z0,z1);
+ }
+ return out;
 }

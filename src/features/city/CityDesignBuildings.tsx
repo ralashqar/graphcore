@@ -76,7 +76,7 @@ export function CityDesignBuildings(
   const needsPack = properties.some((p) =>
     !p.profile.buildingArt &&
     p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
-    p.profile.buildingDesign.finish !== "procedural"
+    (p.profile.buildingDesign.finish !== "procedural" || (p.profile.buildingDesign.version === 3 && p.profile.buildingDesign.stairExtension === "fire-escape"))
   );
   useEffect(() => {
     let live = true;
@@ -146,7 +146,7 @@ export function CityDesignBuildings(
       const resolved = d.version !== 1
         ? resolveCurrent(d, p.profile.color, lod)
         : null;
-      const kit = pack && d.version !== 1 && (lod === "near" || (d.version === 3 && lod === "medium")) && d.finish !== "procedural";
+      const kit = pack && d.version !== 1 && (lod === "near" || (d.version === 3 && lod === "medium")) && (d.finish !== "procedural" || (d.version === 3 && d.stairExtension === "fire-escape"));
       const legacyComplete = kit && resolved?.attachments.every(a => pack.has(a.asset));
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {

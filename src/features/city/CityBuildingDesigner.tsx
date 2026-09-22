@@ -839,7 +839,7 @@ export function CityBuildingDesigner(
                 <label>Side stairs<select aria-label="Side stairs" value={d.stairExtension || "none"} onChange={e=>commit({...d,stairExtension:e.target.value as typeof d.stairExtension,finish:d.finish==="procedural"?"accents":d.finish})}>
                   <option value="none">None</option><option value="fire-escape">Multi-storey apartment fire escape</option><option value="concrete">Concrete steps and landing</option><option value="marble">Marble steps and landing</option>
                 </select></label>
-                {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || "Decorative side access. Placement preserves the entrance, signs and plot boundary."}</small>}
+                {d.stairExtension && d.stairExtension!=="none" && <small>{assemblyStatus.extensionReason || (d.stairExtension === "fire-escape" ? "The stair side is flattened across storeys. Other setbacks remain; switching stairs off restores your original shape." : "Decorative side access. Placement preserves the entrance, signs and plot boundary.")}</small>}
                 <small>Accents add entrances with solid architectural trim. Façade mode builds a native panel shell with connected corners, floor tiles and door openings; accent placement does not limit structural coverage. Windows retain uniform proportions; plain infill panels fit the remaining spans. Unsupported roof shapes retain generated geometry.</small>
                 {d.finish !== "procedural" && (
                   <small>

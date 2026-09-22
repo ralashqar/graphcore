@@ -74,7 +74,7 @@ if(process.env.CITY_ENTRANCE_AUDIT === "1"){
 }
 if(process.env.CITY_FIRE_ESCAPE_AUDIT === "1") {
  const {newDesign,normalizeV3}=await import("../src/domain/cityBuildingV3.ts");
- profile.buildingDesign=normalizeV3({...newDesign("escape-browser"),blueprint:"office",width:12,depth:10,podium:false,crown:"none",middleFloors:3,finish:"facade",slots:{},solidSideWalls:true});
+ profile.buildingDesign=normalizeV3({...newDesign("escape-browser"),blueprint:"terraces",width:16,depth:12,podium:true,crown:"recessed",middleFloors:3,finish:"facade",slots:{},solidSideWalls:true});
  business.draft=structuredClone(profile);business.published=structuredClone(profile);
 }
 const errors = [];
