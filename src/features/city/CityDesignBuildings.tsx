@@ -158,7 +158,7 @@ export function CityDesignBuildings(
           const dimensions = [...part.size].sort((a, b) => b - a);
           const connector = part.kind === "box" && (dimensions[0] > dimensions[1] * 10 || ("squareEdges" in part && part.squareEdges));
           let key = d.version !== 1 && part.kind === "box" && part.color === d.palette.glass ? "glassBox" : connector ? "joinedBox" : part.kind;
-          const texture = d.version === 3 && key !== "glassBox" ? ("textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
+          const texture = d.version === 3 && key !== "glassBox" ? ("textureRole" in part && part.textureRole === "wall" ? d.textures?.wall : "textureRole" in part && part.textureRole === "groundBorder" ? borderTexture(d.textures,"ground") : part.position[1]<.6 ? d.textures?.ground : part.color===d.palette.roof ? d.textures?.roof : part.color===d.palette.wall ? d.textures?.wall : undefined) : undefined;
           if(texture && texture!=="none") key+="|"+texture;
           (out[key] ||= []).push({
             key: `${p.id}:${index}`,

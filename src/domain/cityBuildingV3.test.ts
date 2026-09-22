@@ -264,3 +264,14 @@ test("service entrances reserve clear wall space in accents mode",()=>{
   }
  }
 });
+
+test("ground foundations use wall material and never add a slab above the door datum",()=>{
+ for(const finish of ["procedural","accents","facade"] as const)for(const blueprint of ["office","terraces","courtyard","l-shape"] as const){
+  const d=normalizeV3({...newDesign("clear-threshold"),finish,blueprint,slots:{}});
+  const r=resolveV3(d,"#778899");
+  const foundations=r.parts.filter(p=>p.kind==="box" && p.position[1]===.45 && p.size[1]===.4);
+  assert.ok(foundations.length);
+  for(const p of foundations){assert.equal(p.textureRole,"wall");assert.ok(p.position[1]+p.size[1]/2<=.65001);}
+  assert.ok(!r.parts.some(p=>p.kind==="box" && Math.abs(p.position[1]-.74)<.0001 && p.size[1]===.18));
+ }
+});

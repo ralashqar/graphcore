@@ -633,15 +633,20 @@ export function resolveV3(
   // Floor plates tessellate the union without overlapping faces at joined wings.
   for (const m of masses) {
     if (m.y === .65) {
-      box(m.x, .45, m.z, m.width, .4, m.depth, p.trim);
+      box(m.x, .45, m.z, m.width, .4, m.depth, p.wall);
+      parts.at(-1)!.textureRole="wall";
       if(facadeEnabled)parts.at(-1)!.squareEdges=true;
     }
-    box(m.x, m.y + .09, m.z, m.width, .18, m.depth, p.trim);
-    if(facadeEnabled){
-      parts.at(-1)!.squareEdges=true;
-      // The full-height native shell and preceding floor already close this
-      // junction. A second lower slab shares the wall's outer face.
-      if(lod!=="far"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAsset="Floor_4x4";}
+    // The foundation already reaches the ground-floor/door datum. An extra
+    // slab above it buried the bottom 18cm of door leaves and frames.
+    if (m.y > .65) {
+      box(m.x, m.y + .09, m.z, m.width, .18, m.depth, p.trim);
+      if(facadeEnabled){
+        parts.at(-1)!.squareEdges=true;
+        // The full-height native shell and preceding floor already close this
+        // junction. A second lower slab shares the wall's outer face.
+        if(lod!=="far"){parts.at(-1)!.fallback="facade";parts.at(-1)!.fallbackAsset="Floor_4x4";}
+      }
     }
     box(m.x, m.y + m.height - .09, m.z, m.width, .18, m.depth, p.roof);
     if(facadeEnabled && lod!=="far"){

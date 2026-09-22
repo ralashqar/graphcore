@@ -32,7 +32,7 @@ test("fire escape rejects setbacks, one storey and blocked plot space",()=>{
   const d=normalizeV3({...design(),groundHeight}),m=massesV3(d),r=fireEscape(exposedWalls(m),m,[]);
   assert.ok(r.bounds);
   for(const a of r.attachments){
-   const node=doc.getRoot().listNodes().find(n=>n.getName()===a.asset);assert.ok(node?.getMesh());
+   const node=doc.getRoot().listNodes().find(n=>n.getName()===a.asset);assert.ok(node);assert.ok(node.getMesh());
    for(const p of node.getMesh()!.listPrimitives()){
     const pos=p.getAttribute("POSITION")!;
     for(let i=0;i<pos.getCount();i++){
