@@ -28,6 +28,31 @@ export type KitInfill={x:number;y:number;z:number;rotation:number;width:number;h
 export type KitInactivePaint={id:string;reason:string};
 export type KitAssembly={placements:KitPlacement[];infill:KitInfill[];entrance:{x:number;z:number;angle:number}|null;inactive:KitInactivePaint[]};
 
+export const kitBayKey=(p:Pick<KitPlacement,'floor'|'x'|'z'|'rotation'>)=>`${p.floor}:${p.x}:${p.z}:${p.rotation}`;
+export const isKitWallBay=(p:KitPlacement)=>p.scaleX===1&&/\/(?:wall-full|window-[^/]+|storefront-glazing|door-[^/]+)$/.test(p.part);
+export const kitBayPaints=(kit:SynarcKitChoice,bay:KitPlacement)=>kit.paints.filter(p=>p.floor===bay.floor&&
+  Math.hypot(p.x-bay.x,p.z-bay.z)<.1&&p.nx*Math.sin(bay.rotation)+p.nz*Math.cos(bay.rotation)>.9);
+export function paintSynarcKitBay(walls:KitWall[],kit:SynarcKitChoice,bay:KitPlacement,part:SynarcKitPaintId|null):{kit:SynarcKitChoice;reason:string|null}{
+  const before=assembleSynarcKit(walls,kit),target=before.placements.find(p=>isKitWallBay(p)&&kitBayKey(p)===kitBayKey(bay));
+  if(!target)return {kit,reason:'This wall bay is no longer available.'};
+  if(part!==null&&!SYNARC_KIT_PAINTS.includes(part))return {kit,reason:'Unknown tile part.'};
+  const atBay=kitBayPaints(kit,target),entrance=!!before.entrance&&target.floor===0&&
+    Math.hypot(target.x-before.entrance.x,target.z-before.entrance.z)<.1;
+  if(part!==null&&doorParts.has(part)&&!entrance)return {kit,reason:'Doors can only replace the street-facing entrance bay.'};
+  if(entrance&&(part==='wall-full'||part!==null&&windowParts.has(part)))return {kit,reason:'The entrance bay must keep a door.'};
+  const replacing=part===null?atBay:openingParts.has(part||'')||part==='wall-full'
+    ?atBay.filter(p=>openingParts.has(p.part)||p.part==='wall-full')
+    :atBay.filter(p=>p.part===part||part?.startsWith('canopy')&&p.part.startsWith('canopy'));
+  const remove=new Set(replacing.map(p=>p.id)),retained=kit.paints.filter(p=>!remove.has(p.id));
+  if(part===null)return {kit:{...kit,paints:retained},reason:null};
+  if(retained.length>=64)return {kit,reason:'This building has reached its tile-paint limit.'};
+  const paint:SynarcKitPaint={id:crypto.randomUUID(),part,floor:target.floor,x:target.x,z:target.z,
+    nx:Math.sin(target.rotation),nz:Math.cos(target.rotation)};
+  const next={...kit,paints:[...retained,paint]},after=assembleSynarcKit(walls,next);
+  const invalid=after.inactive.find(item=>item.id===paint.id);
+  return invalid?{kit,reason:invalid.reason}:{kit:next,reason:null};
+}
+
 const round=(n:number)=>Math.round(n*1000)/1000;
 const openingParts=new Set<string>([...SYNARC_KIT_WINDOWS,...SYNARC_KIT_DOORS]);
 const doorParts=new Set<string>(SYNARC_KIT_DOORS);

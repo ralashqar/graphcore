@@ -1,7 +1,7 @@
 import {cityPlots, emptyCityProfile, type CityProperty} from './city.ts';
 import {estatePlotAxis, plotAxis, frontage} from './cityLayout.ts';
 import {newDesign, normalizeV3, identitySeed, type CityBuildingDesignV3} from './cityBuildingV3.ts';
-import {resolveSculptDecorations,sculptFootprint,validateSculpt,type SculptRecipe} from './citySculpt.ts';
+import {effectiveSculptShapes,resolveSculptDecorations,sculptFootprint,validateSculpt,type SculptRecipe} from './citySculpt.ts';
 
 export type LandNature={style:'minimal'|'garden'|'wooded';density:number;seed:number};
 export type LandDraft={design:CityBuildingDesignV3;name:string;color:string;nature:LandNature;builderMode?:'preset'|'sculpt';sculpt?:SculptRecipe};
@@ -33,7 +33,7 @@ export function landPlants(p:LandPlot,draft:LandDraft|null){
  const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
  const out:{x:number;z:number;asset:number;scale:number;rotation:number}[]=[];
  const count=nature.style==='minimal'?0:nature.density*(nature.style==='wooded'?2:1);
- const sculpture=draft?.builderMode==='sculpt'&&draft.sculpt?sculptFootprint(draft.sculpt.levels[0].shapes):null;
+ const sculpture=draft?.builderMode==='sculpt'&&draft.sculpt?sculptFootprint(effectiveSculptShapes(draft.sculpt,0)):null;
  const xs=sculpture?.flatMap(poly=>poly[0].map(v=>v[0]))||[],zs=sculpture?.flatMap(poly=>poly[0].map(v=>v[1]))||[];
  const ring=sculpture?.[0]?.[0],door=draft?.sculpt?resolveSculptDecorations(draft.sculpt,draft.design).find(a=>a.kind==='door'&&a.active):null;
  const approach=door||ring?.map((a,i)=>{const b=ring[(i+1)%ring.length];return {x:(a[0]+b[0])/2,z:(a[1]+b[1])/2,length:Math.hypot(a[0]-b[0],a[1]-b[1])};}).filter(e=>e.z>1&&e.length>=1.1).sort((a,b)=>b.z-a.z)[0];

@@ -36,7 +36,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
   timer.current=setTimeout(()=>{
    timer.current=null;const current=target.current;if(!current.recipe||busy.current||!alive.current)return;
    busy.current=true;lastStart.current=performance.now();const started=lastStart.current;
-   void prepareSculpt(current.recipe,designRef.current).then(value=>{
+   void prepareSculpt(current.recipe,current.design??designRef.current).then(value=>{
     if(!alive.current||target.current.revision!==current.revision)return;
     completed.current=current.revision;previewTiming.current={revision:current.revision,started,workerMs:performance.now()-started};setPreviewResult(value);invalidate();
    }).catch(e=>{
@@ -59,6 +59,10 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  const geometry=useMemo(()=>{
   if(!shown)return null;return Object.fromEntries(Object.entries(shown.vertices).map(([name,vertices])=>{const g=new BufferGeometry();g.setAttribute('position',new Float32BufferAttribute(vertices,3));g.computeVertexNormals();return [name,g];})) as Record<keyof SculptResolved['vertices'],BufferGeometry>;
  },[shown]);
+ const curvedGeometry=useMemo(()=>{
+  if(!shown?.curvedVertices||!Object.values(shown.curvedVertices).some(vertices=>vertices.length))return null;
+  return Object.fromEntries(Object.entries(shown.curvedVertices).map(([name,vertices])=>{const g=new BufferGeometry();g.setAttribute('position',new Float32BufferAttribute(vertices,3));g.computeVertexNormals();return [name,g];})) as Record<keyof NonNullable<SculptResolved['curvedVertices']>,BufferGeometry>;
+ },[shown]);
  useEffect(()=>{
   if(!previewResult||!geometry||!import.meta.env.DEV)return;
   const timing=previewTiming.current;if(!timing||timing.revision!==target.current.revision)return;
@@ -69,6 +73,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
   return()=>cancelAnimationFrame(frame);
  },[geometry,previewResult,gl]);
  useEffect(()=>()=>{if(geometry)Object.values(geometry).forEach(g=>g.dispose());},[geometry]);
+ useEffect(()=>()=>{if(curvedGeometry)Object.values(curvedGeometry).forEach(g=>g.dispose());},[curvedGeometry]);
  const palette=draft.design.palette;
  const materials=useMemo(()=>{
   const materials={wall:citySurfaceMaterial(false,draft.design.textures?.wall),trim:citySurfaceMaterial(),roof:citySurfaceMaterial(false,draft.design.textures?.roof),glass:citySurfaceMaterial(true),door:citySurfaceMaterial(false)};
@@ -80,7 +85,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  const entrance=shown?.entrance??null,approach=entrance?{length:Math.hypot(entrance.x,10.4-entrance.z),rotation:Math.atan2(-entrance.x,10.4-entrance.z)}:null;
  const hasCanopy=!!shown?.decorations.some(detail=>detail.kind==='canopy'&&detail.active);
  const usingKit=!!shown?.kit&&!!synarcPack;
- return <><CityPreparedBuildings properties={grounds} layer="grounds" reduced/><group name="sculpt-building" position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>{geometry&&(['wall','trim','roof','glass','door'] as const).filter(kind=>!usingKit||kind==='roof').map(kind=><mesh key={kind} geometry={geometry[kind]} material={materials[kind]}/>)}{usingKit&&<><CitySynarcKitMeshes pack={synarcPack} placements={shown!.kit!.placements}/>{shown!.kit!.infill.map((band,i)=><mesh key={`band-${i}`} position={[band.x,band.y,band.z]} rotation={[0,band.rotation,0]} material={materials.wall}><boxGeometry args={[band.width,band.height,band.depth]}/></mesh>)}</>}{shown&&<SculptDetails details={usingKit?shown.decorations.filter(d=>d.kind==='planter'||d.kind==='bollard'):shown.decorations} entrance={entrance} groundHeight={draft.design.groundHeight}/>} {entrance&&<SculptSign name={draft.name} color={draft.color} x={entrance.x} y={shown!.floors[0].top-(hasCanopy ? .47 : .6)} z={entrance.z} angle={entrance.angle} depth={hasCanopy ? 1 : .045} maxWidth={hasCanopy ? 2.2 : 3.2}/>} {entrance&&approach&&<mesh position={[entrance.x/2,.31,(10.4+entrance.z)/2]} rotation={[0,approach.rotation,0]}><boxGeometry args={[1.8,.05,approach.length]}/><meshStandardMaterial color="#cbc7b5" roughness={1}/></mesh>}</group></>;
+ return <><CityPreparedBuildings properties={grounds} layer="grounds" reduced/><group name="sculpt-building" position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>{geometry&&(['wall','trim','roof','glass','door'] as const).filter(kind=>!usingKit||kind==='roof').map(kind=><mesh key={kind} geometry={geometry[kind]} material={materials[kind]}/>)}{usingKit&&curvedGeometry&&(['wall','trim','glass','door'] as const).map(kind=><mesh key={`curve-${kind}`} geometry={curvedGeometry[kind]} material={materials[kind]}/>)}{usingKit&&<><CitySynarcKitMeshes pack={synarcPack} placements={shown!.kit!.placements}/>{shown!.kit!.infill.map((band,i)=><mesh key={`band-${i}`} position={[band.x,band.y,band.z]} rotation={[0,band.rotation,0]} material={materials.wall}><boxGeometry args={[band.width,band.height,band.depth]}/></mesh>)}</>}{shown&&<SculptDetails details={usingKit?shown.decorations.filter(d=>d.kind==='planter'||d.kind==='bollard'):shown.decorations} entrance={entrance} groundHeight={draft.design.groundHeight}/>} {entrance&&<SculptSign name={draft.name} color={draft.color} x={entrance.x} y={shown!.floors[0].top-(hasCanopy ? .47 : .6)} z={entrance.z} angle={entrance.angle} depth={hasCanopy ? 1 : .045} maxWidth={hasCanopy ? 2.2 : 3.2}/>} {entrance&&approach&&<mesh position={[entrance.x/2,.31,(10.4+entrance.z)/2]} rotation={[0,approach.rotation,0]}><boxGeometry args={[1.8,.05,approach.length]}/><meshStandardMaterial color="#cbc7b5" roughness={1}/></mesh>}</group></>;
 }
 
 function SculptDetails({details,entrance,groundHeight}:{details:SculptDecoration[];entrance:SculptResolved['entrance'];groundHeight:number}){

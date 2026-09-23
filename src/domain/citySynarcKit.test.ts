@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assembleSynarcKit,DEFAULT_SYNARC_KIT,type KitWall} from './citySynarcKit.ts';
+import {assembleSynarcKit,DEFAULT_SYNARC_KIT,isKitWallBay,paintSynarcKitBay,type KitWall} from './citySynarcKit.ts';
 import {newDesign,resolveV3} from './cityBuildingV3.ts';
 import {resolveSculpt,type SculptRecipe} from './citySculpt.ts';
 
@@ -64,4 +64,24 @@ test('preset and sculpt share the same original kit resolver',()=>{
  const result=resolveSculpt(sculpt,d);
  assert.ok(result.kit?.placements.length);
  assert.ok(result.kit?.entrance);
+});
+
+test('tile painting replaces one legal bay, preserves entrance, and can clear overrides',()=>{
+ const base=assembleSynarcKit(walls,DEFAULT_SYNARC_KIT);
+ const door=base.placements.find(p=>p.part.endsWith('/door-residential'))!;
+ const window=base.placements.find(p=>p.part.endsWith('/window-single')&&p.floor===0)!;
+ assert.ok(isKitWallBay(door)&&isKitWallBay(window));
+ const painted=paintSynarcKitBay(walls,DEFAULT_SYNARC_KIT,window,'window-detailed');
+ assert.equal(painted.reason,null);
+ assert.equal(painted.kit.paints.length,1);
+ assert.ok(assembleSynarcKit(walls,painted.kit).placements.some(p=>p.x===window.x&&p.z===window.z&&p.part.endsWith('/window-detailed')));
+ const changed=paintSynarcKitBay(walls,painted.kit,window,'wall-full');
+ assert.equal(changed.reason,null);
+ assert.equal(changed.kit.paints.length,1);
+ assert.equal(changed.kit.paints[0].part,'wall-full');
+ assert.equal(paintSynarcKitBay(walls,changed.kit,door,'window-paired').reason,'The entrance bay must keep a door.');
+ assert.equal(paintSynarcKitBay(walls,changed.kit,window,'door-shop').reason,'Doors can only replace the street-facing entrance bay.');
+ assert.equal(paintSynarcKitBay(walls,changed.kit,window,'balcony-slab').kit,changed.kit);
+ const cleared=paintSynarcKitBay(walls,changed.kit,window,null);
+ assert.equal(cleared.kit.paints.length,0);
 });

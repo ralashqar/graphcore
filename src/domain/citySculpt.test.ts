@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {COMPOSITIONS,applyComposition,newDesign} from './cityBuildingV3.ts';
-import {addSculptAttachment,affectedSculptNodes,buildSculptGraph,effectiveSculptShapes,linkSculptFloor,resolveSculpt,resolveSculptDecorations,resizeSculptFace,sculptFootprint,sculptFromPreset,sculptPitchedRoofFits,sculptWalls,setSculptShapes,upgradeSculpt,validateSculpt,type SculptAttachment,type SculptPrimitive,type SculptRecipe} from './citySculpt.ts';
+import {addSculptAttachment,affectedSculptNodes,buildSculptGraph,effectiveSculptShapes,linkSculptFloor,resolveSculpt,resolveSculptDecorations,resizeSculptFace,sculptFootprint,sculptFromPreset,sculptPitchedRoofFits,sculptWalls,setSculptShapes,upgradeSculpt,upgradeSculptVolumes,validateSculpt,type SculptAttachment,type SculptPrimitive,type SculptRecipe} from './citySculpt.ts';
 import {createLandWorld,fitLandDesign,initialLandDraft,LocalLandRepository} from './cityLand.ts';
+import {DEFAULT_SYNARC_KIT} from './citySynarcKit.ts';
 
 const rect=(id:string,x:number,z:number,width:number,depth:number,operation:'add'|'subtract'='add'):SculptPrimitive=>({id,kind:'rectangle',operation,x,z,width,depth});
 const design=newDesign('sculpt-test');
@@ -60,6 +61,42 @@ test('courtyard subtraction retains one polygon with a real roof opening',()=>{
  const recipe={version:1 as const,levels:[{floor:0,shapes}]};const resolved=resolveSculpt(recipe,design);
  assert.ok(resolved.vertices.roof.length>0);assert.equal(validateSculpt(recipe,design.floors),null);
 });
+test('solid-volume upgrade preserves every legacy floor footprint and attachments',()=>{
+ const legacy:SculptRecipe={version:3,levels:[{floor:0,shapes:[rect('main',0,0,14,14)]},{floor:2,shapes:[rect('upper',0,0,10,10)]}],attachments:[{id:'entry',kind:'door',floor:0,x:0,z:7,nx:0,nz:1,span:1.6,style:'stone'}]};
+ const next=upgradeSculptVolumes(legacy,4);assert.equal(next.version,4);assert.equal(next.volumes.length,2);
+ for(let floor=0;floor<4;floor++)assert.deepEqual(sculptFootprint(effectiveSculptShapes(next,floor)),sculptFootprint(effectiveSculptShapes(legacy,floor)));
+ assert.deepEqual(next.attachments,legacy.attachments);assert.equal(validateSculpt(next,4),null);
+ const v2:SculptRecipe={version:2,levels:[{floor:0,shapes:[rect('main',0,0,12,12)]}],attachments:[{id:'old-door',kind:'door',floor:0,x:0,z:6,nx:0,nz:1,span:1.6,style:'simple'}]};
+ assert.deepEqual(resolveSculptDecorations(upgradeSculptVolumes(v2,design.floors),design),resolveSculptDecorations(v2,design));
+});
+test('vertical add and circular cut resolve into supported curved inner façades',()=>{
+ const recipe:Extract<SculptRecipe,{version:4}>={version:4,volumes:[
+  {...rect('base',0,0,16,16),startFloor:0,spanFloors:4},
+  {...rect('cut',0,0,5,5,'subtract'),kind:'ellipse',startFloor:1,spanFloors:3},
+ ],attachments:[]};
+ const d={...design,middleFloors:3,crown:'none' as const,floors:4,roof:'flat' as const};
+ assert.equal(validateSculpt(recipe,4),null);
+ assert.equal(sculptFootprint(effectiveSculptShapes(recipe,0))[0].length,1);
+ assert.equal(sculptFootprint(effectiveSculptShapes(recipe,1))[0].length,2);
+ const inner=sculptWalls(recipe,d).filter(w=>w.floor===1&&w.ring>0);
+ assert.ok(inner.length>=16);assert.ok(inner.every(w=>w.source?.shapeId==='cut'&&w.source.side==='curve'));
+ const resolved=resolveSculpt(recipe,d);assert.ok(resolved.vertices.glass.length>0);
+ assert.ok(Object.values(resolved.vertices).every(vertices=>vertices.every(Number.isFinite)));
+ const mixed=resolveSculpt(recipe,{...d,synarcKit:structuredClone(DEFAULT_SYNARC_KIT)});
+ assert.ok(mixed.kit?.placements.length);assert.ok(mixed.curvedVertices?.wall.length);
+ assert.ok(mixed.curvedVertices?.glass.length);
+ const legacy:SculptRecipe={version:3,levels:[{floor:0,shapes:[rect('old-base',0,0,16,16),{...rect('old-cut',0,0,5,5,'subtract'),kind:'ellipse'}]}],attachments:[]};
+ const old=resolveSculpt(legacy,{...d,synarcKit:structuredClone(DEFAULT_SYNARC_KIT)});
+ assert.ok(old.kit?.placements.length);assert.equal(old.curvedVertices?.wall.length,0);
+});
+test('volume rules reject unsupported additions, disconnected floors and cuts through the entrance',()=>{
+ const ground={...rect('ground',0,0,12,12),startFloor:0,spanFloors:3};
+ const base:Extract<SculptRecipe,{version:4}>={version:4,volumes:[ground],attachments:[]};
+ assert.equal(validateSculpt(base,3),null);
+ assert.match(validateSculpt({...base,volumes:[ground,{...rect('overhang',5,0,7,7),startFloor:1,spanFloors:2}]},3)||'',/supported/);
+ assert.match(validateSculpt({...base,volumes:[ground,{...rect('island',8,0,2,2),startFloor:0,spanFloors:3}]},3)||'',/connected/);
+ assert.match(validateSculpt({...base,volumes:[ground,{...rect('entry-cut',0,4,12,6,'subtract'),startFloor:0,spanFloors:3}]},3)||'',/entrance/);
+});
 test('linked levels inherit until a detached floor changes and unsupported overhangs are rejected',()=>{
  const base=[rect('base',0,0,14,14)];let recipe:SculptRecipe={version:1,levels:[{floor:0,shapes:base}]};
  assert.deepEqual(effectiveSculptShapes(recipe,3),base);
@@ -88,8 +125,17 @@ test('local drafts persist sculpt recipe separately from completed version',asyn
  plot=await repo.finish(plot.id,plot.revision,{...draft,builderMode:'sculpt',sculpt});
  plot=await repo.saveDraft(plot.id,plot.revision,{...draft,builderMode:'sculpt',sculpt:setSculptShapes(sculpt,1,[rect('upper',0,0,10,10)])});
  const reloaded=(await new LocalLandRepository(storage,initial).list()).plots[0];
- assert.equal(reloaded.finished?.sculpt?.levels[1]?.shapes[0].width,sculpt.levels[1]?.shapes[0].width);
- assert.equal(reloaded.draft?.sculpt?.levels[1]?.shapes[0].width,10);
+ assert.equal(reloaded.finished?.sculpt&&effectiveSculptShapes(reloaded.finished.sculpt,1)[0].width,effectiveSculptShapes(sculpt,1)[0].width);
+ assert.equal(reloaded.draft?.sculpt&&effectiveSculptShapes(reloaded.draft.sculpt,1)[0].width,10);
+});
+test('version-4 solids survive local draft and finish reload',async()=>{
+ const initial=createLandWorld([],72,24),store=new Map<string,string>(),storage={getItem:(key:string)=>store.get(key)||null,setItem:(key:string,value:string)=>{store.set(key,value);}};
+ const repo=new LocalLandRepository(storage,initial),plot=await repo.purchase(initial.plots[0].id,0,'solid-purchase');
+ const draft=initialLandDraft(plot),sculpt=upgradeSculptVolumes(sculptFromPreset(draft.design)!,draft.design.floors);
+ const saved=await repo.saveDraft(plot.id,plot.revision,{...draft,builderMode:'sculpt',sculpt});
+ await repo.finish(plot.id,saved.revision,{...draft,builderMode:'sculpt',sculpt});
+ const reloaded=(await new LocalLandRepository(storage,initial).list()).plots[0];
+ assert.deepEqual(reloaded.draft?.sculpt,sculpt);assert.deepEqual(reloaded.finished?.sculpt,sculpt);
 });
 test('entrance brush snaps to a real bay and dependent details retain intent through shape edits',()=>{
  const base:SculptRecipe={version:1,levels:[{floor:0,shapes:[rect('main',0,0,12,12)]}]};
