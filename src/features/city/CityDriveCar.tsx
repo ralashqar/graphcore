@@ -8,7 +8,7 @@ import {DRIVE_PROFILE,type DriveState} from "../../domain/cityDriving";
 const URL=DRIVE_PROFILE.carUrl;
 let pending:Promise<GLTF|null>|undefined;
 export function preloadCityCar(){return pending??=new GLTFLoader().loadAsync(URL).then(asset=>{let textured=false;asset.scene.traverse(o=>{if(o instanceof Mesh&&(o.material as MeshStandardMaterial).map)textured=true;});if(!textured||!["body","wheel-front-left","wheel-front-right","wheel-back-left","wheel-back-right"].every(n=>asset.scene.getObjectByName(n)))throw new Error("Missing car atlas or movable parts");return asset;}).catch(error=>{console.warn("City car unavailable; using fallback",error);return null;});}
-export function CityDriveCar({motion,reduced}:{motion:RefObject<DriveState>;reduced:boolean}){
+export function CityDriveCar({motion,reduced,active=true}:{motion:RefObject<DriveState>;reduced:boolean;active?:boolean}){
  const [asset,setAsset]=useState<GLTF|null>(null),reflection=useCityReflection(),gl=useThree(s=>s.gl);
  const bodyPitch=useRef(0),bodyRoll=useRef(0),pitchV=useRef(0),rollV=useRef(0);
  useEffect(()=>{let live=true;void preloadCityCar().then(a=>{if(live)setAsset(a);});return()=>{live=false;};},[]);
@@ -29,7 +29,7 @@ export function CityDriveCar({motion,reduced}:{motion:RefObject<DriveState>;redu
  useEffect(()=>()=>{model?.materials.forEach(m=>m.dispose());},[model]);
  useEffect(()=>{gl.domElement.dataset.cityCar=model?'kenney-hatchback':'fallback';if(model)gl.domElement.dataset.cityCarDetails=JSON.stringify({wheels:model.wheels.length,textured:model.materials.every(m=>!!m.map),length:DRIVE_PROFILE.carLength});return()=>{delete gl.domElement.dataset.cityCar;delete gl.domElement.dataset.cityCarDetails;};},[model,gl]);
  useFrame((_,dt)=>{
-  if(!model)return;const s=motion.current;if(!s)return;const d=Math.min(dt,.04),sn=Math.sin(s.heading),cs=Math.cos(s.heading);
+  if(!model||!active||document.hidden)return;const s=motion.current;if(!s)return;const d=Math.min(dt,.04),sn=Math.sin(s.heading),cs=Math.cos(s.heading);
   const pitch=reduced?0:Math.max(-.065,Math.min(.065,-s.acceleration*.004+s.impact*.003));
   if(reduced){bodyPitch.current=0;bodyRoll.current=0;pitchV.current=0;rollV.current=0;}
   const roll=reduced?0:Math.max(-.085,Math.min(.085,s.speed*s.yawRate*.004));

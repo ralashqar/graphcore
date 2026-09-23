@@ -1,0 +1,2 @@
+export const CITY_CHARACTER_MANIFEST={version:1,rig:'Rig_Medium',height:1.8,defaultSkin:'ranger',clips:'/assets/city/character/locomotion.glb',clipNames:['idle','walk','run','jump','airborne','land','wave'],skins:{ranger:{url:'/assets/city/character/ranger.glb',label:'Ranger',accessories:[]},rogue:{url:'/assets/city/character/rogue.glb',label:'Rogue',accessories:[]}}} as const;
+export type CityCharacterSkin=keyof typeof CITY_CHARACTER_MANIFEST.skins;

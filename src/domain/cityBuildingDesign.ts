@@ -144,6 +144,7 @@ export function buildingMasses(d: CityBuildingDesign): BuildingMass[] {
   return masses;
 }
 export type BuildingPart = {
+  sceneLayer?: "grounds";
   vertices?: number[];
   rotation?: number;
   kind: "mesh" | "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed" | "mansard" | "stairTread" | "stairRail" | "archedPane" | "archInfill";

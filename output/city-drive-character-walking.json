@@ -1,0 +1,13 @@
+[
+  {
+    "count": 72,
+    "mode": "walking",
+    "p95": 16.799999999999272,
+    "p50": 16.69999999999709,
+    "frames": 686,
+    "stats": "{\"calls\":64,\"triangles\":233482,\"geometries\":64,\"textures\":33,\"backend\":\"webgpu\",\"gpuBytes\":90553735}",
+    "physics": "{\"p95\":0.19999992847442627,\"samples\":240}",
+    "backend": "webgpu",
+    "errors": []
+  }
+]

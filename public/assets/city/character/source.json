@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "characters": {
+    "url": "https://kaylousberg.itch.io/kaykit-adventurers",
+    "version": "Free 2.0",
+    "archiveSha256": "abe48f4763fba0896bab486ee9e6d08ca6b5b3884b9601f235c8847ae94dc479"
+  },
+  "animations": {
+    "url": "https://kaylousberg.itch.io/kaykit-character-animations",
+    "version": "Free 1.1",
+    "archiveSha256": "65882f31f905ad2e953819648a59287cdeab8f623908d5ef701971d3758be20f"
+  },
+  "licence": "CC0",
+  "rig": "Rig_Medium",
+  "verifiedSkins": [
+    "Ranger",
+    "Rogue"
+  ],
+  "joints": 23,
+  "bindTolerance": 0.0001,
+  "rootMotion": "root tracks removed; hips/body motion retained",
+  "inputs": {
+    "kaykit-adventurers/KayKit_Adventurers_2.0_FREE/Characters/gltf/Ranger.glb": "3a0b0166b9d61d58dcaaa739c3cc0538be46e00d2928dd5cb513d9a41770d2e9",
+    "kaykit-adventurers/KayKit_Adventurers_2.0_FREE/Characters/gltf/Rogue.glb": "cae5d9b2f08d53f7b4ab2617d9f42f021c546eb10920455fdcd82a110867fae4",
+    "kaykit-character-animations/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium/Rig_Medium_General.glb": "5f725c0f745f36078c7238968cd5c04843cbc6260689eb6e7f5e2bbd7ffdd7ad",
+    "kaykit-character-animations/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb": "11422afd50abf7e8c92ea107e2e0bc94abd38023d6d15f55ad580347efbfa29e",
+    "kaykit-character-animations/KayKit_Character_Animations_1.1/Animations/gltf/Rig_Medium/Rig_Medium_Simulation.glb": "ab6ffeed40c8281dd0ce0506534eadf7385151f1c266643a10fa2a0f0a7ba3b1"
+  },
+  "outputs": {
+    "ranger.glb": {
+      "sha256": "4856d53c3289eb461cd4538a5740282c978f5f7ec62818074d9341fff1e6954f",
+      "bytes": 447324
+    },
+    "rogue.glb": {
+      "sha256": "06d7b286a5603375633e306dd12a2ef283d6a50a6fc288baa0356d32ebf496cc",
+      "bytes": 394432
+    },
+    "locomotion.glb": {
+      "sha256": "7b007584f26400f1c7180180f50f784b7bd48c2dc779f6d4ec614202472c7cd1",
+      "bytes": 163036
+    }
+  }
+}

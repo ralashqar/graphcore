@@ -1,0 +1,24 @@
+{
+  "source": "https://kenney.nl/assets/nature-kit",
+  "version": "1.0",
+  "license": "CC0",
+  "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+  "files": {
+    "tree_simple.glb": {
+      "sha256": "93891ea740447634930de19c31a7c1c9f4add94122e6db03aca9f75aea32f9d6",
+      "bytes": 6500
+    },
+    "tree_pineRoundA.glb": {
+      "sha256": "7dc9711f31585eafdcb965d0649c30af5e19f2def1955f7a915081d30759ef8e",
+      "bytes": 14488
+    },
+    "plant_bush.glb": {
+      "sha256": "ae7b1beb39e242b13f5f29e3ec23ef21034b814f82297b8aa00a9bf4e1b09590",
+      "bytes": 4396
+    },
+    "plant_bushSmall.glb": {
+      "sha256": "a9620a7d1fb165ae68d323676f80dbb2a9e3aafb21110d18d18d90b07026b91d",
+      "bytes": 3212
+    }
+  }
+}

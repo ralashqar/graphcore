@@ -1546,3 +1546,5 @@ body:has(.city-app) {
 /* Nested architectural groups must shrink with the mobile editor. */
 .city-design-fields fieldset { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .city-design-fields fieldset select { max-width: 100%; }
+
+.city-explore-hint { max-width:280px; margin-left:auto!important; padding:8px 12px; border-radius:8px; background:#f5f5eef0; color:#243b31; }

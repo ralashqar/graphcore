@@ -1,7 +1,10 @@
+import {useCityLand} from './useCityLand';
+import {CityLandScene} from './CityLandScene';
 import {createCityRenderer,cityGpu,useCityRendererEpoch} from "./cityRenderer";
 import { CityEnvironment } from "./CityEnvironment";
 import { CityAdaptiveResolution } from "./CityAdaptiveResolution";
 import {preloadCityCar} from "./CityDriveCar";
+import {createExplorationSession} from "../../domain/cityExploration";
 import { CityDriving } from "./CityDriving";
 import { streamRadius } from "../../domain/cityStreaming";
 import { CityArrivalContext } from "./CityInstances";
@@ -425,7 +428,7 @@ function SceneReady({ onReady }: { onReady?: () => void }) {
 function CitySceneContent({
   driving = false, onExitDriving = () => {},
   estateDemo = false,
-  properties,
+  properties: sourceProperties,
   selected,
   capacity,
   home,
@@ -437,7 +440,7 @@ function CitySceneContent({
   matches,
   markers,
   onDiscoverySelect,
-  playback,
+  playback: sourcePlayback,
   onReady,
   central = null,
   viewport = null,
@@ -473,6 +476,7 @@ function CitySceneContent({
   trailMarkers?: (CityProperty & { number: number })[];
 }) {
   const rendererEpoch=useCityRendererEpoch();
+  const exploration=useRef(createExplorationSession());
   useEffect(()=>{void preloadCityCar();},[]);
   const cameras=useMemo(()=>{
    const map=new OrthographicCamera(-1,1,1,-1,.1,5000);map.position.set(420,380,420);map.zoom=3.8;map.lookAt(0,0,0);
@@ -480,6 +484,10 @@ function CitySceneContent({
    return {map,drive};
   },[]);
   const { plotAxis: position, plotSize } = useCityMapLayout();
+  const landEnabled=new URLSearchParams(location.search).get('demo')==='1' && new URLSearchParams(location.search).get('cityBuild')!=='0' && [null,'presets'].includes(new URLSearchParams(location.search).get('cityRender'));
+  const land=useCityLand(landEnabled,sourceProperties,capacity,plotSize as 24|48);
+  const properties=landEnabled?(land.world?.occupied||sourceProperties):sourceProperties;
+  const playback=landEnabled?null:sourcePlayback;
   const presetDemo = estateDemo && [null, "presets"].includes(new URLSearchParams(window.location.search).get("cityRender"));
   const spriteMode = estateDemo && !presetDemo && new URLSearchParams(window.location.search).get("cityRender") !== "offices";
   const living=useLiving();
@@ -592,6 +600,7 @@ function CitySceneContent({
           />
           </CityArrivalContext.Provider>
         </MarketMotionContext.Provider>
+        {landEnabled&&land.world&&<CityLandScene land={land}/>}
         <SceneReady onReady={onReady} />
         {onExposure && !driving && (
           <CityExposure
@@ -600,7 +609,8 @@ function CitySceneContent({
             paused={!!playback}
           />
         )}
-        {driving ? <CityDriving properties={properties} hasPavilion={!spriteMode && !!pavilion} launchPlaza={!spriteMode && (launches.length>0 || launchFocus)} viewCamera={cameras.drive} capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{if(residentDrive)return;setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/> : <CameraRig
+        <CityDriving land={landEnabled?land:null} active={driving} session={exploration.current} properties={properties} hasPavilion={!spriteMode && !!pavilion} launchPlaza={!spriteMode && (launches.length>0 || launchFocus)} viewCamera={cameras.drive} capacity={capacity} reduced={reduced} onExit={onExitDriving} onRegion={(x,z)=>{if(residentDrive)return;setCenter(prev=>prev.x===x&&prev.z===z?prev:{x,z});onRegion(x,z);}}/>
+        {!driving && <CameraRig
           launchFocus={launchFocus}
           central={central}
           viewport={viewport}

@@ -41,6 +41,7 @@ function BuildingBatches(
     matchIds,
     selectedId,
     center,
+    layer = "all",
   }: {
     properties: CityProperty[];
     onSelect?: (property: CityProperty) => void;
@@ -49,6 +50,8 @@ function BuildingBatches(
     selectedId?: string;
     center?: { x: number; z: number };
     zoom?: number;
+    retainWhilePreparing?: boolean;
+    layer?: "all" | "building" | "grounds";
   },
 ) {
   const invalidate=useThree(s=>s.invalidate);
@@ -149,6 +152,10 @@ function BuildingBatches(
       const legacyComplete = kit && resolved?.attachments.every(a => pack.has(a.asset));
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {
+          // Tile surfaces and perimeter rails belong to the stationary plot, not its building.
+          const ground = part.sceneLayer==="grounds" || ("textureRole" in part && part.textureRole === "groundBorder") ||
+            (part.position[1] + part.size[1]/2 <= .34 && !("textureRole" in part && part.textureRole === "wall"));
+          if(layer!=="all" && ground!==(layer==="grounds"))return;
           if (kit && "fallback" in part && part.fallback &&
             ("fallbackAssets" in part && Array.isArray(part.fallbackAssets) ? part.fallbackAssets.every(asset=>pack.has(asset)) : "fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
@@ -185,6 +192,8 @@ function BuildingBatches(
       );
       if (kit && resolved) {
         for (const [index, a] of resolved.attachments.entries()) {
+          const ground=a.role==="paving" || (["props","prop","planter-run"].includes(a.role) && a.position[1]<.4);
+          if(layer!=="all" && ground!==(layer==="grounds"))continue;
           if (!pack.has(a.asset)) {
             continue;
           }
@@ -216,6 +225,7 @@ function BuildingBatches(
     }
     return out;
   }, [
+    layer,
     properties,
     plotAxis,
     plotSize,
@@ -252,7 +262,7 @@ function BuildingBatches(
           animate
         />
       ))}
-      {properties.some((p) =>
+      {layer!=="grounds" && properties.some((p) =>
         p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
     !(p.profile.buildingDesign.version === 3 && p.profile.buildingDesign.generatorRevision === "city-office-4") &&
         !p.profile.buildingArt
@@ -270,8 +280,13 @@ function BuildingBatches(
 }
 
 export function CityDesignBuildings(props: Parameters<typeof BuildingBatches>[0]) {
- const prepared=usePreparedCity(props.properties,true,!props.center);
+ const prepared=usePreparedCity(props.properties,true,!props.center,props.retainWhilePreparing);
  const canvas=useThree(s=>s.gl.domElement);
  useEffect(()=>{canvas.dataset.cityPreparedBuildings=String(prepared.length);return()=>{delete canvas.dataset.cityPreparedBuildings;};},[canvas,prepared]);
- return <CityVisibility properties={prepared} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props} properties={prepared}/><CityBuildingGrounding properties={prepared} center={props.center} reduced={props.reduced}/></CityVisibility>;
+ return <CityPreparedBuildings {...props} properties={prepared}/>;
+}
+
+/** Draw only already-prepared recipes; construction controls asynchronous preparation and swaps. */
+export function CityPreparedBuildings(props:Parameters<typeof BuildingBatches>[0]){
+ return <CityVisibility properties={props.properties} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props}/>{props.layer!=="building"&&<CityBuildingGrounding properties={props.properties} center={props.center} reduced={props.reduced}/>}</CityVisibility>;
 }

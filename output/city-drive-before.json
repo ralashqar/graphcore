@@ -1,0 +1,11 @@
+[
+  {
+    "count": 72,
+    "p95": 33.599999999998545,
+    "p50": 16.69999999999709,
+    "frames": 365,
+    "stats": "{\"calls\":63,\"triangles\":227619,\"geometries\":64,\"textures\":31,\"backend\":\"webgpu\",\"gpuBytes\":78985610}",
+    "backend": "webgpu",
+    "errors": []
+  }
+]

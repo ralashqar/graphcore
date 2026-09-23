@@ -84,3 +84,6 @@ output/city-staging/
 # Local Unity asset conversion intermediates and geometry probes.
 output/megacity-audit/
 output/megacity-showcase/
+
+# Downloaded free character source archives and preparation intermediates.
+output/kaykit-source/

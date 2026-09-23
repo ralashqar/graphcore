@@ -1,5 +1,5 @@
 import {DriveWorld} from "./cityDriveWorld.ts";
-export const DRIVE_PROFILE={carUrl:"/assets/city/car/hatchback-sports.glb",carLength:4.1,maxSpeed:24,reverseSpeed:7,acceleration:15,braking:25,grip:8,driftGrip:2.2,wheelbase:2.7,radius:2.3,wheelRadius:.432,step:1/120} as const;
+export const DRIVE_PROFILE={carUrl:"/assets/city/car/hatchback-sports.glb",carLength:4.1,carWidth:1.3*(4.1/2.85),carHeight:1.1*(4.1/2.85),maxSpeed:24,reverseSpeed:7,acceleration:15,braking:25,grip:8,driftGrip:2.2,wheelbase:2.7,radius:2.3,wheelRadius:.432,step:1/120} as const;
 export type DriveState={x:number;z:number;heading:number;speed:number;steering:number;vx:number;vz:number;yawRate:number;wheelAngle:number;acceleration:number;impact:number};
 export type DriveInput={forward:boolean;reverse:boolean;left:boolean;right:boolean;brake:boolean};
 export const createDriveState=(x=0,z=33,heading=0):DriveState=>({x,z,heading,speed:0,steering:0,vx:0,vz:0,yawRate:0,wheelAngle:0,acceleration:0,impact:0});

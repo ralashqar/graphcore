@@ -796,7 +796,7 @@ export function CityApp() {
               >
                 <div
                   className="city-canvas"
-                  aria-label={driving ? "Drive the city. WASD or arrow keys to drive, Space for handbrake, R to recover, Escape to return to map." : "Interactive city map. Drag to pan, scroll to zoom, or use arrow keys."}
+                  aria-label={driving ? "Explore the city. E enters or exits the car. WASD or arrows to move, Shift to walk, Space to jump on foot or handbrake in car, Drag to orbit, scroll to zoom, G to wave, R to recover, Escape for map." : "Interactive city map. Drag to pan, scroll to zoom, or use arrow keys."}
                   tabIndex={0}
                 >
                   {loading

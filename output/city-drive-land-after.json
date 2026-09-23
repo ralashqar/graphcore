@@ -1,0 +1,13 @@
+[
+  {
+    "count": 72,
+    "mode": "driving",
+    "p95": 16.799999999999272,
+    "p50": 16.700000000000728,
+    "frames": 499,
+    "stats": "{\"calls\":57,\"triangles\":220251,\"geometries\":66,\"textures\":33,\"backend\":\"webgpu\",\"gpuBytes\":82721268}",
+    "physics": "{\"p95\":0.20000004768371582,\"samples\":240}",
+    "backend": "webgpu",
+    "errors": []
+  }
+]

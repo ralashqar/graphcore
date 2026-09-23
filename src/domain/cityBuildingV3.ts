@@ -1086,6 +1086,7 @@ export function resolveV3(
       )
     ) {
       const [x, y, z] = slot.position;
+      const groundStart=parts.length;
       if (slot.selected === "bollards") {
         for (const dx of [-.6, .6]) box(x + dx, .75, z, .18, 1, .18, p.trim);
       } else {
@@ -1121,6 +1122,7 @@ export function resolveV3(
           });
         }
       }
+      if(slot.id.startsWith("ground."))for(const part of parts.slice(groundStart))part.sceneLayer="grounds";
     }
   }
   if (lod === "near" && d.finish === "procedural") {
