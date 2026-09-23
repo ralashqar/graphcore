@@ -1,4 +1,5 @@
 import {officeMasses,officeSlots,resolveOffice,type OfficeArchitecture} from "./cityOfficeArchitecture.ts";
+import {assembleSynarcKit,type KitAssembly,type SynarcKitChoice} from "./citySynarcKit.ts";
 import {connectedRoof,connectedPorch,type ConnectedArchitecture,type AssemblyEnvelope} from "./cityConnectedArchitecture.ts";
 import {proceduralEntrance,type DoorFamily,type DoorSurround} from "./cityProceduralEntrances.ts";
 import { spiralStair, straightStair } from "./citySpiralStair.ts";
@@ -53,6 +54,7 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  synarcKit?:SynarcKitChoice;
   officeArchitecture?: OfficeArchitecture;
   connectedArchitecture?: ConnectedArchitecture;
   architecturalKit?: ArchitecturalKit;
@@ -103,6 +105,7 @@ export type Corner = {
   kind: "convex" | "concave" | "end";
 };
 export type ResolvedV3 = ResolvedDesign & {
+  synarcKitAssembly?:KitAssembly;
   roofContours?:[number,number][][];
   assemblyEnvelopes?:AssemblyEnvelope[];
   kitNotes: string[];
@@ -558,6 +561,7 @@ export function resolveV3(
 ): ResolvedV3 {
   const authored = normalizeV3(input);
   if(authored.generatorRevision==="city-office-4")return resolveOffice(authored,brand,lod);
+  if(authored.synarcKit)return resolveSynarcKitV3(authored,lod);
   const residential = authored.generatorRevision === "city-connected-3" && authored.base === "residential";
   const d = residential ? {...authored,finish:"procedural" as const} : authored,
     p = d.palette,
@@ -1207,4 +1211,32 @@ export function resolveV3(
     signs,
     corners,
   };
+}
+
+function resolveSynarcKitV3(d:CityBuildingDesignV3,lod:'near'|'medium'|'far'):ResolvedV3{
+  const masses=massesV3(d),walls=exposedWalls(masses),levels=[...new Set(masses.map(m=>m.y))].sort((a,b)=>a-b);
+  const assembly=assembleSynarcKit(walls.map(w=>({...w,floor:levels.findIndex(y=>Math.abs(y-w.y)<.001)})),d.synarcKit!);
+  const parts:DesignPart[]=[
+    {kind:'box',position:[0,.22,0],size:[22.7,.12,22.7],color:d.palette.trim,sceneLayer:'grounds'},
+    ...groundsParts(d,lod),
+    ...walls.map(w=>({kind:'box' as const,position:[w.x,w.y+w.height/2,w.z] as [number,number,number],
+      size:[w.nz?w.length:.3,w.height,w.nx?w.length:.3] as [number,number,number],color:d.palette.wall,
+      fallback:'facade' as const,squareEdges:true})),
+    ...assembly.infill.map(b=>({kind:'box' as const,position:[b.x,b.y,b.z] as [number,number,number],
+      size:[b.width,b.height,b.depth] as [number,number,number],rotation:b.rotation,color:d.palette.wall,squareEdges:true})),
+  ];
+  const profile=d.roofVariant&&d.roofVariant!=='standard'?d.roofVariant:d.roof==='pitched'?'gable':'flat';
+  const roof=connectedRoof(masses,profile,d.connectedArchitecture??{},d.palette,lod);
+  parts.push(...roof.parts);
+  const slots=buildingSlots(d,masses),signs:DesignSign[]=slots.filter(s=>s.active&&(s.selected==='brand'||s.selected==='campaign')).map(s=>({
+    x:s.position[0],y:s.position[1],z:s.position[2],width:s.rotation?s.size[2]:s.size[0],
+    height:s.size[1],rotation:s.rotation,campaign:s.selected==='campaign',
+  }));
+  const front=walls.filter(w=>w.nz>.5&&w.y===levels[0]).sort((a,b)=>b.z-a.z)[0];
+  const entrance={x:assembly.entrance?.x??front?.x??0,z:assembly.entrance?.z??front?.z??d.depth/2};
+  return {parts,attachments:[],walls,masses,entrance,
+    sign:{...entrance,y:d.groundHeight-.5,width:3,height:.6},
+    synarcKitAssembly:assembly,roofContours:roof.faces.map(f=>f.polygon),assemblyEnvelopes:[],
+    kitNotes:[...roof.notes,...assembly.inactive.map(p=>p.reason)],extensionReason:null,slots,signs,
+    corners:classifyCorners(masses)};
 }

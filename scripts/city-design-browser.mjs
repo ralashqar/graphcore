@@ -235,6 +235,30 @@ try {
     assert.equal(saved,0,"Scene looks must not save or change the business recipe");
     assert.deepEqual(errors,[]);console.log("Lighting looks, quality switching, persistence and mobile controls passed.");await browser.close();process.exit(0);
   }
+  if(process.env.CITY_SYNARC_KIT_AUDIT === "1"){
+    await page.getByLabel("Use original low-poly kit").check();
+    await page.getByRole("button",{name:"Painted townhouse",exact:true}).click();
+    await page.getByLabel("Tile kit windows").selectOption("window-detailed");
+    await page.getByText("Customise individual bays",{exact:true}).click();
+    const bay=page.getByLabel("Tile kit wall bay"),opening=page.getByLabel("Tile kit bay opening");
+    let found=false;
+    for(let i=0;i<await bay.locator("option").count();i++){
+      await bay.selectOption({index:i});
+      if(await opening.locator('option[value="window-paired"]').count()){found=true;break;}
+    }
+    assert.ok(found,"A non-entrance full bay must be available");
+    await opening.selectOption("window-paired");
+    await page.getByLabel("Tile kit bay accent").selectOption("sign-band");
+    await page.getByRole("button",{name:"Add accent",exact:true}).click();
+    await page.getByRole("button",{name:"Save property draft",exact:true}).click();
+    await page.getByText("Draft saved. Verify the website, then submit it for review.",{exact:true}).waitFor();
+    assert.equal(business.draft.buildingDesign.synarcKit.style,"painted-townhouse");
+    assert.ok(business.draft.buildingDesign.synarcKit.paints.some(p=>p.part==="window-paired"));
+    assert.ok(business.draft.buildingDesign.synarcKit.paints.some(p=>p.part==="sign-band"));
+    await page.locator(".city-design-canvas").screenshot({path:"output/playwright/city-synarc-kit-business.png"});
+    assert.deepEqual(errors,[]);console.log("Original tile kit business editor, per-bay painting and save passed.");
+    await browser.close();process.exit(0);
+  }
   if(process.env.CITY_KIT_AUDIT === "1"){
     page.on("console",m=>{if(m.type()==="error" && !(process.env.CITY_RENDERER_RECOVERY==="1" && /WebGPU Device Lost/.test(m.text())) && /shader|WebGL|WebGPU|GPUValidation|GL_INVALID/i.test(m.text())){errors.push(m.text());console.error(m.text());}});
     await page.waitForTimeout(2200);

@@ -1,9 +1,10 @@
 import {cityPlots, emptyCityProfile, type CityProperty} from './city.ts';
 import {estatePlotAxis, plotAxis, frontage} from './cityLayout.ts';
 import {newDesign, normalizeV3, identitySeed, type CityBuildingDesignV3} from './cityBuildingV3.ts';
+import {resolveSculptDecorations,sculptFootprint,validateSculpt,type SculptRecipe} from './citySculpt.ts';
 
 export type LandNature={style:'minimal'|'garden'|'wooded';density:number;seed:number};
-export type LandDraft={design:CityBuildingDesignV3;name:string;color:string;nature:LandNature};
+export type LandDraft={design:CityBuildingDesignV3;name:string;color:string;nature:LandNature;builderMode?:'preset'|'sculpt';sculpt?:SculptRecipe};
 export type LandPlot={id:string;x:number;z:number;size:24|48;rotation:number;priceCents:number;currency:'USD';revision:number;owner:string|null;purchaseId:string|null;draft:LandDraft|null;finished:LandDraft|null;vegetationSeed:number};
 export type LandWorld={version:1;id:string;capacity:number;size:24|48;occupied:CityProperty[];plots:LandPlot[]};
 export const LAND_OWNER='local-test-player';
@@ -32,9 +33,17 @@ export function landPlants(p:LandPlot,draft:LandDraft|null){
  const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
  const out:{x:number;z:number;asset:number;scale:number;rotation:number}[]=[];
  const count=nature.style==='minimal'?0:nature.density*(nature.style==='wooded'?2:1);
+ const sculpture=draft?.builderMode==='sculpt'&&draft.sculpt?sculptFootprint(draft.sculpt.levels[0].shapes):null;
+ const xs=sculpture?.flatMap(poly=>poly[0].map(v=>v[0]))||[],zs=sculpture?.flatMap(poly=>poly[0].map(v=>v[1]))||[];
+ const ring=sculpture?.[0]?.[0],door=draft?.sculpt?resolveSculptDecorations(draft.sculpt,draft.design).find(a=>a.kind==='door'&&a.active):null;
+ const approach=door||ring?.map((a,i)=>{const b=ring[(i+1)%ring.length];return {x:(a[0]+b[0])/2,z:(a[1]+b[1])/2,length:Math.hypot(a[0]-b[0],a[1]-b[1])};}).filter(e=>e.z>1&&e.length>=1.1).sort((a,b)=>b.z-a.z)[0];
+ const groundDetails=draft?.sculpt?resolveSculptDecorations(draft.sculpt,draft.design).filter(a=>a.active&&(a.kind==='planter'||a.kind==='bollard')):[];
  for(let i=0;i<24;i++){
   const x=(rand()*2-1)*9,z=(rand()*2-1)*9,asset=i%4,scale=asset<2?2+rand():.7+rand()*.4,rotation=rand()*Math.PI*2;
-  if(i>=count||Math.abs(x)<3&&z>0||draft&&Math.abs(x)<draft.design.width/2+2&&Math.abs(z)<draft.design.depth/2+2)continue;
+  const occupied=draft&&(sculpture?.length?x>Math.min(...xs)-2&&x<Math.max(...xs)+2&&z>Math.min(...zs)-2&&z<Math.max(...zs)+2:Math.abs(x)<draft.design.width/2+2&&Math.abs(z)<draft.design.depth/2+2);
+  const t=approach?Math.max(0,Math.min(1,((x-approach.x)*-approach.x+(z-approach.z)*(10.4-approach.z))/(approach.x**2+(10.4-approach.z)**2))):0;
+  const pathBlocked=!!approach&&Math.hypot(x-(approach.x*(1-t)),z-(approach.z+(10.4-approach.z)*t))<1.7;
+  if(i>=count||Math.abs(x)<3&&z>0||occupied||pathBlocked||groundDetails.some(a=>Math.hypot(a.x-x,a.z-z)<a.span/2+1.2))continue;
   out.push({x,z,asset,scale,rotation});
  }return out;
 }
@@ -61,7 +70,7 @@ export class LocalLandRepository implements LandRepository{
  async reset(){return this.atomic(()=>{const w=structuredClone(this.initial);this.write(w);return w;});}
  private mutate(id:string,revision:number,fn:(p:LandPlot)=>void){return this.atomic(()=>{const w=this.read(),p=w.plots.find(p=>p.id===id);if(!p)throw new Error('Plot is unavailable.');if(p.revision!==revision)throw new Error('This plot changed in another tab. Reopen it before editing.');fn(p);p.revision++;this.write(w);return structuredClone(p);});}
  async purchase(id:string,revision:number,requestId:string){return this.atomic(()=>{const w=this.read(),p=w.plots.find(p=>p.id===id);if(!p)throw new Error('Plot is unavailable.');if(p.purchaseId===requestId&&p.owner===LAND_OWNER)return structuredClone(p);if(p.owner||p.revision!==revision)throw new Error('This plot is no longer available.');p.owner=LAND_OWNER;p.purchaseId=requestId;p.revision++;this.write(w);return structuredClone(p);});}
- private save(id:string,revision:number,draft:LandDraft,finish:boolean){return this.mutate(id,revision,p=>{if(p.owner!==LAND_OWNER)throw new Error('You do not own this plot.');const d=structuredClone(draft);d.name=d.name.trim().slice(0,60)||'My place';if(!/^#[0-9a-f]{6}$/i.test(d.color))throw new Error('Choose a valid brand colour.');d.design=fitLandDesign(d.design,p.rotation);d.nature.density=Math.max(0,Math.min(8,Math.round(d.nature.density)));p.draft=d;if(finish)p.finished=structuredClone(d);});}
+ private save(id:string,revision:number,draft:LandDraft,finish:boolean){return this.mutate(id,revision,p=>{if(p.owner!==LAND_OWNER)throw new Error('You do not own this plot.');const d=structuredClone(draft);d.name=d.name.trim().slice(0,60)||'My place';if(!/^#[0-9a-f]{6}$/i.test(d.color))throw new Error('Choose a valid brand colour.');d.design=fitLandDesign(d.design,p.rotation);if(d.builderMode==='sculpt'){if(!d.sculpt)throw new Error('Sculpt recipe is missing.');const issue=validateSculpt(d.sculpt,d.design.floors);if(issue)throw new Error(issue);}d.nature.density=Math.max(0,Math.min(8,Math.round(d.nature.density)));p.draft=d;if(finish)p.finished=structuredClone(d);});}
  saveDraft(id:string,revision:number,draft:LandDraft){return this.save(id,revision,draft,false);}
  finish(id:string,revision:number,draft:LandDraft){return this.save(id,revision,draft,true);}
 }

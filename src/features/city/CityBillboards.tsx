@@ -124,7 +124,10 @@ export function CityBillboards({
     canvas.getContext("2d")!.clearRect(0,0,canvas.width,canvas.height);
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
-    texture.anisotropy = Math.min(4, gl.capabilities.getMaxAnisotropy());
+    // WebGPURenderer exposes this on the renderer; WebGLRenderer keeps the
+    // older capabilities object. The atlas must work with either backend.
+    const renderer=gl as typeof gl&{getMaxAnisotropy?:()=>number;capabilities?:{getMaxAnisotropy?:()=>number}};
+    texture.anisotropy = Math.min(4, renderer.getMaxAnisotropy?.()??renderer.capabilities?.getMaxAnisotropy?.()??4);
     return { canvas, texture };
   }, [gl]);
   useEffect(() => () => atlas.texture.dispose(), [atlas]);

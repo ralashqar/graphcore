@@ -6,10 +6,15 @@ import {landPosition,type LandPlot} from '../../domain/cityLand';
 import {CityPreparedBuildings} from './CityDesignBuildings';
 import {usePreparedCity,type CityPreparationStatus} from './usePreparedCity';
 import type {CityLandController} from './useCityLand';
+import {CitySculptBuilding} from './CitySculptBuilding';
 
 const fingerprint=(p:CityProperty|null|undefined)=>p?JSON.stringify([p.id,p.profile.buildingDesign,p.profile.color,p.profile.name,p.profile.logo]):'';
 /** One vertical transform for building and signs; plot surfaces and grounding stay outside it. */
 export function CityConstructionBuilding({property,plot,land}:{property:CityProperty;plot:LandPlot;land:CityLandController}){
+ if(land.draft?.builderMode==='sculpt'&&land.draft.sculpt)return <CitySculptBuilding plot={plot} draft={land.draft} land={land}/>;
+ return <PresetConstructionBuilding property={property} plot={plot} land={land}/>;
+}
+function PresetConstructionBuilding({property,plot,land}:{property:CityProperty;plot:LandPlot;land:CityLandController}){
  const group=useRef<Group>(null),{gl}=useThree();
  const [preparation,setPreparation]=useState<CityPreparationStatus>({pending:true,error:null});
  const requested=useMemo(()=>[property],[property]);

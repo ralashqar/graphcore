@@ -1,0 +1,5415 @@
+{
+  "version": 1,
+  "module": {
+    "width": 2,
+    "height": 3,
+    "thickness": 0.3,
+    "fillWidths": [
+      1,
+      0.5
+    ],
+    "groundHeightBand": [
+      0,
+      1.5
+    ]
+  },
+  "coordinateSystem": {
+    "blenderFront": "-Y",
+    "runtimeFront": "+Z",
+    "up": "+Y"
+  },
+  "styles": [
+    "warm-brick",
+    "painted-townhouse",
+    "modern-office"
+  ],
+  "parts": [
+    {
+      "id": "warm-brick/wall-full",
+      "category": "shell",
+      "role": "wall",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.171999990940094
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.171999990940094,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 384
+    },
+    {
+      "id": "warm-brick/wall-half",
+      "category": "shell",
+      "role": "wall",
+      "style": "warm-brick",
+      "size": [
+        1,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.5,
+          3.0,
+          0.171999990940094
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.171999990940094,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 192
+    },
+    {
+      "id": "warm-brick/wall-quarter",
+      "category": "shell",
+      "role": "wall",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.171999990940094
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.171999990940094,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 156
+    },
+    {
+      "id": "warm-brick/window-single",
+      "category": "opening",
+      "role": "window",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 428
+    },
+    {
+      "id": "warm-brick/window-detailed",
+      "category": "opening",
+      "role": "window",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 496
+    },
+    {
+      "id": "warm-brick/window-paired",
+      "category": "opening",
+      "role": "paired-window",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 440
+    },
+    {
+      "id": "warm-brick/storefront-glazing",
+      "category": "opening",
+      "role": "storefront",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.3,
+        "top": 2.68
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 344
+    },
+    {
+      "id": "warm-brick/door-residential",
+      "category": "opening",
+      "role": "door",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 380
+    },
+    {
+      "id": "warm-brick/door-shop",
+      "category": "opening",
+      "role": "shop-door",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2849999964237213
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2849999964237213,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 312
+    },
+    {
+      "id": "warm-brick/door-lobby",
+      "category": "opening",
+      "role": "lobby-door",
+      "style": "warm-brick",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 380
+    },
+    {
+      "id": "warm-brick/corner-convex",
+      "category": "shell",
+      "role": "corner",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-convex",
+        "right": "corner-convex",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "warm-brick/corner-concave",
+      "category": "shell",
+      "role": "corner",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-concave",
+        "right": "corner-concave",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "warm-brick/wall-end",
+      "category": "shell",
+      "role": "end",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "wall-end",
+        "right": "wall-end",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "warm-brick/plinth-full",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "warm-brick",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/plinth-half",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "warm-brick",
+      "size": [
+        1,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.5,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/plinth-corner",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/cornice-centre",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "warm-brick",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/cornice-end",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/cornice-corner",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/buttress",
+      "category": "attachment",
+      "role": "buttress",
+      "style": "warm-brick",
+      "size": [
+        0.5,
+        1.2,
+        0.58
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "ground-solid-wall",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.06999999284744263
+        ],
+        "max": [
+          0.25,
+          1.2000000476837158,
+          0.5099999904632568
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.5099999904632568,
+          0.06999999284744263
+        ],
+        [
+          0.0,
+          1.2000000476837158
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/canopy-short",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "warm-brick",
+      "size": [
+        2.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.100000023841858,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          1.100000023841858,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.100000023841858,
+          1.100000023841858
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/canopy-long",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "warm-brick",
+      "size": [
+        4.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -2.0999999046325684,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          2.0999999046325684,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -2.0999999046325684,
+          2.0999999046325684
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/entrance-column",
+      "category": "attachment",
+      "role": "column",
+      "style": "warm-brick",
+      "size": [
+        0.32,
+        2.8,
+        0.32
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "beside-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.1599999964237213,
+          0.0,
+          0.07999999821186066
+        ],
+        "max": [
+          0.1599999964237213,
+          2.799999952316284,
+          0.3999999761581421
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.1599999964237213,
+          0.1599999964237213
+        ],
+        [
+          -0.3999999761581421,
+          -0.07999999821186066
+        ],
+        [
+          0.0,
+          2.799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/balcony-slab",
+      "category": "attachment",
+      "role": "balcony",
+      "style": "warm-brick",
+      "size": [
+        2,
+        0.18,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "under-upper-window",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.15999996662139893
+        ],
+        "max": [
+          1.0,
+          0.18000000715255737,
+          1.3600000143051147
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -1.3600000143051147,
+          -0.15999996662139893
+        ],
+        [
+          0.0,
+          0.18000000715255737
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/rail-centre",
+      "category": "attachment",
+      "role": "rail",
+      "style": "warm-brick",
+      "size": [
+        2,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          1.0,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 36
+    },
+    {
+      "id": "warm-brick/rail-end",
+      "category": "attachment",
+      "role": "rail",
+      "style": "warm-brick",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "warm-brick/rail-corner",
+      "category": "attachment",
+      "role": "rail",
+      "style": "warm-brick",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "warm-brick/ac-unit",
+      "category": "attachment",
+      "role": "ac",
+      "style": "warm-brick",
+      "size": [
+        0.72,
+        0.48,
+        0.42
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.36000001430511475,
+          0.0,
+          0.15000002086162567
+        ],
+        "max": [
+          0.36000001430511475,
+          0.47999998927116394,
+          0.5699999928474426
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.36000001430511475,
+          0.36000001430511475
+        ],
+        [
+          -0.5699999928474426,
+          -0.15000002086162567
+        ],
+        [
+          0.0,
+          0.47999998927116394
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/wall-lamp",
+      "category": "attachment",
+      "role": "lamp",
+      "style": "warm-brick",
+      "size": [
+        0.2,
+        0.36,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10000000149011612,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          0.10000000149011612,
+          0.36000001430511475,
+          0.3700000047683716
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10000000149011612,
+          0.10000000149011612
+        ],
+        [
+          -0.3700000047683716,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.36000001430511475
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/vent",
+      "category": "attachment",
+      "role": "vent",
+      "style": "warm-brick",
+      "size": [
+        0.48,
+        0.38,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.23999999463558197,
+          0.0,
+          0.15000000596046448
+        ],
+        "max": [
+          0.23999999463558197,
+          0.3799999952316284,
+          0.22999998927116394
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.23999999463558197,
+          0.23999999463558197
+        ],
+        [
+          -0.22999998927116394,
+          -0.15000000596046448
+        ],
+        [
+          0.0,
+          0.3799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "warm-brick/sign-band",
+      "category": "attachment",
+      "role": "sign",
+      "style": "warm-brick",
+      "size": [
+        2,
+        0.42,
+        0.15
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          1.0,
+          0.41999998688697815,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.41999998688697815
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/wall-full",
+      "category": "shell",
+      "role": "wall",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.1889999955892563
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.1889999955892563,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 104
+    },
+    {
+      "id": "painted-townhouse/wall-half",
+      "category": "shell",
+      "role": "wall",
+      "style": "painted-townhouse",
+      "size": [
+        1,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.5,
+          3.0,
+          0.1889999955892563
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.1889999955892563,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 104
+    },
+    {
+      "id": "painted-townhouse/wall-quarter",
+      "category": "shell",
+      "role": "wall",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.15000000596046448
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.15000000596046448,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "painted-townhouse/window-single",
+      "category": "opening",
+      "role": "window",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 196
+    },
+    {
+      "id": "painted-townhouse/window-detailed",
+      "category": "opening",
+      "role": "window",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 264
+    },
+    {
+      "id": "painted-townhouse/window-paired",
+      "category": "opening",
+      "role": "paired-window",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 208
+    },
+    {
+      "id": "painted-townhouse/storefront-glazing",
+      "category": "opening",
+      "role": "storefront",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.3,
+        "top": 2.68
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 152
+    },
+    {
+      "id": "painted-townhouse/door-residential",
+      "category": "opening",
+      "role": "door",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 188
+    },
+    {
+      "id": "painted-townhouse/door-shop",
+      "category": "opening",
+      "role": "shop-door",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2849999964237213
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2849999964237213,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 120
+    },
+    {
+      "id": "painted-townhouse/door-lobby",
+      "category": "opening",
+      "role": "lobby-door",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 188
+    },
+    {
+      "id": "painted-townhouse/corner-convex",
+      "category": "shell",
+      "role": "corner",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-convex",
+        "right": "corner-convex",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "painted-townhouse/corner-concave",
+      "category": "shell",
+      "role": "corner",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-concave",
+        "right": "corner-concave",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "painted-townhouse/wall-end",
+      "category": "shell",
+      "role": "end",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "wall-end",
+        "right": "wall-end",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "painted-townhouse/plinth-full",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/plinth-half",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "painted-townhouse",
+      "size": [
+        1,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.5,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/plinth-corner",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/cornice-centre",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/cornice-end",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/cornice-corner",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/buttress",
+      "category": "attachment",
+      "role": "buttress",
+      "style": "painted-townhouse",
+      "size": [
+        0.5,
+        1.2,
+        0.58
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "ground-solid-wall",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.06999999284744263
+        ],
+        "max": [
+          0.25,
+          1.2000000476837158,
+          0.5099999904632568
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.5099999904632568,
+          0.06999999284744263
+        ],
+        [
+          0.0,
+          1.2000000476837158
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/canopy-short",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "painted-townhouse",
+      "size": [
+        2.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.100000023841858,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          1.100000023841858,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.100000023841858,
+          1.100000023841858
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/canopy-long",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "painted-townhouse",
+      "size": [
+        4.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -2.0999999046325684,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          2.0999999046325684,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -2.0999999046325684,
+          2.0999999046325684
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/entrance-column",
+      "category": "attachment",
+      "role": "column",
+      "style": "painted-townhouse",
+      "size": [
+        0.32,
+        2.8,
+        0.32
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "beside-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.1599999964237213,
+          0.0,
+          0.07999999821186066
+        ],
+        "max": [
+          0.1599999964237213,
+          2.799999952316284,
+          0.3999999761581421
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.1599999964237213,
+          0.1599999964237213
+        ],
+        [
+          -0.3999999761581421,
+          -0.07999999821186066
+        ],
+        [
+          0.0,
+          2.799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/balcony-slab",
+      "category": "attachment",
+      "role": "balcony",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        0.18,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "under-upper-window",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.15999996662139893
+        ],
+        "max": [
+          1.0,
+          0.18000000715255737,
+          1.3600000143051147
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -1.3600000143051147,
+          -0.15999996662139893
+        ],
+        [
+          0.0,
+          0.18000000715255737
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/rail-centre",
+      "category": "attachment",
+      "role": "rail",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          1.0,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 36
+    },
+    {
+      "id": "painted-townhouse/rail-end",
+      "category": "attachment",
+      "role": "rail",
+      "style": "painted-townhouse",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "painted-townhouse/rail-corner",
+      "category": "attachment",
+      "role": "rail",
+      "style": "painted-townhouse",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "painted-townhouse/ac-unit",
+      "category": "attachment",
+      "role": "ac",
+      "style": "painted-townhouse",
+      "size": [
+        0.72,
+        0.48,
+        0.42
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.36000001430511475,
+          0.0,
+          0.15000002086162567
+        ],
+        "max": [
+          0.36000001430511475,
+          0.47999998927116394,
+          0.5699999928474426
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.36000001430511475,
+          0.36000001430511475
+        ],
+        [
+          -0.5699999928474426,
+          -0.15000002086162567
+        ],
+        [
+          0.0,
+          0.47999998927116394
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/wall-lamp",
+      "category": "attachment",
+      "role": "lamp",
+      "style": "painted-townhouse",
+      "size": [
+        0.2,
+        0.36,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10000000149011612,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          0.10000000149011612,
+          0.36000001430511475,
+          0.3700000047683716
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10000000149011612,
+          0.10000000149011612
+        ],
+        [
+          -0.3700000047683716,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.36000001430511475
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/vent",
+      "category": "attachment",
+      "role": "vent",
+      "style": "painted-townhouse",
+      "size": [
+        0.48,
+        0.38,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.23999999463558197,
+          0.0,
+          0.15000000596046448
+        ],
+        "max": [
+          0.23999999463558197,
+          0.3799999952316284,
+          0.22999998927116394
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.23999999463558197,
+          0.23999999463558197
+        ],
+        [
+          -0.22999998927116394,
+          -0.15000000596046448
+        ],
+        [
+          0.0,
+          0.3799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "painted-townhouse/sign-band",
+      "category": "attachment",
+      "role": "sign",
+      "style": "painted-townhouse",
+      "size": [
+        2,
+        0.42,
+        0.15
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          1.0,
+          0.41999998688697815,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.41999998688697815
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/wall-full",
+      "category": "shell",
+      "role": "wall",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.17249999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.17249999940395355,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 92
+    },
+    {
+      "id": "modern-office/wall-half",
+      "category": "shell",
+      "role": "wall",
+      "style": "modern-office",
+      "size": [
+        1,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.5,
+          3.0,
+          0.17249999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.17249999940395355,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 92
+    },
+    {
+      "id": "modern-office/wall-quarter",
+      "category": "shell",
+      "role": "wall",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": null,
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.15000000596046448
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.15000000596046448,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "modern-office/window-single",
+      "category": "opening",
+      "role": "window",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 184
+    },
+    {
+      "id": "modern-office/window-detailed",
+      "category": "opening",
+      "role": "window",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 252
+    },
+    {
+      "id": "modern-office/window-paired",
+      "category": "opening",
+      "role": "paired-window",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.78,
+        "top": 2.43
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 196
+    },
+    {
+      "id": "modern-office/storefront-glazing",
+      "category": "opening",
+      "role": "storefront",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.3,
+        "top": 2.68
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2750000059604645
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2750000059604645,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 152
+    },
+    {
+      "id": "modern-office/door-residential",
+      "category": "opening",
+      "role": "door",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 188
+    },
+    {
+      "id": "modern-office/door-shop",
+      "category": "opening",
+      "role": "shop-door",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.24,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.2849999964237213
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.2849999964237213,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 120
+    },
+    {
+      "id": "modern-office/door-lobby",
+      "category": "opening",
+      "role": "lobby-door",
+      "style": "modern-office",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": {
+        "width": 1.52,
+        "bottom": 0.08,
+        "top": 2.65
+      },
+      "anchor": "wall-bay",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.15000000596046448
+        ],
+        "max": [
+          1.0,
+          3.0,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          0.15000000596046448
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 188
+    },
+    {
+      "id": "modern-office/corner-convex",
+      "category": "shell",
+      "role": "corner",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-convex",
+        "right": "corner-convex",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "modern-office/corner-concave",
+      "category": "shell",
+      "role": "corner",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "corner-concave",
+        "right": "corner-concave",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "modern-office/wall-end",
+      "category": "shell",
+      "role": "end",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        3,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "wall-end",
+        "right": "wall-end",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "wall-joint",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          3.0,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          3.0
+        ]
+      ],
+      "triangles": 12
+    },
+    {
+      "id": "modern-office/plinth-full",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "modern-office",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/plinth-half",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "modern-office",
+      "size": [
+        1,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.5,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.5,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/plinth-corner",
+      "category": "attachment",
+      "role": "plinth",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "base-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/cornice-centre",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "modern-office",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          1.0,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/cornice-end",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.13499999046325684
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.24500000476837158
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.24500000476837158,
+          0.13499999046325684
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/cornice-corner",
+      "category": "attachment",
+      "role": "cornice",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        0.22,
+        0.5
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "roof-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          0.2199999988079071,
+          0.25
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          0.0,
+          0.2199999988079071
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/buttress",
+      "category": "attachment",
+      "role": "buttress",
+      "style": "modern-office",
+      "size": [
+        0.5,
+        1.2,
+        0.58
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "ground-solid-wall",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          0.0,
+          -0.06999999284744263
+        ],
+        "max": [
+          0.25,
+          1.2000000476837158,
+          0.5099999904632568
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.25,
+          0.25
+        ],
+        [
+          -0.5099999904632568,
+          0.06999999284744263
+        ],
+        [
+          0.0,
+          1.2000000476837158
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/canopy-short",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "modern-office",
+      "size": [
+        2.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.100000023841858,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          1.100000023841858,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.100000023841858,
+          1.100000023841858
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/canopy-long",
+      "category": "attachment",
+      "role": "canopy",
+      "style": "modern-office",
+      "size": [
+        4.2,
+        0.24,
+        1.35
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "above-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -2.0999999046325684,
+          0.0,
+          0.04500001668930054
+        ],
+        "max": [
+          2.0999999046325684,
+          0.23999999463558197,
+          1.3949999809265137
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -2.0999999046325684,
+          2.0999999046325684
+        ],
+        [
+          -1.3949999809265137,
+          -0.04500001668930054
+        ],
+        [
+          0.0,
+          0.23999999463558197
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/entrance-column",
+      "category": "attachment",
+      "role": "column",
+      "style": "modern-office",
+      "size": [
+        0.32,
+        2.8,
+        0.32
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "beside-door",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.1599999964237213,
+          0.0,
+          0.07999999821186066
+        ],
+        "max": [
+          0.1599999964237213,
+          2.799999952316284,
+          0.3999999761581421
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.1599999964237213,
+          0.1599999964237213
+        ],
+        [
+          -0.3999999761581421,
+          -0.07999999821186066
+        ],
+        [
+          0.0,
+          2.799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/balcony-slab",
+      "category": "attachment",
+      "role": "balcony",
+      "style": "modern-office",
+      "size": [
+        2,
+        0.18,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "under-upper-window",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.15999996662139893
+        ],
+        "max": [
+          1.0,
+          0.18000000715255737,
+          1.3600000143051147
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -1.3600000143051147,
+          -0.15999996662139893
+        ],
+        [
+          0.0,
+          0.18000000715255737
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/rail-centre",
+      "category": "attachment",
+      "role": "rail",
+      "style": "modern-office",
+      "size": [
+        2,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          1.0,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 36
+    },
+    {
+      "id": "modern-office/rail-end",
+      "category": "attachment",
+      "role": "rail",
+      "style": "modern-office",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "modern-office/rail-corner",
+      "category": "attachment",
+      "role": "rail",
+      "style": "modern-office",
+      "size": [
+        0.22,
+        1.05,
+        0.12
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "balcony-or-plot-edge",
+      "minDetail": "medium",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10999999940395355,
+          0.0,
+          -0.009999997913837433
+        ],
+        "max": [
+          0.10999999940395355,
+          1.0499999523162842,
+          0.10999999940395355
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10999999940395355,
+          0.10999999940395355
+        ],
+        [
+          -0.10999999940395355,
+          0.009999997913837433
+        ],
+        [
+          0.0,
+          1.0499999523162842
+        ]
+      ],
+      "triangles": 24
+    },
+    {
+      "id": "modern-office/ac-unit",
+      "category": "attachment",
+      "role": "ac",
+      "style": "modern-office",
+      "size": [
+        0.72,
+        0.48,
+        0.42
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.36000001430511475,
+          0.0,
+          0.15000002086162567
+        ],
+        "max": [
+          0.36000001430511475,
+          0.47999998927116394,
+          0.5699999928474426
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.36000001430511475,
+          0.36000001430511475
+        ],
+        [
+          -0.5699999928474426,
+          -0.15000002086162567
+        ],
+        [
+          0.0,
+          0.47999998927116394
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/wall-lamp",
+      "category": "attachment",
+      "role": "lamp",
+      "style": "modern-office",
+      "size": [
+        0.2,
+        0.36,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.10000000149011612,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          0.10000000149011612,
+          0.36000001430511475,
+          0.3700000047683716
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.10000000149011612,
+          0.10000000149011612
+        ],
+        [
+          -0.3700000047683716,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.36000001430511475
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/vent",
+      "category": "attachment",
+      "role": "vent",
+      "style": "modern-office",
+      "size": [
+        0.48,
+        0.38,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -0.23999999463558197,
+          0.0,
+          0.15000000596046448
+        ],
+        "max": [
+          0.23999999463558197,
+          0.3799999952316284,
+          0.22999998927116394
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -0.23999999463558197,
+          0.23999999463558197
+        ],
+        [
+          -0.22999998927116394,
+          -0.15000000596046448
+        ],
+        [
+          0.0,
+          0.3799999952316284
+        ]
+      ],
+      "triangles": 44
+    },
+    {
+      "id": "modern-office/sign-band",
+      "category": "attachment",
+      "role": "sign",
+      "style": "modern-office",
+      "size": [
+        2,
+        0.42,
+        0.15
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "connections": {
+        "left": "square",
+        "right": "square",
+        "bottom": "square",
+        "top": "square"
+      },
+      "opening": null,
+      "anchor": "solid-wall",
+      "minDetail": "near",
+      "materialSlots": [
+        "wall",
+        "trim",
+        "frame",
+        "glass",
+        "door",
+        "accent"
+      ],
+      "bounds": {
+        "min": [
+          -1.0,
+          0.0,
+          0.14999999105930328
+        ],
+        "max": [
+          1.0,
+          0.41999998688697815,
+          0.30000001192092896
+        ]
+      },
+      "meshBoundsBlender": [
+        [
+          -1.0,
+          1.0
+        ],
+        [
+          -0.30000001192092896,
+          -0.14999999105930328
+        ],
+        [
+          0.0,
+          0.41999998688697815
+        ]
+      ],
+      "triangles": 44
+    }
+  ],
+  "sourceSha256": "d9eb2d6c09d13d6a70ecd79383a646e6b561d6b2a59202946d541fb44a0382d1",
+  "glbSha256": "dd94abec939b6eca40c0c35ba69cdb5ae610490c789dc4a2144675aeccdc2984"
+}

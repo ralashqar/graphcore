@@ -5,6 +5,7 @@ import { WINDOW_FAMILIES } from "../../domain/cityWindowFamilies";
 import { CITY_LIGHT_MODE } from "./cityRenderMode";
 import { KIT_CORNERS, KIT_ROOFLINES, KIT_ENTRANCES, KIT_FRONTAGES, KIT_ROOFS } from "../../domain/cityArchitecturalKit";
 import { NATIVE_FACADES, type NativeFacadeId } from "../../domain/cityNativeFacades";
+import {CitySynarcKitControls} from './CitySynarcKitControls';
 import { NATIVE_MODULES } from "../../domain/cityNativeModules";
 import { CITY_TEXTURES, SELECTABLE_TEXTURE_IDS, displayedTexture } from "../../domain/cityTexturePresets";
 import { advertisingLayout, AD_PLACEMENTS, AD_LABELS, DEFAULT_ADVERTISING } from "../../domain/cityAdvertising";
@@ -851,7 +852,8 @@ export function CityBuildingDesigner(
                     </button>
                   ))}
                 </div>
-                <fieldset disabled={d.generatorRevision==="city-office-4"}><label>
+                <CitySynarcKitControls value={d.synarcKit} assembly={assemblyStatus.synarcKitAssembly} disabledReason={d.generatorRevision==='city-office-4'?'Curved and bridge towers keep their existing façade until a curved tile kit is ready.':undefined} onChange={next=>commit({...d,synarcKit:next,finish:'procedural'})}/>
+                <fieldset disabled={d.generatorRevision==="city-office-4"||!!d.synarcKit}><label>
                   Building finish<select
                     aria-label="Building finish"
                     value={d.finish}

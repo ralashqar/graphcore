@@ -1,4 +1,5 @@
 import {OFFICE_TYPES} from "../../../src/domain/cityOfficeArchitecture.ts";
+import {SYNARC_KIT_STYLES,SYNARC_KIT_WINDOWS,SYNARC_KIT_DOORS,SYNARC_KIT_PAINTS} from "../../../src/domain/citySynarcKit.ts";
 import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../../src/domain/cityProceduralEntrances.ts";
 import { WINDOW_FAMILIES } from "../../../src/domain/cityWindowFamilies.ts";
 import { KIT_CORNERS,KIT_ROOFLINES,KIT_ENTRANCES,KIT_FRONTAGES,KIT_ROOFS } from "../../../src/domain/cityArchitecturalKit.ts";
@@ -57,6 +58,13 @@ const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
   generatorRevision: z.enum(["city-grammar-1", "city-shell-2", "city-connected-3", "city-office-4"]),
+  synarcKit:z.object({
+    version:z.literal(1),style:z.enum(SYNARC_KIT_STYLES),window:z.enum(SYNARC_KIT_WINDOWS),door:z.enum(SYNARC_KIT_DOORS),
+    canopy:z.enum(["none","short","long"]),cornice:z.boolean(),plinth:z.boolean(),
+    balconies:z.boolean(),buttresses:z.boolean(),acUnits:z.boolean(),
+    paints:z.array(z.object({id:z.string().min(1).max(80),part:z.enum(SYNARC_KIT_PAINTS),floor:z.number().int().min(0).max(7),
+      x:z.number().min(-12).max(12),z:z.number().min(-12).max(12),nx:z.number().min(-1).max(1),nz:z.number().min(-1).max(1)}).strict()).max(64),
+  }).strict().optional(),
   officeArchitecture:z.object({bridgeFloor:z.number().int().min(1).max(7).optional(),towerGap:z.number().min(2).max(6).optional(),shorterTower:z.number().int().min(0).max(3).optional(),style:z.enum(["international","deco","brutalist"]).optional()}).strict().optional(),
   connectedArchitecture:z.object({
     openingLayout:z.enum(["compact","balanced","paired"]).optional(),
@@ -95,6 +103,7 @@ const v3 = z.object({
   density: z.enum(["restrained", "full"]),
   slots: z.partialRecord(z.enum(SLOT_IDS), z.enum(COMPONENTS).nullable()),
 }).strict().superRefine((d, ctx) => {
+  if(d.synarcKit&&d.generatorRevision==="city-office-4")ctx.addIssue({code:'custom',message:'Curved and bridge architecture uses its existing facade until the curved tile kit is ready.'});
   if(d.generatorRevision==="city-office-4" && !OFFICE_TYPES.some(t=>t===d.archetype))ctx.addIssue({code:"custom",message:"Connected office envelopes require a matching preset."});
   if(d.generatorRevision!=="city-office-4" && (d.officeArchitecture || OFFICE_TYPES.some(t=>t===d.archetype)))ctx.addIssue({code:"custom",message:"Office architecture requires its generator revision."});
   if(d.generatorRevision!=="city-connected-3" && (d.connectedArchitecture || d.base==="residential"))ctx.addIssue({code:"custom",message:"Connected architecture requires an explicit generator upgrade."});

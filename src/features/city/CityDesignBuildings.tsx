@@ -26,8 +26,10 @@ import {
   MeshLambertMaterial,
 } from "three";
 import { type DecoratorPack, loadDecorators } from "./CityDecorators";
+import {loadSynarcKit,type SynarcKitPack} from './CitySynarcKit';
 import { CityDesignSigns } from "./CityDesignSigns";
 import { buildingParts } from "../../domain/cityBuildingDesign";
+import type {KitAssembly} from '../../domain/citySynarcKit';
 import type { CityProperty } from "../../domain/city";
 import { Batch, type Instance } from "./CityInstances";
 import { useCityMapLayout } from "./CityMapLayout";
@@ -59,6 +61,9 @@ function BuildingBatches(
   const {occlusion}=useCityLook();
   const { plotAxis, plotSize } = useCityMapLayout();
   const [pack, setPack] = useState<DecoratorPack | null>(null);
+  const [synarcPack,setSynarcPack]=useState<SynarcKitPack|null>(null);
+  const needsSynarcPack=properties.some(p=>p.profile.buildingDesign?.version===3&&!!p.profile.buildingDesign.synarcKit&&!p.profile.buildingArt);
+  useEffect(()=>{if(!needsSynarcPack||synarcPack)return;let live=true;void loadSynarcKit().then(p=>{if(live){setSynarcPack(p);invalidate();}}).catch(()=>{});return()=>{live=false;};},[needsSynarcPack,synarcPack,invalidate]);
   const needsPack = !CITY_LIGHT_MODE && properties.some((p) =>
     !p.profile.buildingArt &&
     p.profile.buildingDesign && p.profile.buildingDesign.version !== 1 &&
@@ -156,6 +161,7 @@ function BuildingBatches(
           const ground = part.sceneLayer==="grounds" || ("textureRole" in part && part.textureRole === "groundBorder") ||
             (part.position[1] + part.size[1]/2 <= .34 && !("textureRole" in part && part.textureRole === "wall"));
           if(layer!=="all" && ground!==(layer==="grounds"))return;
+          if(synarcPack && d.version===3 && d.synarcKit && "fallback" in part && part.fallback==="facade")return;
           if (kit && "fallback" in part && part.fallback &&
             ("fallbackAssets" in part && Array.isArray(part.fallbackAssets) ? part.fallbackAssets.every(asset=>pack.has(asset)) : "fallbackAsset" in part && typeof part.fallbackAsset === "string" ? pack.has(part.fallbackAsset) : legacyComplete)) return;
           const [x, y, z] = part.position;
@@ -221,6 +227,20 @@ function BuildingBatches(
           });
         }
       }
+      const synarcAssembly=d.version===3&&resolved?(resolved as {synarcKitAssembly?:KitAssembly}).synarcKitAssembly:undefined;
+      if(layer!=="grounds"&&synarcPack&&synarcAssembly){
+        for(const placement of synarcAssembly.placements){
+          if(simple&&placement.detail==='near')continue;
+          const [x,y,z]=[placement.x,placement.y,placement.z];
+          const px=plotAxis(p.x)+(x*c+z*s)*scale,pz=plotAxis(p.z)+(z*c-x*s)*scale;
+          synarcPack.get(placement.part)?.forEach((_,partIndex)=>{
+            const key=`synarc|${placement.part}|${partIndex}`;
+            (out[key] ||= []).push({key:`${p.id}:synarc:${placement.id}:${partIndex}`,property:p,
+              detail:center?representation:undefined,x:px,y:y*scale,z:pz,rotation:angle+placement.rotation,
+              scale:[placement.scaleX*scale,scale,scale],color:dim?'#8c8c8c':'#ffffff'});
+          });
+        }
+      }
      }
     }
     return out;
@@ -232,6 +252,7 @@ function BuildingBatches(
     matchIds,
     selectedId,
     pack,
+    synarcPack,
     !!center,
   ]);
   useEffect(()=>{
@@ -252,6 +273,7 @@ function BuildingBatches(
           key={kind}
           pieces={kind.startsWith("asset|")
             ? [{...pack!.get(kind.split("|")[1])![Number(kind.split("|")[2])], ...(kind.split("|")[3] ? {material:textureMaterial(kind.split("|")[3])} : {})}]
+            : kind.startsWith('synarc|') ? [synarcPack!.get(kind.split('|')[1])![Number(kind.split('|')[2])]]
             : [{
               geometry: kind.startsWith("mesh:") ? resources.custom.get(kind.split("|")[0])! : (kind === "glassBox" || kind.split("|")[0] === "joinedBox") ? resources.pane : resources[kind.split("|")[0] as "box" | "tree" | "roof" | "column" | "pediment" | "hip" | "shed" | "mansard" | "stairTread" | "stairRail" | "archedPane" | "archInfill"],
               material: kind === "glassBox" || kind === "archedPane" ? resources.glass : kind.includes("|") ? textureMaterial(kind.split("|")[1]) : resources.material,

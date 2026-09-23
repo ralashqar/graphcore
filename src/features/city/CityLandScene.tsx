@@ -4,6 +4,7 @@ import {Box3,BoxGeometry,CanvasTexture,DoubleSide,Mesh,MeshStandardMaterial,Plan
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {Batch,type Instance,type Piece} from './CityInstances';
 import {CityDesignBuildings} from './CityDesignBuildings';
+import {CitySculptBuilding} from './CitySculptBuilding';
 import {landPrice,landPlants,landPosition,landProperty,type LandPlot} from '../../domain/cityLand';
 import type {CityLandController} from './useCityLand';
 const ASSETS=['tree_simple','tree_pineRoundA','plant_bush','plant_bushSmall'];
@@ -33,10 +34,10 @@ export function CityLandScene({land}:{land:CityLandController}){
   }return plants;
  },[editing,land.draft]);
  const data=useMemo(()=>{
-  const boxes:Instance[]=[],signs=new Map<string,Instance[]>(),ownedSigns:Instance[]=[],plants:Instance[][]=ASSETS.map(()=>[]),buildings=[];
+  const boxes:Instance[]=[],signs=new Map<string,Instance[]>(),ownedSigns:Instance[]=[],plants:Instance[][]=ASSETS.map(()=>[]),buildings=[],sculptBuildings:{plot:LandPlot;draft:NonNullable<LandPlot['draft']>}[]=[];
   for(const p of backgroundPlots){
    const draft=land.selected?.id===p.id&&land.phase!=='exploring'&&p.owner?backgroundDraft:p.finished;
-   if(draft&&p.id!==editing)buildings.push(landProperty(p,draft));
+   if(draft&&p.id!==editing){if(draft.builderMode==='sculpt'&&draft.sculpt)sculptBuildings.push({plot:p,draft});else buildings.push(landProperty(p,draft));}
    const {x:cx,z:cz}=landPosition(p),scale=p.size/24,angle=p.rotation*Math.PI/2,c=Math.cos(angle),s=Math.sin(angle);
    const item=(key:string,x:number,y:number,z:number,w:number,h:number,d:number,color:string):Instance=>({key:`${p.id}:${key}`,x:cx+(x*c+z*s)*scale,z:cz+(-x*s+z*c)*scale,y:y*scale,rotation:angle,scale:[w*scale,h*scale,d*scale],color});
    if(!draft){
@@ -49,11 +50,11 @@ export function CityLandScene({land}:{land:CityLandController}){
     boxes.push(item('post',5,1.35,10.75,.16,2.4,.16,'#63756c'));
    }
    for(const [i,plant] of landPlants(p,draft).entries())plants[plant.asset].push({...item(`plant${i}`,plant.x,.18,plant.z,plant.scale,plant.scale,plant.scale,'#ffffff'),rotation:angle+plant.rotation});
-  }return {boxes,signs,ownedSigns,plants,buildings};
+  }return {boxes,signs,ownedSigns,plants,buildings,sculptBuildings};
  },[backgroundKey,land.selected?.id,backgroundDraft,land.phase,editing]);
  const priceKeys=[...data.signs.keys()].sort().join('|');
  const saleMaterials=useMemo(()=>new Map(priceKeys.split('|').filter(Boolean).map(p=>[p,createLandSignMaterial(false,p)])),[priceKeys]);
  useEffect(()=>()=>{saleMaterials.forEach(m=>{m.map?.dispose();m.dispose();});},[saleMaterials]);
- return <><Batch pieces={[{geometry:resources.box,material:resources.plain}]} instances={data.boxes}/>{[...data.signs].map(([price,instances])=><Batch key={price} pieces={[{geometry:resources.plane,material:saleMaterials.get(price)!}]} instances={instances}/>)}<Batch pieces={[{geometry:resources.plane,material:resources.owned}]} instances={data.ownedSigns}/>{data.plants.map((instances,i)=><Batch key={i} pieces={pack?.[i]||[{geometry:resources.box,material:resources.plain}]} instances={pack?instances:instances.map(p=>({...p,color:'#708758',scale:[p.scale![0]*.45,p.scale![1],p.scale![2]*.45]}))}/>)}{activePlants.map((instances,i)=><Batch key={`active-plant-${i}`} pieces={pack?.[i]||[{geometry:resources.box,material:resources.plain}]} instances={pack?instances:instances.map(p=>({...p,color:'#708758',scale:[p.scale![0]*.45,p.scale![1],p.scale![2]*.45]}))}/>)}{activeProperty&&land.selected&&<CityConstructionBuilding property={activeProperty} plot={land.selected} land={land}/>} {data.buildings.length>0&&<CityDesignBuildings properties={data.buildings} reduced retainWhilePreparing/>}</>;
+ return <><Batch pieces={[{geometry:resources.box,material:resources.plain}]} instances={data.boxes}/>{[...data.signs].map(([price,instances])=><Batch key={price} pieces={[{geometry:resources.plane,material:saleMaterials.get(price)!}]} instances={instances}/>)}<Batch pieces={[{geometry:resources.plane,material:resources.owned}]} instances={data.ownedSigns}/>{data.plants.map((instances,i)=><Batch key={i} pieces={pack?.[i]||[{geometry:resources.box,material:resources.plain}]} instances={pack?instances:instances.map(p=>({...p,color:'#708758',scale:[p.scale![0]*.45,p.scale![1],p.scale![2]*.45]}))}/>)}{activePlants.map((instances,i)=><Batch key={`active-plant-${i}`} pieces={pack?.[i]||[{geometry:resources.box,material:resources.plain}]} instances={pack?instances:instances.map(p=>({...p,color:'#708758',scale:[p.scale![0]*.45,p.scale![1],p.scale![2]*.45]}))}/>)}{activeProperty&&land.selected&&<CityConstructionBuilding property={activeProperty} plot={land.selected} land={land}/>} {data.buildings.length>0&&<CityDesignBuildings properties={data.buildings} reduced retainWhilePreparing/>}{data.sculptBuildings.map(p=><CitySculptBuilding key={p.plot.id} plot={p.plot} draft={p.draft}/>)}</>;
 }
 export function plotLocal(p:LandPlot,x:number,y:number,z:number):[number,number,number]{const center=landPosition(p),a=p.rotation*Math.PI/2,s=p.size/24;return [center.x+(Math.cos(a)*x+Math.sin(a)*z)*s,y*s,center.z+(-Math.sin(a)*x+Math.cos(a)*z)*s];}
