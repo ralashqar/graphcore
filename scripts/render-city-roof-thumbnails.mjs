@@ -1,0 +1,10 @@
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {ROOF_TYPES,connectedStudioRoofs} from '../src/domain/cityStudioRoofEnvelope.ts';
+import {newDesign} from '../src/domain/cityBuildingV3.ts';
+import {freshStudio} from '../src/domain/cityStudio.ts';
+const directory=new URL('../public/city/roofs/',import.meta.url);mkdirSync(directory,{recursive:true});
+for(const type of ROOF_TYPES){const recipe={version:5,volumes:[{id:'preview',kind:type.id==='cone'?'ellipse':'rectangle',operation:'add',x:0,z:0,width:6,depth:7,startFloor:0,spanFloors:1}],attachments:[],studio:{...freshStudio(),roofRevision:'roof-envelope-2',defaults:{roof:type.id,roofSettings:{rise:2.4,overhang:.3}}}},design={...newDesign('roof-thumbnail'),groundHeight:3};
+ const result=connectedStudioRoofs(recipe,design),project=(x,y,z)=>[80+(x-z)*7,75+(x+z)*3.5-(y-3.65)*10];
+ const body=result.faces.sort((a,b)=>a.polygon[0].reduce((s,p)=>s+p[0]+p[1],0)/a.polygon[0].length-b.polygon[0].reduce((s,p)=>s+p[0]+p[1],0)/b.polygon[0].length).map(f=>{const points=f.polygon[0].map(p=>project(p[0],f.plane[0]*p[0]+f.plane[1]*p[1]+f.plane[2],p[1]));const shade=Math.round(110+Math.max(-25,Math.min(35,(f.plane[0]-f.plane[1])*18)));return `<polygon points="${points.map(p=>p.map(v=>v.toFixed(1)).join(',')).join(' ')}" fill="rgb(${shade},${shade+15},${shade+12})" stroke="#405c51" stroke-width="1.2" stroke-linejoin="round"/>`;}).join('');
+ writeFileSync(new URL(`${type.id}.svg`,directory),`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="116" viewBox="0 0 160 116"><ellipse cx="80" cy="94" rx="48" ry="12" fill="#546953" opacity=".08"/>${body}</svg>`);
+}console.log('Rendered ten roof thumbnails from the game resolver.');

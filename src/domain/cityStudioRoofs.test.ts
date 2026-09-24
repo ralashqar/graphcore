@@ -1,0 +1,29 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {newDesign} from './cityBuildingV3.ts';
+import {freshStudio,studioFloorCount} from './cityStudio.ts';
+import {resolveSculpt,validateSculpt,type SculptVolume} from './citySculpt.ts';
+import {ROOF_TYPES,editStudioRoof,connectedRoofParts} from './cityStudioRoofEnvelope.ts';
+import type {StudioRecipe} from './cityStudioTypes.ts';
+const volume=(id:string,patch:Partial<SculptVolume>={}):SculptVolume=>({id,kind:'rectangle',operation:'add',x:0,z:0,width:8,depth:10,startFloor:0,spanFloors:1,...patch});
+const recipe=(volumes=[volume('wing')]):StudioRecipe=>({version:5,volumes,attachments:[],plotSize:24,studio:{...freshStudio(),roofRevision:'roof-envelope-2',defaults:{roof:'pitched',roofSettings:{rise:2,overhang:0}}}});
+const design=(r:StudioRecipe)=>({...newDesign('roof'),groundHeight:3,floors:studioFloorCount(r),middleFloors:studioFloorCount(r)-1,crown:'none' as const});
+const resolve=(r:StudioRecipe)=>resolveSculpt(r,design(r)).studio!;
+const area=(r:StudioRecipe,id:string)=>resolve(r).roofFaces!.filter(f=>f.partId===id).reduce((sum,f)=>sum+f.polygon.reduce((a,ring,i)=>a+(i?-1:1)*Math.abs(ring.reduce((s,p,j)=>{const q=ring[(j+1)%ring.length];return s+p[0]*q[1]-p[1]*q[0];},0))/2,0),0);
+test('all ten roof families produce finite closed geometry with identifiable faces',()=>{for(const type of ROOF_TYPES){const r=editStudioRoof(recipe(),['wing'],{type:type.id}),out=resolve(r);assert.ok(out.roof.length,type.id);assert.ok(out.roof.every(Number.isFinite),type.id);assert.ok(out.roofFaces!.length,type.id);assert.equal(validateSculpt(r,1),null);}});
+test('a low gable terminates at a taller occupied wall and has flashing edges',()=>{const r=recipe([volume('wing',{z:2}),volume('tower',{z:-4,depth:6,spanFloors:3})]),out=resolve(r);assert.ok(out.roofEdges!.some(e=>e.partId==='wing'&&e.kind==='abutment'));for(const f of out.roofFaces!.filter(f=>f.partId==='wing'))for(const ring of f.polygon)assert.ok(ring.every(p=>p[1]>=-1-.001));});
+test('an elevated bridge does not erase a low roof beneath it',()=>{const r=recipe(),before=area(r,'wing');r.volumes.push(volume('bridge',{width:4,depth:10,startFloor:4}));assert.ok(Math.abs(area(r,'wing')-before)<.001);});
+test('a courtyard cut stays open through every roof family',()=>{for(const type of ROOF_TYPES){const r=editStudioRoof(recipe([volume('wing'),volume('hole',{operation:'subtract',width:3,depth:3})]),['wing'],{type:type.id});for(const f of resolve(r).roofFaces!)for(const ring of f.polygon)for(const p of ring)assert.ok(Math.abs(p[0])>=1.499||Math.abs(p[1])>=1.499,type.id);}});
+test('mixed roof resolution does not depend on volume insertion order',()=>{const r=recipe([volume('a',{x:-2,width:8}),volume('b',{x:3,width:6,depth:6})]);r.studio.parts.b={roof:'hip',roofSettings:{rise:3}};const before=area(r,'a')+area(r,'b');r.volumes.reverse();assert.ok(Math.abs(area(r,'a')+area(r,'b')-before)<.0001);});
+test('roof edits preserve old snapshots and apply only to connected same-storey parts',()=>{const r=recipe([volume('a'),volume('b',{x:7}),volume('c',{x:-8,width:2,depth:2})]);delete r.studio.roofRevision;const next=editStudioRoof(r,connectedRoofParts(r,'a'),{type:'shed',settings:{rise:3}});assert.equal(r.studio.roofRevision,undefined);assert.equal(next.studio.parts.b.roof,'shed');assert.equal(next.studio.parts.c,undefined);assert.equal(next.studio.roofRevision,'roof-envelope-2');});
+test('roof dimensions and finishes are validated before saving',()=>{const r=editStudioRoof(recipe(),['wing'],{settings:{rise:100}});assert.ok(validateSculpt(r,1));});
+
+import {studioRoofExample} from './cityStudioRoofExamples.ts';
+import {createLandWorld,initialLandDraft} from './cityLand.ts';
+import {StudioWalkingCollision} from './cityStudioCollision.ts';
+test('the three roof reference properties resolve at both plot sizes',()=>{for(const size of [24,48] as const){const plot=createLandWorld([],72,size).plots[0];for(let i=0;i<3;i++){const draft=studioRoofExample(initialLandDraft(plot),i,size),out=resolveSculpt(draft.sculpt!,draft.design).studio!;assert.ok(out.roofPatches!.length);assert.ok(out.roof.every(Number.isFinite));if(i===0)assert.ok(out.roofEdges!.some(e=>e.kind==='abutment'));}}});
+test('roof rise, direction and eaves affect the generated envelope',()=>{let r=recipe();const base=resolve(r).roof;r=editStudioRoof(r,['wing'],{settings:{rise:4}});assert.notDeepEqual(resolve(r).roof,base);const before=area(r,'wing');r=editStudioRoof(r,['wing'],{settings:{overhang:.6}});assert.ok(area(r,'wing')>before);const raised=resolve(r).roof;r=editStudioRoof(r,['wing'],{settings:{ridge:'x'}});assert.notDeepEqual(resolve(r).roof,raised);});
+test('roof collision uses its sloped plane and solid underside',()=>{const r=editStudioRoof(recipe(),['wing'],{type:'shed',settings:{rise:2}}),out=resolve(r),world=new StudioWalkingCollision();world.set({id:'p',x:0,z:0,rotation:0,scale:1,result:out});assert.ok(world.ground(3,0,10)>world.ground(-3,0,10));assert.ok(Math.abs(world.ceiling(0,0,1)-(3.65-.12))<.001);});
+test('legacy recipes keep the old roof path until an explicit edit',()=>{const r=recipe();delete r.studio.roofRevision;delete r.studio.defaults.roofSettings;assert.equal(resolve(r).roofFaces,undefined);const updated=editStudioRoof(r,['wing'],{type:'hip'});assert.ok(resolve(updated).roofFaces?.length);assert.equal(r.studio.roofRevision,undefined);});
+
+test('external gable closure faces outward so it is visible from the street',()=>{const vertices=resolve(recipe()).roofPatches![0].vertices;let closures=0;for(let i=0;i<vertices.length;i+=9){const a=vertices.slice(i,i+3),b=vertices.slice(i+3,i+6),c=vertices.slice(i+6,i+9);if(Math.abs(a[2]-b[2])<1e-6&&Math.abs(a[2]-c[2])<1e-6&&Math.abs(Math.abs(a[2])-5)<1e-6){const nz=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(Math.abs(nz)>1e-6){assert.ok(nz*a[2]>0);closures++;}}}assert.ok(closures>=4);});

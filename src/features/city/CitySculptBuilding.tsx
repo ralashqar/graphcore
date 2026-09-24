@@ -1,3 +1,6 @@
+import {CityRoofMeshes} from './CityRoofMeshes';
+import {CityStudioMeshes} from './CityStudioMeshes';
+import {publishStudioPlot,removeStudioPlot} from './cityStudioRegistry';
 import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {useThree} from '@react-three/fiber';
 import {BufferGeometry,CanvasTexture,Float32BufferAttribute,MeshBasicMaterial,SRGBColorSpace} from 'three';
@@ -28,7 +31,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  const previewTiming=useRef<{revision:number;started:number;workerMs:number}|null>(null);
  designRef.current=draft.design;
  const key=JSON.stringify([draft.sculpt,draft.design.floors,draft.design.groundHeight,draft.design.base,draft.design.roof,draft.design.synarcKit,land?.previewRetry]);
- useEffect(()=>{if(!draft.sculpt)return;let live=true;setPending(true);setError(null);void prepareSculpt(draft.sculpt,draft.design).then(value=>{if(live){setResult(value);setPreviewResult(null);setPending(false);invalidate();}}).catch(e=>{if(live){setError(e instanceof Error?e.message:String(e));setPreviewResult(null);setPending(false);}});return()=>{live=false;};},[key,invalidate]);
+ useEffect(()=>{if(!draft.sculpt)return;let live=true;setPending(true);setError(null);void prepareSculpt(draft.sculpt,draft.design,!!land).then(value=>{if(live){setResult(value);setPreviewResult(null);setPending(false);invalidate();}}).catch(e=>{if(live){setError(e instanceof Error?e.message:String(e));setPreviewResult(null);setPending(false);}});return()=>{live=false;};},[key,invalidate]);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;if(timer.current)clearTimeout(timer.current);};},[]);
  const pump=()=>{
   if(!alive.current||busy.current||timer.current||!target.current.recipe||completed.current===target.current.revision)return;
@@ -36,7 +39,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
   timer.current=setTimeout(()=>{
    timer.current=null;const current=target.current;if(!current.recipe||busy.current||!alive.current)return;
    busy.current=true;lastStart.current=performance.now();const started=lastStart.current;
-   void prepareSculpt(current.recipe,current.design??designRef.current).then(value=>{
+   void prepareSculpt(current.recipe,current.design??designRef.current,true).then(value=>{
     if(!alive.current||target.current.revision!==current.revision)return;
     completed.current=current.revision;previewTiming.current={revision:current.revision,started,workerMs:performance.now()-started};setPreviewResult(value);invalidate();
    }).catch(e=>{
@@ -54,6 +57,8 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  },[preview]);
  useEffect(()=>{if(land)land.setPreviewStatus({pending,error});},[land?.setPreviewStatus,pending,error]);
  const shown=previewResult??result;
+ useEffect(()=>{if(result?.studio&&!pending&&!error){const center=landPosition(plot);publishStudioPlot({id:plot.id,...center,rotation:plot.rotation*Math.PI/2,scale:plot.size/24,result:result.studio});}},[result,pending,error,plot.id,plot.rotation,plot.size]);
+ useEffect(()=>()=>removeStudioPlot(plot.id),[plot.id]);
  useEffect(()=>{if(!shown?.kit||synarcPack)return;let live=true;void loadSynarcKit().then(pack=>{if(live){setSynarcPack(pack);invalidate();}}).catch(()=>{});return()=>{live=false;};},[!!shown?.kit,synarcPack,invalidate]);
  useEffect(()=>{if(!import.meta.env.DEV)return;gl.domElement.dataset.citySynarcKit=shown?.kit?(synarcPack?'ready':'loading'):'off';return()=>{delete gl.domElement.dataset.citySynarcKit;};},[shown?.kit,synarcPack,gl]);
  const geometry=useMemo(()=>{
@@ -84,14 +89,14 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
   materials.wall.color.set(palette.wall);materials.trim.color.set(palette.trim);materials.roof.color.set(draft.design.roof==='planted'?'#829a73':palette.roof);materials.glass.color.set(palette.glass);materials.door.color.set('#344748');
   return materials;
  },[draft.design.textures?.wall,draft.design.textures?.roof,draft.design.roof,palette.wall,palette.trim,palette.roof,palette.glass]);
- const volumeMaterials=useMemo(()=>Object.fromEntries((draft.sculpt?.version===4?draft.sculpt.volumes:[]).map(volume=>{const wall=citySurfaceMaterial(false,volume.wallTexture??draft.design.textures?.wall),roof=citySurfaceMaterial(false,volume.roofTexture??draft.design.textures?.roof);wall.color.set(palette.wall);roof.color.set(draft.design.roof==='planted'?'#829a73':palette.roof);return [volume.id,{wall,roof}];})),[draft.sculpt,draft.design.textures?.wall,draft.design.textures?.roof,draft.design.roof,palette.wall,palette.roof]);
+ const volumeMaterials=useMemo(()=>Object.fromEntries(((draft.sculpt?.version===4||draft.sculpt?.version===5)?draft.sculpt.volumes:[]).map(volume=>{const wall=citySurfaceMaterial(false,volume.wallTexture??draft.design.textures?.wall),roof=citySurfaceMaterial(false,volume.roofTexture??draft.design.textures?.roof);wall.color.set(palette.wall);roof.color.set(draft.design.roof==='planted'?'#829a73':palette.roof);return [volume.id,{wall,roof}];})),[draft.sculpt,draft.design.textures?.wall,draft.design.textures?.roof,draft.design.roof,palette.wall,palette.roof]);
  useEffect(()=>()=>{Object.values(volumeMaterials).forEach(parts=>Object.values(parts).forEach(material=>material.dispose()));},[volumeMaterials]);
  useEffect(()=>()=>Object.values(materials).forEach(m=>m.dispose()),[materials]);
  const scale=plot.size/24,center=landPosition(plot);
  const entrance=shown?.entrance??null,approach=entrance?{length:Math.hypot(entrance.x,10.4-entrance.z),rotation:Math.atan2(-entrance.x,10.4-entrance.z)}:null;
  const hasCanopy=!!shown?.decorations.some(detail=>detail.kind==='canopy'&&detail.active);
  const usingKit=!!shown?.kit&&!!synarcPack;
- return <><CityPreparedBuildings properties={grounds} layer="grounds" reduced/><group name="sculpt-building" position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>{geometry&&(['wall','trim','roof','glass','door'] as const).filter(kind=>!usingKit||kind==='roof').map(kind=><mesh key={kind} geometry={geometry[kind]} material={materials[kind]}/>)}{Object.entries(volumeGeometry).map(([id,parts])=>(['wall','roof'] as const).filter(kind=>!usingKit||kind==='roof').map(kind=><mesh key={`${id}-${kind}`} geometry={parts[kind]} material={volumeMaterials[id]?.[kind]??materials[kind]}/>))}{usingKit&&curvedGeometry&&(['wall','trim','glass','door'] as const).map(kind=><mesh key={`curve-${kind}`} geometry={curvedGeometry[kind]} material={materials[kind]}/>)}{usingKit&&Object.entries(curvedVolumeGeometry).map(([id,part])=><mesh key={`curve-volume-${id}`} geometry={part} material={volumeMaterials[id]?.wall??materials.wall}/>)}{usingKit&&<><CitySynarcKitMeshes pack={synarcPack} placements={shown!.kit!.placements}/>{shown!.kit!.infill.map((band,i)=><mesh key={`band-${i}`} position={[band.x,band.y,band.z]} rotation={[0,band.rotation,0]} material={materials.wall}><boxGeometry args={[band.width,band.height,band.depth]}/></mesh>)}</>}{shown&&<SculptDetails details={usingKit?shown.decorations.filter(d=>d.kind==='planter'||d.kind==='bollard'):shown.decorations} entrance={entrance} groundHeight={draft.design.groundHeight}/>} {entrance&&<SculptSign name={draft.name} color={draft.color} x={entrance.x} y={shown!.floors[0].top-(hasCanopy ? .47 : .6)} z={entrance.z} angle={entrance.angle} depth={hasCanopy ? 1 : .045} maxWidth={hasCanopy ? 2.2 : 3.2}/>} {entrance&&approach&&<mesh position={[entrance.x/2,.31,(10.4+entrance.z)/2]} rotation={[0,approach.rotation,0]}><boxGeometry args={[1.8,.05,approach.length]}/><meshStandardMaterial color="#cbc7b5" roughness={1}/></mesh>}</group></>;
+ return <><CityPreparedBuildings properties={grounds} layer="grounds" reduced/><group name="sculpt-building" position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>{geometry&&(['wall','trim','roof','glass','door'] as const).filter(kind=>(!usingKit&&!shown?.studio)||kind==='roof'&&!shown?.studio?.roofPatches).map(kind=><mesh key={kind} geometry={geometry[kind]} material={materials[kind]}/>)}{Object.entries(volumeGeometry).map(([id,parts])=>(['wall','roof'] as const).filter(kind=>(!usingKit&&!shown?.studio)||kind==='roof').map(kind=><mesh key={`${id}-${kind}`} geometry={parts[kind]} material={volumeMaterials[id]?.[kind]??materials[kind]}/>))}{usingKit&&curvedGeometry&&(['wall','trim','glass','door'] as const).map(kind=><mesh key={`curve-${kind}`} geometry={curvedGeometry[kind]} material={materials[kind]}/>)}{usingKit&&Object.entries(curvedVolumeGeometry).map(([id,part])=><mesh key={`curve-volume-${id}`} geometry={part} material={volumeMaterials[id]?.wall??materials.wall}/>)}{usingKit&&<><CitySynarcKitMeshes pack={synarcPack} placements={shown!.kit!.placements}/>{shown!.kit!.infill.map((band,i)=><mesh key={`band-${i}`} position={[band.x,band.y,band.z]} rotation={[0,band.rotation,0]} material={materials.wall}><boxGeometry args={[band.width,band.height,band.depth]}/></mesh>)}</>}{shown?.studio?.roofPatches&&<CityRoofMeshes patches={shown.studio.roofPatches} edges={shown.studio.roofEdges??[]}/>} {shown?.studio&&<CityStudioMeshes pieces={shown.studio.pieces}/>} {shown&&!shown.studio&&<SculptDetails details={usingKit?shown.decorations.filter(d=>d.kind==='planter'||d.kind==='bollard'):shown.decorations} entrance={entrance} groundHeight={draft.design.groundHeight}/>} {entrance&&<SculptSign name={draft.name} color={draft.color} x={entrance.x} y={shown!.floors[0].top-(hasCanopy ? .47 : .6)} z={entrance.z} angle={entrance.angle} depth={hasCanopy ? 1 : .045} maxWidth={hasCanopy ? 2.2 : 3.2}/>} {entrance&&approach&&<mesh position={[entrance.x/2,.31,(10.4+entrance.z)/2]} rotation={[0,approach.rotation,0]}><boxGeometry args={[1.8,.05,approach.length]}/><meshStandardMaterial color="#cbc7b5" roughness={1}/></mesh>}</group></>;
 }
 
 function SculptDetails({details,entrance,groundHeight}:{details:SculptDecoration[];entrance:SculptResolved['entrance'];groundHeight:number}){

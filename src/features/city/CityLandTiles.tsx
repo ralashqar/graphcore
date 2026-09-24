@@ -20,11 +20,11 @@ export function CityLandTiles({land,plot,draft,selectedVolume}:{land:CityLandCon
  const {camera}=useThree(),[selected,setSelected]=useState(''),[hover,setHover]=useState(''),[brush,setBrush]=useState<SynarcKitPaintId|null>('window-detailed'),[issue,setIssue]=useState(''),[interaction,setInteraction]=useState<'part'|'paint'>('part'),[globalOpen,setGlobalOpen]=useState(true);
  const initialized=useRef(false);
  const d=draft.design,kit=d.synarcKit,sculpting=draft.builderMode==='sculpt'&&!!draft.sculpt;
- const volumes=sculpting&&draft.sculpt?.version===4?draft.sculpt.volumes:[];
+ const volumes=sculpting&&(draft.sculpt?.version===4||draft.sculpt?.version===5)?draft.sculpt.volumes:[];
  const selectedShape=volumes.find(v=>v.id===selectedVolume);
  useEffect(()=>{if(initialized.current||!volumes.length)return;initialized.current=true;if(!selectedVolume)land.setSelectedVolume(volumes[0].id);},[volumes,selectedVolume,land]);
  useEffect(()=>setGlobalOpen(!selectedShape),[selectedShape?.id]);
- const unsupported=!sculpting&&d.generatorRevision==='city-office-4'||sculpting&&draft.sculpt?.version!==4&&Array.from({length:d.floors},(_,floor)=>effectiveSculptShapes(draft.sculpt!,floor)).some(shapes=>shapes.some(shape=>shape.kind==='ellipse'));
+ const unsupported=!sculpting&&d.generatorRevision==='city-office-4'||sculpting&&(draft.sculpt?.version!==4&&draft.sculpt?.version!==5)&&Array.from({length:d.floors},(_,floor)=>effectiveSculptShapes(draft.sculpt!,floor)).some(shapes=>shapes.some(shape=>shape.kind==='ellipse'));
  const walls=useMemo<KitWall[]>(()=>{
   if(!kit||unsupported)return [];
   if(sculpting)return sculptKitWalls(draft.sculpt!,d);
@@ -41,7 +41,7 @@ export function CityLandTiles({land,plot,draft,selectedVolume}:{land:CityLandCon
  const choices=brush===null?[]:OPENINGS.includes(brush)?entrance?[...SYNARC_KIT_DOORS]:['wall-full',...SYNARC_KIT_WINDOWS]:ACCENTS;
  const changeKit=(next:typeof kit)=>{setIssue('');land.edit({...draft,design:{...d,synarcKit:next,finish:'procedural'}});};
  const changeVolume=(patch:Partial<SculptVolume>)=>{
-  if(draft.sculpt?.version!==4||!selectedShape)return;
+  if((draft.sculpt?.version!==4&&draft.sculpt?.version!==5)||!selectedShape)return;
   setIssue('');land.edit({...draft,sculpt:{...draft.sculpt,volumes:draft.sculpt.volumes.map(v=>v.id===selectedShape.id?{...v,...patch}:v)},
    design:{...d,synarcKit:kit??structuredClone(DEFAULT_SYNARC_KIT),finish:'procedural'}});
  };
@@ -51,7 +51,7 @@ export function CityLandTiles({land,plot,draft,selectedVolume}:{land:CityLandCon
   if(result.reason){setIssue(result.reason);return;}
   setIssue('');if(result.kit===kit)return;
   let sculpt=draft.sculpt;
-  if(sculpt?.version===4&&selectedVolume){
+  if((sculpt?.version===4||sculpt?.version===5)&&selectedVolume){
    const shape=sculpt.volumes.find(v=>v.id===selectedVolume),wall=volumeWalls.filter(w=>w.floor===target.floor).sort((a,b)=>Math.hypot((a.a[0]+a.b[0])/2-target.x,(a.a[1]+a.b[1])/2-target.z)-Math.hypot((b.a[0]+b.b[0])/2-target.x,(b.a[1]+b.b[1])/2-target.z))[0];
    if(shape&&wall?.source){
     const side=wall.source.side,u=side==='curve'?((Math.atan2((target.z-shape.z)/(shape.depth/2),(target.x-shape.x)/(shape.width/2))+Math.PI*2)%(Math.PI*2))/(Math.PI*2):side==='north'||side==='south'?(target.x-(shape.x-shape.width/2))/shape.width:(target.z-(shape.z-shape.depth/2))/shape.depth;
@@ -85,7 +85,7 @@ export function CityLandTiles({land,plot,draft,selectedVolume}:{land:CityLandCon
   <primitive object={camera}><Html fullscreen position={[0,0,-1]} style={{pointerEvents:'none'}}>
    <aside className="city-land-panel land-tile-tools" onPointerDown={e=>e.stopPropagation()}>
     <h2>Facade tiles</h2>
-    {!sculpting?<div className="land-sculpt-volume-kit"><strong>Building parts</strong><small>This is still a single preset. Convert it to editable Sculpt volumes to give each part its own façade.</small><button type="button" disabled={!startSculpt(draft)} onClick={()=>{const next=startSculpt(draft);if(!next)return;land.edit({...next,sculpt:next.sculpt?.version===4?{...next.sculpt,plotSize:plot.size}:next.sculpt});land.setSelectedVolume(next.sculpt?.version===4?next.sculpt.volumes[0]?.id??null:null);}}>Edit building parts</button></div>:
+    {!sculpting?<div className="land-sculpt-volume-kit"><strong>Building parts</strong><small>This is still a single preset. Convert it to editable Sculpt volumes to give each part its own façade.</small><button type="button" disabled={!startSculpt(draft)} onClick={()=>{const next=startSculpt(draft);if(!next)return;land.edit({...next,sculpt:(next.sculpt?.version===4||next.sculpt?.version===5)?{...next.sculpt,plotSize:plot.size}:next.sculpt});land.setSelectedVolume((next.sculpt?.version===4||next.sculpt?.version===5)?next.sculpt.volumes[0]?.id??null:null);}}>Edit building parts</button></div>:
      <div className="land-sculpt-volume-picker"><strong>Part to edit</strong><small>Click a highlighted shape in the scene or choose it here. Each part keeps its own façade defaults.</small><label>Active part<select aria-label="Active sculpt part" value={selectedShape?.id??''} onChange={e=>{land.setSelectedVolume(e.target.value||null);setSelected('');setInteraction('part');}}><option value="">Whole building</option>{volumes.map((v,i)=><option key={v.id} value={v.id}>{`${v.operation==='subtract'?'Cut':'Solid'} ${v.kind==='ellipse'?'cylinder / ellipse':'box'} ${i+1} · floors ${v.startFloor+1}–${v.startFloor+v.spanFloors}`}</option>)}</select></label><div className="land-sculpt-tool-grid" role="group" aria-label="Tile interaction mode"><button type="button" aria-pressed={interaction==='part'} onClick={()=>setInteraction('part')}>Select part</button><button type="button" aria-pressed={interaction==='paint'} onClick={()=>setInteraction('paint')}>Paint bays</button></div></div>}
     <p>{interaction==='part'&&sculpting?'Click a shape to select it. Right-drag rotates and middle-drag pans.':'Click a highlighted bay to paint it. Right-drag rotates and middle-drag pans.'}</p>
      {selectedShape&&<div className="land-sculpt-volume-kit"><strong>{selectedShape.kind==='ellipse'?'Selected curved part':'Selected box'} · whole shape</strong><small>These defaults apply to this part’s exposed wall bays. Painted bays remain individual exceptions. Choosing one enables the tile kit if needed.</small>

@@ -1,3 +1,4 @@
+import {subscribeStudioPlots} from './cityStudioRegistry';
 import {CityLandEditor} from './CityLandEditor';
 import type {CityLandController} from './useCityLand';
 import {landPrice,landEntrance,type LandPlot} from '../../domain/cityLand';
@@ -8,14 +9,15 @@ import {Group,PerspectiveCamera,Vector3} from 'three';
 import type {CityProperty} from '../../domain/city';
 import {advanceDrive,interpolateDrive,recoverDrive,DRIVE_PROFILE,type DriveInput} from '../../domain/cityDriving';
 import {DriveWorld,syncCityDriveWorld,pavementHeight} from '../../domain/cityDriveWorld';
-import {advanceFoot,carEntryDistance,interpolateFoot,WalkingWorld,findCarExit,canEnterCar,recoverFoot,parkDrive,FOOT_PROFILE,orbitFootCamera,zoomFootCamera,type ExplorationSession} from '../../domain/cityExploration';
+import {createFootState,advanceFoot,carEntryDistance,interpolateFoot,WalkingWorld,findCarExit,canEnterCar,recoverFoot,parkDrive,FOOT_PROFILE,orbitFootCamera,zoomFootCamera,type ExplorationSession} from '../../domain/cityExploration';
 import {useCityMapLayout} from './CityMapLayout';
 import {CityDriveCar} from './CityDriveCar';
 import {CityCharacter,type CharacterStatus} from './CityCharacter';
 const empty=()=>({forward:false,reverse:false,left:false,right:false,brake:false,walk:false});
 export function CityDriving({land,active,session,capacity,properties,hasPavilion,launchPlaza,onRegion,onExit,reduced,viewCamera}:{land?:CityLandController|null;active:boolean;session:ExplorationSession;properties:CityProperty[];hasPavilion:boolean;launchPlaza:boolean;viewCamera:PerspectiveCamera;capacity:number;onRegion:(x:number,z:number)=>void;onExit:()=>void;reduced:boolean}){
  const resumeLand=useRef(false);
- const landBusy=!!land&&land.phase!=='exploring';
+ const landBusy=!!land&&land.phase!=='exploring'&&land.phase!=='walkthrough';
+ const walkingDraft=land?.phase==='walkthrough';
  const [nearPlot,setNearPlot]=useState<LandPlot|null>(null),[resetConfirm,setResetConfirm]=useState(false);
  const landRef=useRef(land);landRef.current=land;
  const car=useRef<Group>(null),pedestrian=useRef<Group>(null),input=useRef(empty());
@@ -28,6 +30,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
  const {gl,setEvents,events}=useThree(),{logicalAxis,plotAxis,plotSize,roadCapacityMultiplier}=useCityMapLayout();
  const bound=Math.max(66,Math.ceil(Math.sqrt(capacity*roadCapacityMultiplier)/4)*66+5);
  const world=useMemo(()=>new DriveWorld(bound),[bound]),walkingWorld=useMemo(()=>new WalkingWorld(world),[world]);
+ useEffect(()=>subscribeStudioPlots((id,p)=>{const actor=session.foot,old=walkingWorld.studio.ground(actor.x,actor.z,actor.y+.1);if(p)walkingWorld.studio.set(p);else walkingWorld.studio.remove(id);const next=walkingWorld.studio.ground(actor.x,actor.z,actor.y+.1);if(session.mode==='on-foot'&&actor.grounded&&old-next>.3){const plot=landRef.current?.world?.plots.find(plot=>plot.id===id);if(plot){const entry=landEntrance(plot);Object.assign(actor,createFootState(entry.x,entry.z,entry.heading));}}}),[walkingWorld,session]);
  const activePointers=useRef(new Map<number,{x:number;y:number}>());
  const recover=useRef(()=>{}),interact=useRef(()=>{}),leave=useRef(()=>{}),clear=useRef(()=>{});
  clear.current=()=>{for(const id of activePointers.current.keys())if(gl.domElement.hasPointerCapture(id))gl.domElement.releasePointerCapture(id);activePointers.current.clear();input.current=empty();foot.current.jumpBuffer=0;foot.current.wave=0;look.current.dragging=false;simulation.current=0;};
@@ -39,6 +42,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
  };
  const nearestPlot=()=>{if(!landRef.current?.world||!foot.current.grounded)return null;let nearest:LandPlot|null=null,distance=Math.min(2,carEntryDistance(foot.current,state.current,walkingWorld));for(const p of landRef.current.world.plots){const entry=landEntrance(p),dist=Math.hypot(entry.x-foot.current.x,entry.z-foot.current.z);if(dist<distance&&walkingWorld.clear(entry.x,entry.z)&&walkingWorld.sweep(foot.current.x,foot.current.z,entry.x-foot.current.x,entry.z-foot.current.z,FOOT_PROFILE.radius).t===1){nearest=p;distance=dist;}}return nearest;};
  interact.current=()=>{
+  if(landRef.current?.phase==='walkthrough'){landRef.current.setPhase('construction');return;}
   if(session.mode==='driving'){
    if(readiness.current!=='ready'){setHint(readiness.current==='error'?'Character could not load. Use Retry character.':'Character is loading…');return;}
    if(Math.hypot(state.current.vx,state.current.vz)>=1){setHint('Slow down to exit');return;}
@@ -71,7 +75,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
    const k=e.key.length===1?e.key.toLowerCase():e.key,action=keys[k];
    if(e.type==='keyup'){if(action)input.current[action]=false;return;}
    if((e.target as HTMLElement)?.closest('input,textarea,select,[contenteditable=true]'))return;
-   if(k==='Escape'){leave.current();return;}if(k==='r'&&!e.repeat){recover.current();return;}if(k==='e'&&!e.repeat){e.preventDefault();interact.current();return;}
+   if(k==='Escape'){if(landRef.current?.phase==='walkthrough')landRef.current.setPhase('construction');else leave.current();return;}if(k==='r'&&!e.repeat){recover.current();return;}if(k==='e'&&!e.repeat){e.preventDefault();interact.current();return;}
    if(session.mode==='on-foot'&&['+','=','-','_'].includes(k)){e.preventDefault();zoomFootCamera(session.footCamera,k==='-'||k==='_'?160:-160);return;}
    if(k==='g'&&!e.repeat&&session.mode==='on-foot'&&foot.current.grounded){foot.current.wave=2.1333334;e.preventDefault();}
    if(action){e.preventDefault();input.current[action]=true;if(k===' '&&!e.repeat&&session.mode==='on-foot')foot.current.jumpBuffer=FOOT_PROFILE.buffer;}
@@ -144,17 +148,18 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
  const onFoot=mode==='on-foot';
  return <><primitive object={viewCamera}>{active&&!landBusy&&<Html position={[0,0,-1]} fullscreen style={{pointerEvents:'none'}}><div className="city-drive-controls" role="region" aria-label={onFoot?'Walking controls':'Driving controls'}>
  <div className="city-drive-touch">{(onFoot?[['left','Left'],['forward','Run'],['reverse','Back'],['right','Right'],['walk','Walk']]:[['left','Steer left'],['forward','Accelerate'],['reverse','Reverse'],['right','Steer right'],['brake','Handbrake']]).map(([key,label])=><button key={key} type="button" {...hold(key as keyof DriveInput|'walk')}>{label}</button>)}{onFoot&&<button type="button" onPointerDown={()=>{foot.current.jumpBuffer=FOOT_PROFILE.buffer;}}>Jump</button>}</div>
- {onFoot&&nearPlot&&<span className="city-explore-hint">E · {nearPlot.owner?'Edit building':`View plot · ${landPrice(nearPlot)}`}</span>}
+ {onFoot&&!walkingDraft&&nearPlot&&<span className="city-explore-hint">E · {nearPlot.owner?'Edit building':`View plot · ${landPrice(nearPlot)}`}</span>}
  {hint&&<span className="city-explore-hint" role="status">{hint}</span>}
  {onFoot&&<button type="button" onClick={()=>{if(foot.current.grounded)foot.current.wave=2.1333334;}} title="Wave (G)">Wave</button>}
  {land?.error&&<span role="alert">{land.error}<button onClick={()=>void land.retry()}>Retry test world</button></span>}
- {land&&<button onClick={()=>setResetConfirm(true)}>Reset test world</button>}
+ {import.meta.env.DEV&&new URLSearchParams(location.search).has('cityStudioTest')&&land?.world&&<button onClick={()=>{const plot=land.world!.plots.find(p=>p.owner)??land.world!.plots[0];if(plot){const entry=landEntrance(plot);session.mode='on-foot';setMode('on-foot');Object.assign(foot.current,{x:entry.x,y:pavementHeight(entry.x,entry.z),z:entry.z});land.open(plot);}}}>Visit test plot</button>}
+ {land&&!walkingDraft&&<button onClick={()=>setResetConfirm(true)}>Reset test world</button>}
  {resetConfirm&&<span role="alertdialog" aria-label="Reset test world">Remove all local plots and buildings? <button onClick={()=>{void land?.reset();setResetConfirm(false);}}>Confirm reset</button><button onClick={()=>setResetConfirm(false)}>Keep world</button></span>}
  {status==='error'&&<button type="button" onClick={()=>setRetry(n=>n+1)}>Retry character</button>}
- <button type="button" onClick={()=>interact.current()} title={onFoot?'Enter car (E)':'Exit car (E)'}>{onFoot?(nearPlot?(nearPlot.owner?'Edit building':`View plot · ${landPrice(nearPlot)}`):'Enter car'):status==='loading'?'Character loading…':'Exit car'}</button>
+ <button type="button" onClick={()=>interact.current()} title={onFoot?'Enter car (E)':'Exit car (E)'}>{walkingDraft?'Return to building':onFoot?(nearPlot?(nearPlot.owner?'Edit building':`View plot · ${landPrice(nearPlot)}`):'Enter car'):status==='loading'?'Character loading…':'Exit car'}</button>
  <button type="button" onClick={()=>recover.current()} title="Return to safe road (R)">Recover</button><button type="button" onClick={()=>leave.current()}>Back to map</button>
  </div></Html>}</primitive>
- {active&&landBusy&&land?.selected&&land.draft&&<CityLandEditor land={land} session={session} camera={viewCamera} reduced={reduced}/>}
+ {active&&(landBusy||walkingDraft)&&land?.selected&&land.draft&&<CityLandEditor land={land} session={session} camera={viewCamera} reduced={reduced}/>}
  <group ref={car} visible={active}><CityDriveCar motion={display} reduced={reduced} active={active}/></group>
  <group ref={pedestrian} visible={active&&onFoot}><CityCharacter motion={displayFoot} active={active&&onFoot} onStatus={onStatus} retry={retry}/></group></>;
 }

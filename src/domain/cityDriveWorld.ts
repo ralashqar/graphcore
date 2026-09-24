@@ -22,19 +22,20 @@ export class DriveWorld {
   for(let x=Math.floor(minX/this.cellSize);x<=Math.floor(maxX/this.cellSize);x++)for(let z=Math.floor(minZ/this.cellSize);z<=Math.floor(maxZ/this.cellSize);z++)for(const b of this.cells.get(`${x}:${z}`)||EMPTY){if(!this.seen.has(b)){this.seen.add(b);this.candidates.push(b);}}
   return this.candidates;
  }
- clear(x:number,z:number,r:number){
+ clear(x:number,z:number,r:number,ignored?:ReadonlySet<string>){
   if(Math.abs(x)+r>this.bound||Math.abs(z)+r>this.bound)return false;
-  for(const b of this.query(x-r,x+r,z-r,z+r)){const dx=x-Math.max(b.minX,Math.min(b.maxX,x)),dz=z-Math.max(b.minZ,Math.min(b.maxZ,z));if(dx*dx+dz*dz<r*r-1e-7)return false;}
+  for(const b of this.query(x-r,x+r,z-r,z+r)){if(ignored?.has(b.id))continue;const dx=x-Math.max(b.minX,Math.min(b.maxX,x)),dz=z-Math.max(b.minZ,Math.min(b.maxZ,z));if(dx*dx+dz*dz<r*r-1e-7)return false;}
   return true;
  }
  /** Exact swept disc against box faces and rounded corners; no nearest-N truncation. */
- sweep(x:number,z:number,dx:number,dz:number,r:number){
+ sweep(x:number,z:number,dx:number,dz:number,r:number,ignored?:ReadonlySet<string>){
   const h=this.hit;h.t=1;h.nx=0;h.nz=0;
   const offer=(t:number,nx:number,nz:number)=>{if(t>=-1e-8&&t<h.t&&dx*nx+dz*nz< -1e-9){h.t=Math.max(0,t);h.nx=nx;h.nz=nz;}};
   const edge=this.bound-r;
   if(dx>0)offer((edge-x)/dx,-1,0);else if(dx<0)offer((-edge-x)/dx,1,0);
   if(dz>0)offer((edge-z)/dz,0,-1);else if(dz<0)offer((-edge-z)/dz,0,1);
   for(const b of this.query(Math.min(x,x+dx)-r,Math.max(x,x+dx)+r,Math.min(z,z+dz)-r,Math.max(z,z+dz)+r)){
+   if(ignored?.has(b.id))continue;
    if(dx){for(const side of SIDES){const t=((side<0?b.minX-r:b.maxX+r)-x)/dx,v=z+dz*t;if(v>=b.minZ&&v<=b.maxZ)offer(t,side,0);}}
    if(dz){for(const side of SIDES){const t=((side<0?b.minZ-r:b.maxZ+r)-z)/dz,v=x+dx*t;if(v>=b.minX&&v<=b.maxX)offer(t,0,side);}}
    const a=dx*dx+dz*dz;if(a<1e-12)continue;

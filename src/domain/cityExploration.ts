@@ -1,3 +1,4 @@
+import {StudioWalkingCollision} from './cityStudioCollision.ts';
 import {DriveWorld,pavementHeight} from './cityDriveWorld.ts';
 import {createDriveState,DRIVE_PROFILE,type DriveState} from './cityDriving.ts';
 export const FOOT_PROFILE={radius:.34,height:1.8,walk:2.2,run:5.5,gravity:18,jumpHeight:.8,buffer:.12,coyote:.10} as const;
@@ -8,6 +9,8 @@ export type FootInput={forward:boolean;reverse:boolean;left:boolean;right:boolea
 export const createFootState=(x=0,z=33,heading=0):FootState=>({x,z,y:pavementHeight(x,z),vx:0,vz:0,vy:0,heading,grounded:true,coyote:FOOT_PROFILE.coyote,jumpBuffer:0,wave:0,land:0,airTime:0,speed:0});
 /** A parked-car OBB layered over the spatial plot hash. The driver uses only the base world. */
 export class WalkingWorld {
+ readonly studio=new StudioWalkingCollision();
+ elevation=0;
  readonly hit={t:1,nx:0,nz:0};
  private carWorld=new DriveWorld(1e8);
  private car={x:0,y:0,z:0,sn:0,cs:1,extentX:0,extentZ:0};
@@ -17,7 +20,7 @@ export class WalkingWorld {
  park(s:Pick<DriveState,'x'|'z'|'heading'>){const c=this.car;c.x=s.x;c.z=s.z;c.y=pavementHeight(s.x,s.z);c.sn=Math.sin(s.heading);c.cs=Math.cos(s.heading);c.extentX=Math.abs(c.cs)*PARKED_CAR.halfWidth+Math.abs(c.sn)*PARKED_CAR.halfLength;c.extentZ=Math.abs(c.sn)*PARKED_CAR.halfWidth+Math.abs(c.cs)*PARKED_CAR.halfLength;this.enabled=true;}
  /** The chase boom may pass above the parked roof; walking remains excluded at every jump height. */
  sweepCamera(x:number,y:number,z:number,dx:number,dy:number,dz:number,r:number){
-  Object.assign(this.hit,this.world.sweep(x,z,dx,dz,r));if(!this.enabled)return this.hit;
+  Object.assign(this.hit,this.world.sweep(x,z,dx,dz,r,this.studio.ignored));this.hit.t=Math.min(this.hit.t,this.studio.camera(x,y,z,dx,dy,dz,r));if(!this.enabled)return this.hit;
   const c=this.car,ox=x-c.x,oz=z-c.z,lx=ox*c.cs-oz*c.sn,lz=ox*c.sn+oz*c.cs,vx=dx*c.cs-dz*c.sn,vz=dx*c.sn+dz*c.cs;
   let near=0,far=1;
   // Expanded OBB slabs include the roof for descending/low orbit booms as well as side contacts.
@@ -30,16 +33,16 @@ export class WalkingWorld {
   }
   if(near<this.hit.t)this.hit.t=near;return this.hit;
  }
- clear(x:number,z:number,r:number=FOOT_PROFILE.radius){if(!this.world.clear(x,z,r))return false;if(!this.enabled)return true;const c=this.car,dx=x-c.x,dz=z-c.z;return this.carWorld.clear(dx*c.cs-dz*c.sn,dx*c.sn+dz*c.cs,r);}
+ clear(x:number,z:number,r:number=FOOT_PROFILE.radius){if(!this.studio.clear(x,this.elevation,z,r)||!this.world.clear(x,z,r,this.studio.ignored))return false;if(!this.enabled)return true;const c=this.car,dx=x-c.x,dz=z-c.z;return this.carWorld.clear(dx*c.cs-dz*c.sn,dx*c.sn+dz*c.cs,r);}
  sweep(x:number,z:number,dx:number,dz:number,r:number){
-  Object.assign(this.hit,this.world.sweep(x,z,dx,dz,r));if(!this.enabled)return this.hit;
+  Object.assign(this.hit,this.world.sweep(x,z,dx,dz,r,this.studio.ignored));const detail=this.studio.sweep(x,this.elevation,z,dx,dz,r);if(detail.t<this.hit.t)Object.assign(this.hit,detail);if(!this.enabled)return this.hit;
   const c=this.car;if(Math.max(x,x+dx)+r<c.x-c.extentX||Math.min(x,x+dx)-r>c.x+c.extentX||Math.max(z,z+dz)+r<c.z-c.extentZ||Math.min(z,z+dz)-r>c.z+c.extentZ)return this.hit;
   const ox=x-c.x,oz=z-c.z,h=this.carWorld.sweep(ox*c.cs-oz*c.sn,ox*c.sn+oz*c.cs,dx*c.cs-dz*c.sn,dx*c.sn+dz*c.cs,r);
   if(h.t<this.hit.t){this.hit.t=h.t;this.hit.nx=h.nx*c.cs+h.nz*c.sn;this.hit.nz=-h.nx*c.sn+h.nz*c.cs;}return this.hit;
  }
 }
 export function advanceFoot(s:FootState,input:FootInput,cameraHeading:number,dt:number,world:WalkingWorld){
- const d=Math.max(0,Math.min(.04,dt));if(!d)return;
+ const d=Math.max(0,Math.min(.04,dt));if(!d)return;world.elevation=s.y;
  let f=Number(input.forward)-Number(input.reverse),r=Number(input.left)-Number(input.right);const length=Math.hypot(f,r);if(length>1){f/=length;r/=length;}
  const sn=Math.sin(cameraHeading),cs=Math.cos(cameraHeading),speed=input.walk?FOOT_PROFILE.walk:FOOT_PROFILE.run;
  const blend=1-Math.exp(-(s.grounded?14:5)*d);s.vx+=((f*sn+r*cs)*speed-s.vx)*blend;s.vz+=((f*cs-r*sn)*speed-s.vz)*blend;
@@ -53,8 +56,9 @@ export function advanceFoot(s:FootState,input:FootInput,cameraHeading:number,dt:
  s.coyote=s.grounded?FOOT_PROFILE.coyote:Math.max(0,s.coyote-d);
  if(s.jumpBuffer>0&&s.coyote>0){s.vy=Math.sqrt(2*FOOT_PROFILE.gravity*FOOT_PROFILE.jumpHeight);s.grounded=false;s.coyote=0;s.jumpBuffer=0;s.airTime=0;}
  s.jumpBuffer=Math.max(0,s.jumpBuffer-d);s.land=Math.max(0,s.land-d);
- const ground=pavementHeight(s.x,s.z);
- if(!s.grounded){s.airTime+=d;s.y+=s.vy*d-FOOT_PROFILE.gravity*d*d/2;s.vy-=FOOT_PROFILE.gravity*d;if(s.y<=ground&&s.vy<=0){s.y=ground;s.vy=0;s.grounded=true;s.land=.15;}}
+ const ground=world.studio.ground(s.x,s.z,s.y+(s.grounded?.3:0));
+ const ceiling=world.studio.ceiling(s.x,s.z,s.y+.05);
+ if(!s.grounded){s.airTime+=d;s.y+=s.vy*d-FOOT_PROFILE.gravity*d*d/2;s.vy-=FOOT_PROFILE.gravity*d;if(s.vy>0&&s.y+FOOT_PROFILE.height>ceiling){s.y=Math.max(ground,ceiling-FOOT_PROFILE.height);s.vy=0;}if(s.y<=ground&&s.vy<=0){s.y=ground;s.vy=0;s.grounded=true;s.land=.15;}}
  else if(s.y-ground>.2){s.grounded=false;}else s.y=ground;
  s.wave=length||!s.grounded?0:Math.max(0,s.wave-d);
 }

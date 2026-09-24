@@ -1,0 +1,3445 @@
+{
+  "version": 2,
+  "id": "synarc-kit-2",
+  "families": [
+    "warm-brick",
+    "pastel-stucco",
+    "pale-limestone"
+  ],
+  "parts": [
+    {
+      "id": "wall-full",
+      "category": "wall",
+      "label": "Wall Full",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "wall-half",
+      "category": "wall",
+      "label": "Wall Half",
+      "size": [
+        1,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.5,
+          0,
+          0
+        ],
+        "right": [
+          0.5,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "wall-quarter",
+      "category": "wall",
+      "label": "Wall Quarter",
+      "size": [
+        0.5,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.25,
+          0,
+          0
+        ],
+        "right": [
+          0.25,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.5,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "wall-rusticated",
+      "category": "wall",
+      "label": "Wall Rusticated",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "wall-panel",
+      "category": "wall",
+      "label": "Wall Panel",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "corner-convex",
+      "category": "wall",
+      "label": "Corner Convex",
+      "size": [
+        0.3,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.15,
+          0,
+          0
+        ],
+        "right": [
+          0.15,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.3,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "corner-concave",
+      "category": "wall",
+      "label": "Corner Concave",
+      "size": [
+        0.3,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.15,
+          0,
+          0
+        ],
+        "right": [
+          0.15,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.3,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "wall-curve",
+      "category": "wall",
+      "label": "Wall Curve",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-sash",
+      "category": "window",
+      "label": "Sash",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-french",
+      "category": "window",
+      "label": "French",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.18,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-paired",
+      "category": "window",
+      "label": "Paired",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.6,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-arched",
+      "category": "window",
+      "label": "Arched",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": true
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-shuttered",
+      "category": "window",
+      "label": "Shuttered",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-narrow",
+      "category": "window",
+      "label": "Narrow",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 0.7,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-mullioned",
+      "category": "window",
+      "label": "Mullioned",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.75,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "window-shop",
+      "category": "window",
+      "label": "Shop",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.35,
+        "bottom": 0.22,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-panelled",
+      "category": "door",
+      "label": "Panelled",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.4,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-arched",
+      "category": "door",
+      "label": "Arched",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.4,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": true
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-double",
+      "category": "door",
+      "label": "Double",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.4,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-shop",
+      "category": "door",
+      "label": "Shop",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.4,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-lobby",
+      "category": "door",
+      "label": "Lobby",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.65,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "door-balcony",
+      "category": "door",
+      "label": "Balcony",
+      "size": [
+        2,
+        3,
+        0.3
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": {
+        "width": 1.4,
+        "bottom": 0,
+        "top": 2.65,
+        "arched": false
+      },
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          3,
+          0.3
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "canopy-metal",
+      "category": "canopy",
+      "label": "Canopy Metal",
+      "size": [
+        2,
+        0.25,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.25,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.25,
+          1.2
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "canopy-awning",
+      "category": "canopy",
+      "label": "Canopy Awning",
+      "size": [
+        2,
+        0.25,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.25,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.25,
+          1.2
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "canopy-glass",
+      "category": "canopy",
+      "label": "Canopy Glass",
+      "size": [
+        2,
+        0.25,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.25,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.25,
+          1.2
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "canopy-centre",
+      "category": "canopy",
+      "label": "Canopy Centre",
+      "size": [
+        2,
+        0.25,
+        1.2
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.25,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.25,
+          1.2
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "plinth",
+      "category": "trim",
+      "label": "Plinth",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "string-course",
+      "category": "trim",
+      "label": "String Course",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "cornice",
+      "category": "trim",
+      "label": "Cornice",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "pilaster",
+      "category": "trim",
+      "label": "Pilaster",
+      "size": [
+        0.25,
+        3,
+        0.24
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.125,
+          0,
+          0
+        ],
+        "right": [
+          0.125,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.25,
+          3,
+          0.24
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "capital",
+      "category": "trim",
+      "label": "Capital",
+      "size": [
+        0.45,
+        0.3,
+        0.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.225,
+          0,
+          0
+        ],
+        "right": [
+          0.225,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.3,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.45,
+          0.3,
+          0.4
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "sill",
+      "category": "trim",
+      "label": "Sill",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "pediment",
+      "category": "trim",
+      "label": "Pediment",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "trim-corner",
+      "category": "trim",
+      "label": "Trim Corner",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "trim-end",
+      "category": "trim",
+      "label": "Trim End",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "trim-concave",
+      "category": "trim",
+      "label": "Trim Concave",
+      "size": [
+        2,
+        0.22,
+        0.38
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [
+        "x"
+      ],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.22,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.22,
+          0.38
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-centre",
+      "category": "balcony",
+      "label": "Balcony Centre",
+      "size": [
+        2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-left",
+      "category": "balcony",
+      "label": "Balcony Left",
+      "size": [
+        2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-right",
+      "category": "balcony",
+      "label": "Balcony Right",
+      "size": [
+        2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-corner",
+      "category": "balcony",
+      "label": "Balcony Corner",
+      "size": [
+        2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-inner",
+      "category": "balcony",
+      "label": "Balcony Inner",
+      "size": [
+        2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-centre",
+      "category": "balcony",
+      "label": "Rail Centre",
+      "size": [
+        2,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-short",
+      "category": "balcony",
+      "label": "Rail Short",
+      "size": [
+        1,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.5,
+          0,
+          0
+        ],
+        "right": [
+          0.5,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-left",
+      "category": "balcony",
+      "label": "Rail Left",
+      "size": [
+        2,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-right",
+      "category": "balcony",
+      "label": "Rail Right",
+      "size": [
+        2,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-corner",
+      "category": "balcony",
+      "label": "Rail Corner",
+      "size": [
+        2,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "rail-inner",
+      "category": "balcony",
+      "label": "Rail Inner",
+      "size": [
+        2,
+        1.05,
+        0.08
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -1,
+          0,
+          0
+        ],
+        "right": [
+          1,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          2,
+          1.05,
+          0.08
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "medium"
+    },
+    {
+      "id": "balcony-bracket",
+      "category": "balcony",
+      "label": "Balcony Bracket",
+      "size": [
+        0.16,
+        0.65,
+        1.1
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.08,
+          0,
+          0
+        ],
+        "right": [
+          0.08,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.65,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.16,
+          0.65,
+          1.1
+        ]
+      },
+      "collision": "deck",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-step",
+      "category": "stair",
+      "label": "Stair Step",
+      "size": [
+        1.2,
+        0.18,
+        0.28
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          0.28
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-flight",
+      "category": "stair",
+      "label": "Stair Flight",
+      "size": [
+        1.2,
+        1.5,
+        2.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.5,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          1.5,
+          2.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-foot",
+      "category": "stair",
+      "label": "Stair Foot",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-landing",
+      "category": "stair",
+      "label": "Stair Landing",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-return",
+      "category": "stair",
+      "label": "Stair Return",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-storey",
+      "category": "stair",
+      "label": "Stair Storey",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-top",
+      "category": "stair",
+      "label": "Stair Top",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-rail",
+      "category": "stair",
+      "label": "Stair Rail",
+      "size": [
+        0.08,
+        1.05,
+        2.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.04,
+          0,
+          0
+        ],
+        "right": [
+          0.04,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.08,
+          1.05,
+          2.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-return-rail",
+      "category": "stair",
+      "label": "Stair Return Rail",
+      "size": [
+        0.08,
+        1.05,
+        2.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.04,
+          0,
+          0
+        ],
+        "right": [
+          0.04,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          1.05,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.08,
+          1.05,
+          2.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "stair-support",
+      "category": "stair",
+      "label": "Stair Support",
+      "size": [
+        1.2,
+        0.18,
+        1.4
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.6,
+          0,
+          0
+        ],
+        "right": [
+          0.6,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.18,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          1.2,
+          0.18,
+          1.4
+        ]
+      },
+      "collision": "stair",
+      "minDetail": "medium"
+    },
+    {
+      "id": "floral-relief",
+      "category": "decoration",
+      "label": "Floral Relief",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    },
+    {
+      "id": "keystone",
+      "category": "decoration",
+      "label": "Keystone",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    },
+    {
+      "id": "iron-scroll",
+      "category": "decoration",
+      "label": "Iron Scroll",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    },
+    {
+      "id": "wall-lamp",
+      "category": "decoration",
+      "label": "Wall Lamp",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    },
+    {
+      "id": "window-box",
+      "category": "decoration",
+      "label": "Box",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    },
+    {
+      "id": "address-plaque",
+      "category": "decoration",
+      "label": "Address Plaque",
+      "size": [
+        0.6,
+        0.6,
+        0.22
+      ],
+      "front": "+Z",
+      "origin": "bottom-centre",
+      "opening": null,
+      "stretch": [],
+      "channels": [
+        "wall",
+        "trim",
+        "frame",
+        "door",
+        "glass"
+      ],
+      "connectors": {
+        "left": [
+          -0.3,
+          0,
+          0
+        ],
+        "right": [
+          0.3,
+          0,
+          0
+        ],
+        "top": [
+          0,
+          0.6,
+          0
+        ],
+        "bottom": [
+          0,
+          0,
+          0
+        ]
+      },
+      "clearance": {
+        "size": [
+          0.6,
+          0.6,
+          0.22
+        ]
+      },
+      "collision": "solid",
+      "minDetail": "near"
+    }
+  ]
+}

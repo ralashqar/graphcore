@@ -20,7 +20,7 @@ export function CityLandScene({land}:{land:CityLandController}){
  useEffect(()=>{let live=true;naturePack().then(p=>{if(live)setPack(p);}).catch(()=>{});return()=>{live=false;};},[]);
  const resources=useMemo(()=>({box:new BoxGeometry(1,1,1),plane:new PlaneGeometry(1,1),plain:new MeshStandardMaterial({color:'#ffffff',roughness:.95}),owned:createLandSignMaterial(true)}),[]);
  useEffect(()=>()=>{resources.box.dispose();resources.plane.dispose();resources.plain.dispose();resources.owned.map?.dispose();resources.owned.dispose();},[resources]);
- const editing=land.phase==='construction'&&land.selected&&land.draft?land.selected.id:null;
+ const editing=(land.phase==='construction'||land.phase==='walkthrough')&&land.selected&&land.draft?land.selected.id:null;
  const activeProperty=useMemo(()=>editing&&land.selected&&land.draft?landProperty(land.selected,land.draft):null,[editing,land.selected?.id,land.draft]);
  const backgroundPlots=(land.world?.plots||[]).filter(p=>p.id!==editing);
  const backgroundKey=backgroundPlots.map(p=>`${p.id}:${p.revision}`).join('|');

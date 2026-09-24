@@ -1,0 +1,24 @@
+import type {SculptVolume, SculptWallAnchor} from './citySculpt.ts';
+
+export type StudioFamily = 'warm-brick' | 'pastel-stucco' | 'pale-limestone';
+export type StudioChannel = 'wall' | 'trim' | 'frame' | 'door';
+export type StudioRoof = 'flat' | 'terrace' | 'pitched' | 'mansard' | 'hip' | 'shed' | 'half-hip' | 'gambrel' | 'pyramid' | 'cone';
+export type StudioRoofSettings={boundary?:'none'|'parapet'|'rail';rise?:number;overhang?:number;ridge?:'x'|'z';flip?:boolean;shoulder?:number;crown?:number;connection?:'auto'|'abut'|'separate';finish?:'slate'|'terracotta'|'metal';color?:string};
+export type StudioRoofFace={partId:string;polygon:[number,number][][];plane:[number,number,number];base:number};
+export type StudioRoofEdge={partId:string;kind:'eave'|'ridge'|'valley'|'abutment'|'step';a:[number,number,number];b:[number,number,number]};
+export type StudioRoofPatch={partId:string;vertices:number[];finish?:StudioRoofSettings['finish'];color?:string};
+export type StudioFinish = {color?: string; texture?: string};
+export type StudioAnchor = SculptWallAnchor & {floor: number};
+export type StudioSurface = {id: string; anchor: StudioAnchor; scope: 'spot' | 'wall'; channel: StudioChannel; finish: StudioFinish};
+export type StudioOpening = {id: string; anchor: StudioAnchor; module: string};
+export type StudioAssemblyKind = 'balcony' | 'cornice' | 'canopy' | 'stair' | 'pilaster' | 'ornament' | 'planter' | 'light';
+export type StudioAssembly = {id: string; kind: StudioAssemblyKind; anchors: StudioAnchor[]; look: 'simple' | 'ornate'; destination?: number; flip?: boolean};
+export type StudioPartStyle = {family?: StudioFamily; rhythm?: 'sparse' | 'regular' | 'glazing'; window?: string; roof?: StudioRoof; roofSettings?:StudioRoofSettings; finishes?: Partial<Record<StudioChannel, StudioFinish>>};
+export type StudioIntent = {catalogue: 'synarc-kit-2'; roofRevision?:'roof-envelope-2'; defaults: StudioPartStyle; parts: Record<string, StudioPartStyle>; surfaces: StudioSurface[]; openings: StudioOpening[]; assemblies: StudioAssembly[]};
+export type StudioRecipe = {version: 5; volumes: SculptVolume[]; attachments: import('./citySculpt.ts').SculptAttachment[]; plotSize?: 24 | 48; tileAnchors?: import('./citySculpt.ts').SculptTileAnchor[]; studio: StudioIntent};
+export type StudioBay = {anchorSpan:number; id: string; anchor: StudioAnchor; x: number; z: number; y: number; width: number; height: number; rotation: number; module: string; family: StudioFamily; finishes: Partial<Record<StudioChannel, StudioFinish>>; entrance: boolean};
+export type StudioPiece = {id: string; module: string; x: number; y: number; z: number; rotation: number; scale: [number, number, number]; family: StudioFamily; finishes?: Partial<Record<StudioChannel, StudioFinish>>};
+export type StudioBox = {id: string; x: number; y: number; z: number; width: number; height: number; depth: number; rotation: number};
+export type StudioDeck = {id: string; x: number; z: number; y: number; width: number; depth: number; rotation: number; rise?: number; underside?:number; plane?:[number,number,number]; polygon?: [number,number][][]};
+export type StudioResolved = {roofFaces?:StudioRoofFace[];roofEdges?:StudioRoofEdge[];roofPatches?:StudioRoofPatch[];bays: StudioBay[]; pieces: StudioPiece[]; blockers: StudioBox[]; decks: StudioDeck[]; inactive: {id: string; reason: string}[]; roof: number[]; roofNotes: string[]};
+export const studioEnabled = () => typeof window !== 'undefined' && ['1'].includes(new URLSearchParams(window.location.search).get('cityStudio')??'');

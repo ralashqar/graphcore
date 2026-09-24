@@ -1,3 +1,5 @@
+import type {StudioRecipe, StudioResolved} from './cityStudioTypes.ts';
+import {resolveStudio, validateStudio} from './cityStudio.ts';
 import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon} from 'polygon-clipping';
 import {ShapeUtils,Vector2} from 'three';
@@ -13,11 +15,11 @@ export type SculptLevel={floor:number;shapes:SculptPrimitive[]};
 export type SculptBrushKind='door'|'canopy'|'pillars'|'trim'|'planter'|'bollard';
 export type SculptWallAnchor={shapeId:string;side:'north'|'south'|'east'|'west'|'curve';u:number};
 export type SculptAttachment={id:string;kind:SculptBrushKind;floor:number;x:number;z:number;nx:number;nz:number;span:number;style:'simple'|'stone'|'metal';anchor?:SculptWallAnchor;spanMode?:'fixed'|'full-wall'};
-export type SculptRecipe={version:1;levels:SculptLevel[]}|{version:2;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:3;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:4;volumes:SculptVolume[];attachments:SculptAttachment[];plotSize?:24|48;tileAnchors?:SculptTileAnchor[]};
+export type SculptRecipe=StudioRecipe|{version:1;levels:SculptLevel[]}|{version:2;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:3;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:4;volumes:SculptVolume[];attachments:SculptAttachment[];plotSize?:24|48;tileAnchors?:SculptTileAnchor[]};
 export type SculptLoop=[number,number][];
 export type SculptPolygon=SculptLoop[];
 export type SculptDecoration={id:string;kind:SculptBrushKind;style:SculptAttachment['style'];x:number;y:number;z:number;angle:number;span:number;active:boolean;reason:string|null};
-export type SculptResolved={floors:{floor:number;polygons:SculptPolygon[];bottom:number;top:number}[];entrance:{x:number;z:number;angle:number}|null;decorations:SculptDecoration[];kit?:KitAssembly;vertices:{wall:number[];trim:number[];roof:number[];glass:number[];door:number[]};volumeVertices?:Record<string,{wall:number[];roof:number[]}>;curvedVertices?:{wall:number[];trim:number[];glass:number[];door:number[]};curvedVolumeWalls?:Record<string,number[]>;bounds:{minX:number;maxX:number;minZ:number;maxZ:number}};
+export type SculptResolved={studio?:StudioResolved;floors:{floor:number;polygons:SculptPolygon[];bottom:number;top:number}[];entrance:{x:number;z:number;angle:number}|null;decorations:SculptDecoration[];kit?:KitAssembly;vertices:{wall:number[];trim:number[];roof:number[];glass:number[];door:number[]};volumeVertices?:Record<string,{wall:number[];roof:number[]}>;curvedVertices?:{wall:number[];trim:number[];glass:number[];door:number[]};curvedVolumeWalls?:Record<string,number[]>;bounds:{minX:number;maxX:number;minZ:number;maxZ:number}};
 export type SculptWall={floor:number;ring:number;a:[number,number];b:[number,number];length:number;nx:number;nz:number;angle:number;bottom:number;top:number;source?:SculptWallAnchor};
 export type SculptGraphNode={id:string;stage:'intent'|'outline'|'wall'|'facade'|'roof'|'attachment'|'grounds';dependsOn:string[]};
 export type SculptGraph={nodes:SculptGraphNode[];floors:{floor:number;polygons:SculptPolygon[];bottom:number;top:number}[];walls:{key:string;wall:SculptWall;bayCount:number;doorBay:number|null}[];roofEdges:{key:string;wall:SculptWall}[];decorations:SculptDecoration[]};
@@ -49,26 +51,26 @@ export function sculptFromPreset(d:CityBuildingDesignV3):SculptRecipe|null{
  return {version:1,levels};
 }
 export function effectiveSculptShapes(recipe:SculptRecipe,floor:number):SculptPrimitive[]{
- if(recipe.version===4)return recipe.volumes.filter(v=>v.startFloor<=floor&&floor<v.startFloor+v.spanFloors).map(({startFloor:_start,spanFloors:_span,...shape})=>shape);
+ if((recipe.version===4||recipe.version===5))return recipe.volumes.filter(v=>v.startFloor<=floor&&floor<v.startFloor+v.spanFloors).map(({startFloor:_start,spanFloors:_span,...shape})=>shape);
  const level=[...recipe.levels].filter(l=>l.floor<=floor).sort((a,b)=>b.floor-a.floor)[0];
  return level?.shapes||[];
 }
 export function setSculptShapes(recipe:SculptRecipe,floor:number,shapes:SculptPrimitive[]):SculptRecipe{
- if(recipe.version===4)throw new Error('Volume recipes use volume editing.');
+ if((recipe.version===4||recipe.version===5))throw new Error('Volume recipes use volume editing.');
  return {...recipe,levels:[...recipe.levels.filter(l=>l.floor!==floor),{floor,shapes}].sort((a,b)=>a.floor-b.floor)};
 }
 export function linkSculptFloor(recipe:SculptRecipe,floor:number):SculptRecipe{
- if(recipe.version===4)throw new Error('Volume recipes have no linked floor outlines.');
+ if((recipe.version===4||recipe.version===5))throw new Error('Volume recipes have no linked floor outlines.');
  return {...recipe,levels:recipe.levels.filter(l=>l.floor!==floor)};
 }
 /** Conversion keeps each authored outline over exactly the floors it previously inherited. */
-export function upgradeSculptVolumes(recipe:SculptRecipe,floors:number):Extract<SculptRecipe,{version:4}>{
- if(recipe.version===4)return recipe;
+export function upgradeSculptVolumes(recipe:SculptRecipe,floors:number):Extract<SculptRecipe,{version:4|5}>{
+ if((recipe.version===4||recipe.version===5))return recipe;
  const levels=[...recipe.levels].sort((a,b)=>a.floor-b.floor);
  return {version:4,volumes:levels.flatMap((level,i)=>level.shapes.map(shape=>({...shape,startFloor:level.floor,
   spanFloors:(levels[i+1]?.floor??floors)-level.floor}))),attachments:structuredClone(attachmentsOf(recipe))};
 }
-export function volumeSculptFromPreset(d:CityBuildingDesignV3):Extract<SculptRecipe,{version:4}>|null{
+export function volumeSculptFromPreset(d:CityBuildingDesignV3):Extract<SculptRecipe,{version:4|5}>|null{
  const legacy=sculptFromPreset(d);return legacy?upgradeSculptVolumes(legacy,d.floors):null;
 }
 export const sculptFloorBottom=(floor:number,groundHeight:number)=>.65+(floor?groundHeight+(floor-1)*3:0);
@@ -145,7 +147,7 @@ export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'flo
   for(const polygon of sculptFootprint(effectiveSculptShapes(recipe,floor)))for(const [ringIndex,ring] of polygon.entries())for(let i=0;i<ring.length;i++){
    const a=ring[i],b=ring[(i+1)%ring.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
    if(length<.01)continue;
-   walls.push({floor,ring:ringIndex,a,b,length,nx:dz/length,nz:-dx/length,angle:Math.atan2(dz,-dx),bottom,top,source:wallSource(shapes,a,b,dz/length,-dx/length,recipe.version===4)});
+   walls.push({floor,ring:ringIndex,a,b,length,nx:dz/length,nz:-dx/length,angle:Math.atan2(dz,-dx),bottom,top,source:wallSource(shapes,a,b,dz/length,-dx/length,(recipe.version===4||recipe.version===5))});
   }
   bottom=top;
  }
@@ -153,7 +155,7 @@ export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'flo
 }
 /** Volume-owned defaults are resolved on exposed walls, not painted into every bay. */
 export function sculptKitWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):KitWall[]{
- const volumes=recipe.version===4?new Map(recipe.volumes.map(v=>[v.id,v])):null;
+ const volumes=(recipe.version===4||recipe.version===5)?new Map(recipe.volumes.map(v=>[v.id,v])):null;
  return sculptWalls(recipe,d).map(w=>{
   const owner=w.source&&volumes?.get(w.source.shapeId);
   return {x:(w.a[0]+w.b[0])/2,z:(w.a[1]+w.b[1])/2,nx:w.nx,nz:w.nz,length:w.length,y:w.bottom,height:w.top-w.bottom,floor:w.floor,courtyard:w.ring>0,
@@ -163,7 +165,7 @@ export function sculptKitWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'
  }).filter(w=>!w.curved||w.length>=1.1);
 }
 export function reprojectSculptTiles(recipe:SculptRecipe,kit:SynarcKitChoice|undefined,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):SynarcKitChoice|undefined{
- if(recipe.version!==4||!kit||!recipe.tileAnchors?.length)return kit;
+ if((recipe.version!==4&&recipe.version!==5)||!kit||!recipe.tileAnchors?.length)return kit;
  const walls=sculptWalls(recipe,d);
  const placements=assembleSynarcKit(sculptKitWalls(recipe,d),kit).placements.filter(isKitWallBay);
  const anchors=new Map(recipe.tileAnchors.map(anchor=>[anchor.id,anchor]));
@@ -197,8 +199,8 @@ function nearestWall(walls:SculptWall[],a:Pick<SculptAttachment,'x'|'z'|'nx'|'nz
  return best&&best.distance<=1.2?best:null;
 }
 function attachedWall(recipe:SculptRecipe,walls:SculptWall[],a:SculptAttachment){
- if(recipe.version!==3&&recipe.version!==4)return nearestWall(walls,a);
- if(!a.anchor)return recipe.version===4?nearestWall(walls,a):null;
+ if(recipe.version!==3&&(recipe.version!==4&&recipe.version!==5))return nearestWall(walls,a);
+ if(!a.anchor)return (recipe.version===4||recipe.version===5)?nearestWall(walls,a):null;
  const ideal=sourcePoint(a.anchor,effectiveSculptShapes(recipe,a.floor));if(!ideal)return null;
  let best:{wall:SculptWall;t:number;distance:number}|null=null;
  for(const wall of walls){if(wall.floor!==a.floor||wall.source?.shapeId!==a.anchor.shapeId||wall.source.side!==a.anchor.side)continue;
@@ -210,7 +212,7 @@ function attachedWall(recipe:SculptRecipe,walls:SculptWall[],a:SculptAttachment)
 /** An explicit edit opts older authored intent into stable, source-face relationships. */
 export function upgradeSculpt(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):Extract<SculptRecipe,{version:3}>{
  if(recipe.version===3)return recipe;
- if(recipe.version===4)throw new Error('Volume recipes already use stable solid intent.');
+ if((recipe.version===4||recipe.version===5))throw new Error('Volume recipes already use stable solid intent.');
  const walls=sculptWalls(recipe,d);
  return {version:3,levels:recipe.levels,attachments:attachmentsOf(recipe).map(a=>{
   if(!['door','trim'].includes(a.kind))return {...a};
@@ -269,22 +271,23 @@ export function addSculptAttachment(recipe:SculptRecipe,d:Pick<CityBuildingDesig
   if(!target||Math.hypot(attachment.x-target.x,attachment.z-target.z)>2.5)return {recipe,reason:'Brush near the primary entrance.'};
  }
  const old=attachmentsOf(recipe),single=['door','canopy','pillars'].includes(attachment.kind);
- if((recipe.version===3||recipe.version===4)&&['door','trim'].includes(attachment.kind)){
+ if((recipe.version===3||(recipe.version===4||recipe.version===5))&&['door','trim'].includes(attachment.kind)){
   const hit=nearestWall(sculptWalls(recipe,d),attachment);
   attachment={...attachment,anchor:hit?wallAnchor(hit.wall,attachment.x,attachment.z,effectiveSculptShapes(recipe,attachment.floor)):undefined,...(attachment.kind==='trim'&&hit&&attachment.span>=hit.wall.length-.45?{spanMode:'full-wall' as const}:{})};
  }
  const additions=[...old.filter(a=>!single||a.kind!==attachment.kind),attachment];
- const next:SculptRecipe=recipe.version===4?{...recipe,attachments:additions}:recipe.version===3?{version:3,levels:recipe.levels,attachments:additions}:{version:2,levels:recipe.levels,attachments:additions};
+ const next:SculptRecipe=(recipe.version===4||recipe.version===5)?{...recipe,attachments:additions}:recipe.version===3?{version:3,levels:recipe.levels,attachments:additions}:{version:2,levels:recipe.levels,attachments:additions};
  const error=validateSculpt(next,d.floors);if(error)return {recipe,reason:error};
  const result=resolveSculptDecorations(next,d).find(a=>a.id===attachment.id);
  if(result?.active){if(['door','canopy','pillars'].includes(attachment.kind)){attachment.x=result.x;attachment.z=result.z;}return {recipe:next,reason:null};}
  return {recipe,reason:result?.reason||'This placement does not fit.'};
 }
 export function sculptBuildLimit(plotSize:24|48=24){return (plotSize/2-1.5)/(plotSize/24);}
-export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=recipe.version===4?recipe.plotSize??24:24):string|null{
+export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=(recipe.version===4||recipe.version===5)?recipe.plotSize??24:24):string|null{
+ if(recipe.version===5){const error=validateStudio(recipe);if(error)return error;}
  const limit=sculptBuildLimit(plotSize);
- if(recipe.version===4){
-  if(!Array.isArray(recipe.volumes)||recipe.volumes.length<1||recipe.volumes.length>32)return 'Use between one and 32 solid volumes.';
+ if((recipe.version===4||recipe.version===5)){
+  if(!Array.isArray(recipe.volumes)||(recipe.version===4&&recipe.volumes.length<1)||recipe.volumes.length>32)return 'Use between one and 32 solid volumes.';
   if(recipe.tileAnchors&&(!Array.isArray(recipe.tileAnchors)||recipe.tileAnchors.length>64||recipe.tileAnchors.some(a=>!a.id||!recipe.volumes.some(v=>v.id===a.volumeId)||!['north','south','east','west','curve'].includes(a.side)||!Number.isFinite(a.u)||a.u<0||a.u>1||!Number.isInteger(a.floor)||a.floor<0||a.floor>=8||!SYNARC_KIT_PAINTS.includes(a.part))))return 'A facade tile anchor is invalid.';
   const ids=new Set<string>();
   for(const v of recipe.volumes){
@@ -302,13 +305,13 @@ export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=
     return 'Keep each solid inside the plot and the eight-floor height limit.';
    ids.add(v.id);
   }
-  if(!recipe.volumes.some(v=>v.operation==='add'))return 'Add at least one solid volume.';
+  if(recipe.volumes.length&&!recipe.volumes.some(v=>v.operation==='add'))return 'Add at least one solid volume.';
  }else if(![1,2,3].includes(recipe.version)||!Array.isArray(recipe.levels)||recipe.levels.length<1||recipe.levels.length>8||recipe.levels[0].floor!==0)return 'The floor stack is incomplete.';
  if(recipe.version!==1){if(!Array.isArray(recipe.attachments)||recipe.attachments.length>32)return 'Too many architectural attachments.';const ids=new Set<string>(),single=new Set<string>();for(const a of recipe.attachments){if(!a.id||ids.has(a.id)||!['door','canopy','pillars','trim','planter','bollard'].includes(a.kind)||!['simple','stone','metal'].includes(a.style)||!Number.isInteger(a.floor)||a.floor<0||a.floor>=floors||![a.x,a.z,a.nx,a.nz,a.span].every(Number.isFinite)||Math.abs(a.x)>11||Math.abs(a.z)>11||a.span<.5||a.span>(a.kind==='trim'?20:12)||(['door','canopy','pillars'].includes(a.kind)&&single.has(a.kind))||(a.anchor&&(!a.anchor.shapeId||!['north','south','east','west','curve'].includes(a.anchor.side)||!Number.isFinite(a.anchor.u)||a.anchor.u<0||a.anchor.u>1))||(a.spanMode&&!['fixed','full-wall'].includes(a.spanMode)))return 'An architectural attachment is invalid.';ids.add(a.id);if(['door','canopy','pillars'].includes(a.kind))single.add(a.kind);}}
  // Volumes are independent operands. A detached island, unsupported upper mass,
  // or subtractive cut that crosses several solids is valid sculpting intent.
  // Only the older floor-outline recipes enforce architectural connectivity.
- if(recipe.version===4)return null;
+ if((recipe.version===4||recipe.version===5))return null;
  for(const level of recipe.levels){
   if(!Number.isInteger(level.floor)||level.floor<0||level.floor>=floors||level.shapes.length>16)return 'Too many shapes or floors.';
   for(const s of level.shapes){if(!['rectangle','ellipse'].includes(s.kind)||!['add','subtract'].includes(s.operation)||![s.x,s.z,s.width,s.depth].every(Number.isFinite)||s.width<2||s.depth<2||Math.abs(s.x)+s.width/2>limit||Math.abs(s.z)+s.depth/2>limit)return 'Keep each shape inside the buildable area.';}
@@ -335,7 +338,7 @@ function surface(out:number[],polygon:SculptPolygon,y:number,up:boolean){
 }
 /** Typed dependency graph for the game editor. Nodes are derived, never saved as mesh data. */
 export function buildSculptGraph(recipe:SculptRecipe,d:CityBuildingDesignV3):SculptGraph{
- if(recipe.version===4)throw new Error('Volume recipes resolve by floor-band topology.');
+ if((recipe.version===4||recipe.version===5))throw new Error('Volume recipes resolve by floor-band topology.');
  const nodes:SculptGraphNode[]=[],floors:SculptGraph['floors']=[],walls:SculptGraph['walls']=[],roofEdges:SculptGraph['roofEdges']=[];
  const decorations=resolveSculptDecorations(recipe,d),door=decorations.find(a=>a.kind==='door'&&a.active);
  for(const intent of attachmentsOf(recipe))nodes.push({id:`intent:${intent.id}`,stage:'intent',dependsOn:[]});
@@ -394,6 +397,12 @@ function pitchedRoof(out:number[],shape:SculptPrimitive,base:number){
  }
 }
 export function resolveSculpt(recipe:SculptRecipe,d:CityBuildingDesignV3):SculptResolved{
+ if(recipe.version===5){
+  const error=validateSculpt(recipe,d.floors)||validateStudio(recipe);if(error)throw Error(error);
+  const base:SculptResolved=recipe.volumes.length?resolveSculpt({...recipe,version:4},{...d,roof:'flat',synarcKit:undefined}):{floors:[],entrance:null,decorations:[],vertices:{wall:[],trim:[],roof:[],glass:[],door:[]},bounds:{minX:0,maxX:0,minZ:0,maxZ:0}};
+  const studio=resolveStudio(recipe,d,base),entry=studio.bays.find(b=>b.entrance);
+  return {...base,vertices:{...base.vertices,roof:studio.roof},volumeVertices:{},studio,kit:undefined,entrance:entry?{x:entry.x,z:entry.z,angle:entry.rotation}:null};
+ }
  const error=validateSculpt(recipe,d.floors);if(error)throw new Error(error);
  const graph=recipe.version===3?buildSculptGraph(recipe,d):null;
  const decorations=graph?.decorations??resolveSculptDecorations(recipe,d),doorIntent=attachmentsOf(recipe).find(a=>a.kind==='door');
