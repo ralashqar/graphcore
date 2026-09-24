@@ -198,7 +198,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  for(let i=blockers.length-1;i>=0;i--)if(internalRails.has(blockers[i].id))blockers.splice(i,1);
  for(const v of r.volumes.filter(v=>v.operation==='add'&&!r.studio.roofRevision)){const roof=studioStyle(r,v.id).roof;if((roof==='pitched'||roof==='mansard')&&v.kind==='ellipse')roofNotes.push('Round parts use a flat roof; the chosen roof is kept for rectangular shapes.');}
  const roof=studioRoofGeometry(r,d,base);
- if(roof.faces){for(let i=decks.length-1;i>=0;i--)if(decks[i].id.startsWith('roof/'))decks.splice(i,1);roof.faces.forEach((f,i)=>decks.push({id:`roof/${i}`,x:0,z:0,y:f.base,width:0,depth:0,rotation:0,polygon:f.polygon,plane:f.plane,underside:f.base-.12}));}
+ if(roof.faces){for(let i=decks.length-1;i>=0;i--)if(decks[i].id.startsWith('roof/'))decks.splice(i,1);roof.faces.forEach((f,i)=>decks.push({id:`roof/${i}`,x:0,z:0,y:f.base,width:0,depth:0,rotation:0,polygon:f.polygon,plane:f.plane,underside:f.underside??f.base-.12}));}
  return {bays,pieces,blockers,decks,inactive,roof:roof.vertices,roofFaces:roof.faces,roofEdges:roof.edges,roofPatches:roof.patches,roofNotes:[...new Set([...roofNotes,...roof.notes])]};
 }
 export function checkStudioDraft(draft:LandDraft,r:StudioRecipe){return validateSculpt(r,studioFloorCount(r),r.plotSize)||validateStudio(r)||(!draft.name.trim()?'Give your building a name.':null);}

@@ -80,9 +80,13 @@ const clean=(loop:SculptLoop):SculptLoop=>{
  const out=loop.slice();if(out.length>1&&Math.hypot(out[0][0]-out.at(-1)![0],out[0][1]-out.at(-1)![1])<.001)out.pop();
  return out.filter((p,i)=>i===0||Math.hypot(p[0]-out[i-1][0],p[1]-out[i-1][1])>.001);
 };
-function primitivePolygon(shape:SculptPrimitive):MultiPolygon{
+/** Canonical wall boundary: preserve the bay-sized facets and their angular phase. */
+export function sculptPrimitiveBoundary(shape:SculptPrimitive):SculptLoop{
  const {x,z,width,depth}=shape;
- const ring:SculptLoop=shape.kind==='rectangle'?[[x-width/2,z-depth/2],[x+width/2,z-depth/2],[x+width/2,z+depth/2],[x-width/2,z+depth/2]]:ellipseRing(x,z,width,depth);
+ return shape.kind==='rectangle'?[[x-width/2,z-depth/2],[x+width/2,z-depth/2],[x+width/2,z+depth/2],[x-width/2,z+depth/2]]:ellipseRing(x,z,width,depth);
+}
+function primitivePolygon(shape:SculptPrimitive):MultiPolygon{
+ const ring=sculptPrimitiveBoundary(shape);
  return [[ring.map(p=>[...p] as [number,number]).concat([[...ring[0]] as [number,number]])]];
 }
 function ellipseRing(x:number,z:number,width:number,depth:number):SculptLoop{

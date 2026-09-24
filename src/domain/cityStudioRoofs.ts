@@ -39,4 +39,4 @@ export function legacyStudioRoofGeometry(r:StudioRecipe,d:CityBuildingDesignV3,b
  return {vertices,notes};
 }
 
-export function studioRoofGeometry(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptResolved){return r.studio.roofRevision==='roof-envelope-2'?connectedStudioRoofs(r,d):{...legacyStudioRoofGeometry(r,d,base),faces:undefined,edges:undefined,patches:undefined};}
+export function studioRoofGeometry(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptResolved){return r.studio.roofRevision==='roof-envelope-2'?connectedStudioRoofs(r,d,base.floors):{...legacyStudioRoofGeometry(r,d,base),faces:undefined,edges:undefined,patches:undefined};}
