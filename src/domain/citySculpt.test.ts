@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {COMPOSITIONS,applyComposition,newDesign} from './cityBuildingV3.ts';
-import {addSculptAttachment,affectedSculptNodes,buildSculptGraph,effectiveSculptShapes,linkSculptFloor,resolveSculpt,resolveSculptDecorations,resizeSculptFace,sculptFootprint,sculptFromPreset,sculptPitchedRoofFits,sculptWalls,setSculptShapes,upgradeSculpt,upgradeSculptVolumes,validateSculpt,type SculptAttachment,type SculptPrimitive,type SculptRecipe} from './citySculpt.ts';
+import {addSculptAttachment,affectedSculptNodes,buildSculptGraph,effectiveSculptShapes,linkSculptFloor,reprojectSculptTiles,resolveSculpt,resolveSculptDecorations,resizeSculptFace,sculptFootprint,sculptFromPreset,sculptPitchedRoofFits,sculptWalls,setSculptShapes,upgradeSculpt,upgradeSculptVolumes,validateSculpt,type SculptAttachment,type SculptPrimitive,type SculptRecipe} from './citySculpt.ts';
 import {createLandWorld,fitLandDesign,initialLandDraft,LocalLandRepository} from './cityLand.ts';
-import {DEFAULT_SYNARC_KIT} from './citySynarcKit.ts';
+import {assembleSynarcKit,DEFAULT_SYNARC_KIT,isKitWallBay} from './citySynarcKit.ts';
 
 const rect=(id:string,x:number,z:number,width:number,depth:number,operation:'add'|'subtract'='add'):SculptPrimitive=>({id,kind:'rectangle',operation,x,z,width,depth});
 const design=newDesign('sculpt-test');
@@ -79,23 +79,53 @@ test('vertical add and circular cut resolve into supported curved inner façades
  assert.equal(sculptFootprint(effectiveSculptShapes(recipe,0))[0].length,1);
  assert.equal(sculptFootprint(effectiveSculptShapes(recipe,1))[0].length,2);
  const inner=sculptWalls(recipe,d).filter(w=>w.floor===1&&w.ring>0);
- assert.ok(inner.length>=16);assert.ok(inner.every(w=>w.source?.shapeId==='cut'&&w.source.side==='curve'));
+ assert.ok(inner.length>=8);assert.ok(inner.every(w=>w.source?.shapeId==='cut'&&w.source.side==='curve'));
  const resolved=resolveSculpt(recipe,d);assert.ok(resolved.vertices.glass.length>0);
  assert.ok(Object.values(resolved.vertices).every(vertices=>vertices.every(Number.isFinite)));
  const mixed=resolveSculpt(recipe,{...d,synarcKit:structuredClone(DEFAULT_SYNARC_KIT)});
  assert.ok(mixed.kit?.placements.length);assert.ok(mixed.curvedVertices?.wall.length);
- assert.ok(mixed.curvedVertices?.glass.length);
+ assert.equal(mixed.curvedVertices?.glass.length,0);
+ assert.ok(mixed.kit?.placements.some(p=>p.floor===1&&isKitWallBay(p)));
  const legacy:SculptRecipe={version:3,levels:[{floor:0,shapes:[rect('old-base',0,0,16,16),{...rect('old-cut',0,0,5,5,'subtract'),kind:'ellipse'}]}],attachments:[]};
  const old=resolveSculpt(legacy,{...d,synarcKit:structuredClone(DEFAULT_SYNARC_KIT)});
  assert.ok(old.kit?.placements.length);assert.equal(old.curvedVertices?.wall.length,0);
 });
-test('volume rules reject unsupported additions, disconnected floors and cuts through the entrance',()=>{
+test('solid volumes move apart, overhang and accept cuts through former entrances',()=>{
  const ground={...rect('ground',0,0,12,12),startFloor:0,spanFloors:3};
  const base:Extract<SculptRecipe,{version:4}>={version:4,volumes:[ground],attachments:[]};
  assert.equal(validateSculpt(base,3),null);
- assert.match(validateSculpt({...base,volumes:[ground,{...rect('overhang',5,0,7,7),startFloor:1,spanFloors:2}]},3)||'',/supported/);
- assert.match(validateSculpt({...base,volumes:[ground,{...rect('island',8,0,2,2),startFloor:0,spanFloors:3}]},3)||'',/connected/);
- assert.match(validateSculpt({...base,volumes:[ground,{...rect('entry-cut',0,4,12,6,'subtract'),startFloor:0,spanFloors:3}]},3)||'',/entrance/);
+ const overhang={...base,volumes:[ground,{...rect('overhang',5,0,7,7),startFloor:1,spanFloors:2}]};
+ const island={...base,volumes:[ground,{...rect('island',8,0,2,2),startFloor:0,spanFloors:3}]};
+ const entryCut={...base,volumes:[ground,{...rect('entry-cut',0,4,12,6,'subtract'),startFloor:0,spanFloors:3}]};
+ for(const recipe of [overhang,island,entryCut])assert.equal(validateSculpt(recipe,3),null);
+ assert.equal(sculptFootprint(effectiveSculptShapes(island,0)).length,2);
+ assert.ok(resolveSculpt(island,{...design,middleFloors:2,crown:'none',floors:3}).vertices.wall.length>0);
+ assert.doesNotThrow(()=>resolveSculpt(entryCut,{...design,middleFloors:2,crown:'none',floors:3}));
+ assert.match(validateSculpt({...base,volumes:[ground,{...rect('outside',9,0,5,5),startFloor:0,spanFloors:1}]},3)||'',/inside the plot/);
+ assert.match(validateSculpt({...base,volumes:[ground,{...rect('too-tall',0,0,4,4),startFloor:0,spanFloors:9}]},9)||'',/eight-floor/);
+});
+test('one subtractive operand cuts whichever disconnected or raised solids it intersects',()=>{
+ const left={...rect('left',-4,0,6,8),startFloor:0,spanFloors:2};
+ const right={...rect('right',4,0,6,8),startFloor:1,spanFloors:3};
+ const cut={...rect('cut',0,0,12,4,'subtract'),startFloor:0,spanFloors:4};
+ const recipe:SculptRecipe={version:4,volumes:[left,right,cut],attachments:[]};
+ assert.equal(validateSculpt(recipe,4),null);
+ assert.ok(sculptFootprint(effectiveSculptShapes(recipe,0)).length>0);
+ assert.ok(sculptFootprint(effectiveSculptShapes(recipe,1)).length>1);
+ const result=resolveSculpt(recipe,{...design,middleFloors:3,crown:'none',floors:4});
+ assert.equal(result.floors.length,4);
+ assert.ok(Object.values(result.vertices).every(vertices=>vertices.every(Number.isFinite)));
+ const moved:SculptRecipe={...recipe,volumes:[left,right,{...cut,x:4}]};
+ assert.equal(validateSculpt(moved,4),null);
+ assert.notDeepEqual(sculptFootprint(effectiveSculptShapes(moved,1)),result.floors[1].polygons);
+});
+test('raising one of two intersecting solids keeps their three-dimensional union valid',()=>{
+ const a={...rect('base',-2,0,10,10),startFloor:0,spanFloors:1};
+ const b={...rect('wing',3,0,8,8),startFloor:0,spanFloors:3};
+ const recipe:SculptRecipe={version:4,volumes:[a,b],attachments:[]};
+ assert.equal(validateSculpt(recipe,3),null);
+ assert.equal(sculptFootprint(effectiveSculptShapes(recipe,0)).length,1);
+ assert.equal(sculptFootprint(effectiveSculptShapes(recipe,2)).length,1);
 });
 test('linked levels inherit until a detached floor changes and unsupported overhangs are rejected',()=>{
  const base=[rect('base',0,0,14,14)];let recipe:SculptRecipe={version:1,levels:[{floor:0,shapes:base}]};
@@ -136,6 +166,97 @@ test('version-4 solids survive local draft and finish reload',async()=>{
  await repo.finish(plot.id,saved.revision,{...draft,builderMode:'sculpt',sculpt});
  const reloaded=(await new LocalLandRepository(storage,initial).list()).plots[0];
  assert.deepEqual(reloaded.draft?.sculpt,sculpt);assert.deepEqual(reloaded.finished?.sculpt,sculpt);
+});
+test('large plots accept wider solids while small plots keep their build envelope',()=>{
+ const solid={...rect('large',0,0,22,16),startFloor:0,spanFloors:1};
+ const recipe:SculptRecipe={version:4,plotSize:48,volumes:[solid],attachments:[]};
+ assert.equal(validateSculpt(recipe,1),null);
+ assert.match(validateSculpt({...recipe,plotSize:24},1)??'',/inside the plot/);
+});
+
+test('exposed wall and roof geometry retains per-volume material ownership',()=>{
+ const recipe:SculptRecipe={version:4,volumes:[
+  {...rect('main',-2,0,10,10),startFloor:0,spanFloors:1,wallTexture:'brick',roofTexture:'terracotta'},
+  {...rect('wing',3,0,8,8),startFloor:0,spanFloors:1,wallTexture:'timber',roofTexture:'metal'},
+ ],attachments:[]};
+ const resolved=resolveSculpt(recipe,{...design,crown:'none',middleFloors:0,floors:1});
+ assert.ok((resolved.volumeVertices?.main.wall.length??0)>0);
+ assert.ok((resolved.volumeVertices?.wing.wall.length??0)>0);
+ assert.ok((resolved.volumeVertices?.main.roof.length??0)>0);
+ assert.ok((resolved.volumeVertices?.wing.roof.length??0)>0);
+});
+test('whole-volume tile roles and styles affect only their exposed walls',()=>{
+ const d={...design,crown:'none' as const,middleFloors:0,floors:1,synarcKit:DEFAULT_SYNARC_KIT};
+ const recipe:SculptRecipe={version:4,volumes:[
+  {...rect('solid',-4,0,5,6),startFloor:0,spanFloors:1,kitRole:'solid',kitStyle:'painted-townhouse'},
+  {...rect('glazed',4,0,5,6),startFloor:0,spanFloors:1,kitRole:'windows',kitStyle:'modern-office',kitWindow:'window-paired'},
+ ],attachments:[]};
+ assert.equal(validateSculpt(recipe,1),null);
+ const parts=resolveSculpt(recipe,d).kit!.placements.filter(isKitWallBay);
+ const left=parts.filter(p=>p.x<0),right=parts.filter(p=>p.x>0);
+ assert.ok(left.some(p=>p.part==='painted-townhouse/wall-full'));
+ assert.ok(left.every(p=>p.part.startsWith('painted-townhouse/')&&!p.part.includes('/window-')));
+ assert.ok(right.length>0&&right.every(p=>p.part==='modern-office/window-paired'));
+ const chosen=right[0],paint={id:'one-solid-bay',part:'wall-full' as const,floor:chosen.floor,x:chosen.x,z:chosen.z,nx:Math.sin(chosen.rotation),nz:Math.cos(chosen.rotation)};
+ const overridden=resolveSculpt(recipe,{...d,synarcKit:{...DEFAULT_SYNARC_KIT,paints:[paint]}}).kit!.placements.filter(isKitWallBay);
+ assert.equal(overridden.find(p=>p.x===chosen.x&&p.z===chosen.z)?.part,'modern-office/wall-full');
+ assert.ok(overridden.some(p=>p.x>0&&p.part==='modern-office/window-paired'));
+ assert.equal(validateSculpt({...recipe,volumes:[{...recipe.volumes[0],kitRole:'invalid' as never},recipe.volumes[1]]},1)?.length!>0,true);
+});
+test('curved wall geometry retains its own material ownership when flat kit bays are present',()=>{
+ const d={...design,crown:'none' as const,middleFloors:0,floors:1,synarcKit:DEFAULT_SYNARC_KIT};
+ const recipe:SculptRecipe={version:4,volumes:[
+  {...rect('main',-2,0,10,10),startFloor:0,spanFloors:1},
+  {...rect('round',3,0,8,8),kind:'ellipse',startFloor:0,spanFloors:1,wallTexture:'brick'},
+ ],attachments:[]};
+ assert.equal(validateSculpt(recipe,1),null);
+ const resolved=resolveSculpt(recipe,d);
+ assert.ok(resolved.kit);
+ assert.ok((resolved.curvedVolumeWalls?.round.length??0)>0);
+ assert.ok((resolved.volumeVertices?.round.wall.length??0)>0);
+});
+test('one cylinder can switch its curved facade pattern without changing its footprint',()=>{
+ const d={...design,crown:'none' as const,middleFloors:0,floors:1};
+ const base={...rect('round',0,0,10,10),kind:'ellipse' as const,startFloor:0,spanFloors:1};
+ const recipe:SculptRecipe={version:4,volumes:[base],attachments:[]};
+ const solid:SculptRecipe={...recipe,volumes:[{...base,curvedFacade:'solid'}]};
+ const glazed:SculptRecipe={...recipe,volumes:[{...base,curvedFacade:'glazing'}]};
+ assert.equal(validateSculpt(solid,1),null);
+ assert.equal(validateSculpt(glazed,1),null);
+ assert.deepEqual(sculptFootprint(effectiveSculptShapes(solid,0)),sculptFootprint(effectiveSculptShapes(glazed,0)));
+ const solidGlass=resolveSculpt(solid,d).vertices.glass.length,glazedGlass=resolveSculpt(glazed,d).vertices.glass.length;
+ assert.equal(solidGlass,0);
+ assert.ok(glazedGlass>solidGlass);
+});
+test('curved sculpt walls receive fitted kit windows without procedural window overlap',()=>{
+ const d={...design,crown:'none' as const,middleFloors:0,floors:1,synarcKit:DEFAULT_SYNARC_KIT};
+ const recipe:SculptRecipe={version:4,volumes:[{...rect('round',0,0,10,10),kind:'ellipse',startFloor:0,spanFloors:1,curvedFacade:'windows',kitStyle:'modern-office',kitWindow:'window-paired'}],attachments:[]};
+ const resolved=resolveSculpt(recipe,d),bays=resolved.kit!.placements.filter(isKitWallBay);
+ assert.ok(bays.length>=8,'the cylinder must have selectable fitted tile bays');
+ assert.ok(bays.some(p=>p.part==='modern-office/window-paired'));
+ assert.ok(bays.every(p=>p.scaleX>=.55&&p.scaleX<=1.45));
+ assert.equal(resolved.curvedVertices?.glass.length,0,'old curved glass must not overlap kit tiles');
+ assert.ok((resolved.curvedVertices?.wall.length??0)>0,'an inset backing closes angular seams');
+ const paint={id:'round-window',part:'window-detailed' as const,floor:0,x:bays[0].x,z:bays[0].z,nx:Math.sin(bays[0].rotation),nz:Math.cos(bays[0].rotation)};
+ const withPaint:SculptRecipe={...recipe,tileAnchors:[{id:paint.id,volumeId:'round',side:'curve',u:((Math.atan2(paint.z/5,paint.x/5)+Math.PI*2)%(Math.PI*2))/(Math.PI*2),floor:0,part:paint.part}]};
+ assert.equal(validateSculpt(withPaint,1),null);
+ const moved:SculptRecipe={...withPaint,volumes:[{...recipe.volumes[0],x:1}]};
+ const projected=reprojectSculptTiles(moved,{...DEFAULT_SYNARC_KIT,paints:[paint]},d)!;
+ assert.ok(Math.abs(projected.paints[0].x-(paint.x+1))<.6,'paint follows the curved volume');
+});
+test('facade tile anchors follow a moved volume and remain authored when hidden',()=>{
+ const d={...design,crown:'none',middleFloors:0,floors:1};
+ const base={...rect('main',0,0,12,12),startFloor:0,spanFloors:1};
+ const recipe:SculptRecipe={version:4,volumes:[base],attachments:[]};
+ const walls=sculptWalls(recipe,d).map(w=>({x:(w.a[0]+w.b[0])/2,z:(w.a[1]+w.b[1])/2,nx:w.nx,nz:w.nz,length:w.length,y:w.bottom,height:w.top-w.bottom,floor:w.floor}));
+ const bay=assembleSynarcKit(walls,DEFAULT_SYNARC_KIT).placements.filter(isKitWallBay).find(p=>p.floor===0&&p.z>5&&p.x<0)!;
+ assert.ok(bay);
+ const paint={id:'anchored-window',part:'window-detailed' as const,floor:0,x:bay.x,z:bay.z,nx:Math.sin(bay.rotation),nz:Math.cos(bay.rotation)};
+ const authored:SculptRecipe={...recipe,tileAnchors:[{id:paint.id,volumeId:'main',side:'north',u:(bay.x+6)/12,floor:0,part:paint.part}]};
+ const moved:SculptRecipe={...authored,volumes:[{...base,x:1}]};
+ const projected=reprojectSculptTiles(moved,{...DEFAULT_SYNARC_KIT,paints:[paint]},d)!;
+ assert.ok(Math.abs(projected.paints[0].x-(bay.x+1))<.6);
+ assert.equal(authored.version===4&&authored.tileAnchors?.[0].id,paint.id);
 });
 test('entrance brush snaps to a real bay and dependent details retain intent through shape edits',()=>{
  const base:SculptRecipe={version:1,levels:[{floor:0,shapes:[rect('main',0,0,12,12)]}]};
