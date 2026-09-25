@@ -1,6 +1,6 @@
 # City construction studio (local preview)
 
-The opt-in studio is available at `/city?demo=1&cityStudio=1`. Buy a local test plot or reopen an owned plot while exploring. `cityStudio=0` retains the original editor. This flag remains off by default while the release gates below are open. No public business-profile schema, backend, payment provider or deployment was changed.
+The construction studio is the default builder for local demo plots at `/city?demo=1`; `/city?demo=1&cityStudio=1` selects it explicitly. Buy a local test plot or reopen an owned plot while exploring. `cityStudio=0` retains the original editor for comparison. Outside the local demo, the studio still requires the explicit flag while the release gates below are open. No public business-profile schema, backend, payment provider or deployment was changed.
 
 ## Player controls
 

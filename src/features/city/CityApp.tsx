@@ -732,7 +732,7 @@ export function CityApp() {
                 Retry
               </button>
               {!snapshot && (
-                <a href="/city?demo=1">Explore the demonstration</a>
+                <a href="/city?demo=1&cityStudio=1">Explore the demonstration</a>
               )}
             </div>
           )}

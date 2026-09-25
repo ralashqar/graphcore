@@ -35,4 +35,8 @@ export type StudioInteriorBlock=StudioBox&{floor:number;kind:'wall'|'frame'|'gua
 export type StudioRoom={id:string;x:number;z:number;area:number;polygon:[number,number][][];boundaryIds:string[];floorFinish:'timber'|'tile'|'stone';wallColor:string;openToBelow:boolean};
 export type StudioInteriorLevel={floor:number;slab:number[];underside:number[];blocks:StudioInteriorBlock[];rooms:StudioRoom[];roomSurfaces:{id:string;finish:StudioRoom['floorFinish'];vertices:number[]}[];furniture:StudioFurniture[]};
 export type StudioResolved = {roofFaces?:StudioRoofFace[];roofEdges?:StudioRoofEdge[];roofPatches?:StudioRoofPatch[];bays: StudioBay[]; pieces: StudioPiece[]; blockers: StudioBox[]; decks: StudioDeck[]; inactive: {id: string; reason: string}[]; accessRoutes?:{id:string;exit:StudioAnchor;layout:'straight'|'switchback';kind:'door'|'balcony'|'terrace'}[]; interiorLevels?:StudioInteriorLevel[];portals?:StudioPortal[];roof: number[]; roofNotes: string[]};
-export const studioEnabled = () => typeof window !== 'undefined' && ['1'].includes(new URLSearchParams(window.location.search).get('cityStudio')??'');
+export const studioEnabled = () => {
+ if(typeof window === 'undefined')return false;
+ const params=new URLSearchParams(window.location.search);
+ return params.get('cityStudio')==='1'||params.get('demo')==='1'&&params.get('cityStudio')!=='0';
+};
