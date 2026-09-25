@@ -21,7 +21,7 @@ try{
  const read=()=>page.evaluate(()=>{const key=Object.keys(localStorage).find(item=>item.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft;});
  const waitPaint=async count=>page.waitForFunction(expected=>{const key=Object.keys(localStorage).find(item=>item.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt.studio.surfaces.length===expected;},count,{timeout:30000});
  await open();
- await page.getByRole('button',{name:'Facade',exact:true}).click();
+ await page.getByRole('button',{name:'Paint',exact:true}).click();
  await page.getByRole('button',{name:'Brick',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Brick',exact:true}).getAttribute('aria-pressed'),'true');
  await page.getByRole('button',{name:'Front view'}).click();
@@ -54,7 +54,7 @@ try{
  await page.screenshot({path:'output/playwright/city-studio-paint.png'});
  await open();
  assert.equal((await read()).sculpt.studio.surfaces.length,6,'paint survives save and reload');
- await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Facade',exact:true}).click();
+ await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Paint',exact:true}).click();
  const mobile=await page.locator('.studio-dock').boundingBox();assert.ok(mobile&&mobile.x>=0&&mobile.x+mobile.width<=390,'mobile palette stays on screen');
  await page.screenshot({path:'output/playwright/city-studio-paint-mobile.png'});
  assert.deepEqual(errors,[]);

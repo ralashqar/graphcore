@@ -4,6 +4,10 @@
 
 The business Variations tab and construction Variation tool share deterministic weighted tile pools, scoped overrides, layer locks, dimension controls and protected manual edits. Seventeen multi-bay storefront stamps compose the existing Blender v5 catalog. Opt-in `city-variation-5` business recipes carry bounded modular intent; older revisions retain their paths. City rendering instances modules and roofs with aperture-preserving distant detail. The five City profile endpoints and world worker `2026-09-25-city-variation-1` require paired designated-staging rollout; none has been deployed. No migration or provider request. Verification and limitations: [docs/city-building-variations.md](docs/city-building-variations.md).
 
+## City studio game UX (September 2026)
+
+A phased revamp turns the construction studio into a Tiny Glade/Sims-style building game without changing recipes or workers. Phase 1 adds intention-sized labelled undo (continuous inputs coalesce, 100-step cap, undo/redo toasts), workspace-aware Delete/duplicate routing (furnishing never deletes a building part), eased camera glides, a Select hover glow and interior floor grids. Later phases add a flat tool belt, floor rail, direct-manipulation handles, CC0 audio/juice, wall-snapping furniture, a Style sheet and guided onboarding; building remains a no-cost sandbox. No schema, backend or provider change. Plan and status: [docs/city-studio-game-ux.md](docs/city-studio-game-ux.md).
+
 ## Playful City driving (September 2026)
 
 The City uses a locally bundled CC0 Kenney hatchback, wheel/body animation, fixed-step arcade handling and render-independent spatial-hash plot collision. Pavements are driveable; plots and central structures remain protected. The same collision queries support camera obstruction and recovery. No schema, backend or provider change. Native and WebGL2 fallback controls are tested; 72-property frame time remained ~33.5 ms p95 with ~0.2 ms simulation/camera work. The 400-property baseline and physical-mobile acceptance remain outstanding. Details: [docs/city-playful-driving.md](docs/city-playful-driving.md).
