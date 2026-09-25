@@ -1,0 +1,15 @@
+import {readFileSync,writeFileSync,mkdirSync,cpSync} from 'node:fs';
+const base=new URL('../public/city/synarc-kit/',import.meta.url),out=new URL('v5/',base);
+mkdirSync(out,{recursive:true});
+const old=JSON.parse(readFileSync(new URL('v4/catalogue.json',base))),parts=[];
+function add(id,label,category,size,opening=null){const [w,h]=size;parts.push({id,label,category,size,opening,front:'+Z',origin:'bottom-centre',stretch:opening?[]:['x'],channels:['wall','trim','frame','door','glass'],connectors:{left:[-w/2,0,0],right:[w/2,0,0],top:[0,h,0],bottom:[0,0,0]},clearance:{size},collision:opening?'opening':'solid',minDetail:'medium'});}
+for(const [id,label,width,bottom,top] of [
+ ['cottage','Cottage shutters',1.05,.75,2.5],['craftsman','Craftsman divided lights',1.4,.65,2.5],['bay','Projecting bay window',1.5,.6,2.5],['villa','Villa French window',1.3,.35,2.6],['modern','Modern picture window',1.7,.45,2.65],['townhouse','Townhouse sash and lintel',1.15,.6,2.6],
+ ['cafe','Café fanlight display',1.65,.3,2.65],['bistro','Bistro glazed panels',1.6,.25,2.6],['boutique','Boutique display',1.7,.25,2.7],['arcade','Stone arcade window',1.5,.3,2.7],['civic','Civic divided window',1.35,.55,2.65],['museum','Museum tall window',1.5,.4,2.75],['curtain','Curtain wall cassette',1.8,.12,2.85],['deco','Art Deco vertical window',1.15,.4,2.7],['hotel','Hotel paired lights',1.65,.65,2.55],['bridge','Skybridge glazing',1.8,.15,2.8]
+])add('window-collection-'+id,label,'window',[2,3,id==='bay'?.9:.5],{width,bottom,top});
+for(const [id,label,width] of [['cottage','Cottage panel entrance',1.1],['craftsman','Craftsman glazed entry',1.3],['villa','Villa French entrance',1.5],['cafe','Café glazed entrance',1.5],['bank','Bank bronze double entry',1.6],['museum','Museum double entrance',1.7]])add('door-collection-'+id,label,'door',[2,3,.5],{width,bottom:0,top:2.65});
+for(const [id,label,size] of [['timber-eave','Carved timber eave',[2,.35,.65]],['civic-cornice','Civic dentil cornice',[2,.5,.65]],['deco-band','Art Deco stepped band',[2,.4,.5]],['modern-band','Metal floor edge',[2,.18,.4]],['cafe-canopy','Bistro striped canopy',[2,.55,1.3]],['shop-sign','Framed shop fascia',[2,.4,.25]],['civic-pilaster','Fluted stone pilaster',[.35,3,.45]],['deco-pilaster','Art Deco facade fin',[.25,3,.6]],['timber-panel','Timber spandrel',[2,.5,.25]],['stone-panel','Carved civic spandrel',[2,.55,.25]]])add('collection-'+id,label,'trim',size);
+for(const [id,label,size] of [['lantern','Glazed roof lantern',[2,1.2,2]],['hvac','Screened rooftop plant',[2,1.2,1.5]],['skylight','Pitched skylight',[2,.7,2]],['solar','Solar roof array',[2,.65,1.6]]]){add('collection-'+id,label,'roof',size);parts.at(-1).stretch=[];}
+writeFileSync(new URL('catalogue.json',out),JSON.stringify({version:5,id:'synarc-kit-5',families:old.families,parts:[...old.parts,...parts]},null,2)+'\n');
+cpSync(new URL('v4/thumbnails/',base),new URL('thumbnails/',out),{recursive:true});
+console.log(`${parts.length} new modules; ${old.parts.length+parts.length} total`);

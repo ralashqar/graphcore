@@ -1,19 +1,23 @@
 import type {StudioRecipe, StudioResolved} from './cityStudioTypes.ts';
 import {resolveStudio, validateStudio} from './cityStudio.ts';
+import {expandBuildingVariation} from './cityBuildingVariation.ts';
 import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon} from 'polygon-clipping';
+// @deno-types="npm:@types/three@0.186.0"
 import {ShapeUtils,Vector2} from 'three';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import {assembleSynarcKit,isKitWallBay,SYNARC_KIT_DOORS,SYNARC_KIT_PAINTS,SYNARC_KIT_STYLES,SYNARC_KIT_WINDOWS,type KitAssembly,type KitWall,type SynarcKitChoice,type SynarcKitDoor,type SynarcKitPaintId,type SynarcKitStyle,type SynarcKitWindow} from './citySynarcKit.ts';
 import {TEXTURE_IDS,type CityTextureId} from './cityTexturePresets.ts';
 
-export type SculptPrimitive={id:string;kind:'rectangle'|'ellipse';operation:'add'|'subtract';x:number;z:number;width:number;depth:number};
+export type SculptWallSide='north'|'south'|'east'|'west'|'curve'|`edge:${string}`;
+export const validSculptSide=(side:unknown):side is SculptWallSide=>typeof side==='string'&&(['north','south','east','west','curve'].includes(side)||/^edge:[a-zA-Z0-9_-]{1,64}$/.test(side));
+export type SculptPrimitive={id:string;kind:'rectangle'|'ellipse'|'polygon';operation:'add'|'subtract';x:number;z:number;width:number;depth:number;vertices?:[number,number][];edgeIds?:SculptWallSide[]};
 export type SculptVolume=SculptPrimitive&{startFloor:number;spanFloors:number;wallTexture?:CityTextureId;roofTexture?:CityTextureId;curvedFacade?:'solid'|'windows'|'glazing';kitRole?:'mixed'|'solid'|'windows'|'glazing';kitStyle?:SynarcKitStyle;kitWindow?:SynarcKitWindow;kitDoor?:SynarcKitDoor};
-export type SculptTileAnchor={id:string;volumeId:string;side:'north'|'south'|'east'|'west'|'curve';u:number;floor:number;part:SynarcKitPaintId};
+export type SculptTileAnchor={id:string;volumeId:string;side:SculptWallSide;u:number;floor:number;part:SynarcKitPaintId};
 export type SculptLevel={floor:number;shapes:SculptPrimitive[]};
 /** Only detached floors are stored. Other floors inherit the nearest lower authored level. */
 export type SculptBrushKind='door'|'canopy'|'pillars'|'trim'|'planter'|'bollard';
-export type SculptWallAnchor={shapeId:string;side:'north'|'south'|'east'|'west'|'curve';u:number};
+export type SculptWallAnchor={shapeId:string;side:SculptWallSide;u:number};
 export type SculptAttachment={id:string;kind:SculptBrushKind;floor:number;x:number;z:number;nx:number;nz:number;span:number;style:'simple'|'stone'|'metal';anchor?:SculptWallAnchor;spanMode?:'fixed'|'full-wall'};
 export type SculptRecipe=StudioRecipe|{version:1;levels:SculptLevel[]}|{version:2;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:3;levels:SculptLevel[];attachments:SculptAttachment[]}|{version:4;volumes:SculptVolume[];attachments:SculptAttachment[];plotSize?:24|48;tileAnchors?:SculptTileAnchor[]};
 export type SculptLoop=[number,number][];
@@ -73,8 +77,8 @@ export function upgradeSculptVolumes(recipe:SculptRecipe,floors:number):Extract<
 export function volumeSculptFromPreset(d:CityBuildingDesignV3):Extract<SculptRecipe,{version:4|5|6}>|null{
  const legacy=sculptFromPreset(d);return legacy?upgradeSculptVolumes(legacy,d.floors):null;
 }
-export const sculptFloorBottom=(floor:number,groundHeight:number)=>.65+(floor?groundHeight+(floor-1)*3:0);
-export const sculptFloorTop=(floor:number,groundHeight:number)=>sculptFloorBottom(floor,groundHeight)+(floor?3:groundHeight);
+export const sculptFloorBottom=(floor:number,groundHeight:number,upperHeight=3)=>.65+(floor?groundHeight+(floor-1)*upperHeight:0);
+export const sculptFloorTop=(floor:number,groundHeight:number,upperHeight=3)=>sculptFloorBottom(floor,groundHeight,upperHeight)+(floor?upperHeight:groundHeight);
 const area=(loop:SculptLoop)=>loop.reduce((sum,p,i)=>{const q=loop[(i+1)%loop.length];return sum+p[0]*q[1]-q[0]*p[1];},0)/2;
 const clean=(loop:SculptLoop):SculptLoop=>{
  const out=loop.slice();if(out.length>1&&Math.hypot(out[0][0]-out.at(-1)![0],out[0][1]-out.at(-1)![1])<.001)out.pop();
@@ -83,8 +87,10 @@ const clean=(loop:SculptLoop):SculptLoop=>{
 /** Canonical wall boundary: preserve the bay-sized facets and their angular phase. */
 export function sculptPrimitiveBoundary(shape:SculptPrimitive):SculptLoop{
  const {x,z,width,depth}=shape;
- return shape.kind==='rectangle'?[[x-width/2,z-depth/2],[x+width/2,z-depth/2],[x+width/2,z+depth/2],[x-width/2,z+depth/2]]:ellipseRing(x,z,width,depth);
+ return shape.kind==='rectangle'?[[x-width/2,z-depth/2],[x+width/2,z-depth/2],[x+width/2,z+depth/2],[x-width/2,z+depth/2]]:shape.kind==='polygon'?(shape.vertices??[]).map(p=>[x+p[0],z+p[1]]):ellipseRing(x,z,width,depth);
 }
+export function sculptSourceEdge(shape:SculptPrimitive,side:SculptWallSide){if(shape.kind!=='polygon'||!shape.edgeIds||!shape.vertices)return null;const index=shape.edgeIds.indexOf(side);if(index<0)return null;const reverse=side==='north'||side==='west',a=shape.vertices[reverse?(index+1)%shape.vertices.length:index],b=shape.vertices[reverse?index:(index+1)%shape.vertices.length];return {a:[shape.x+a[0],shape.z+a[1]] as [number,number],b:[shape.x+b[0],shape.z+b[1]] as [number,number]};}
+export function sculptSideLength(shape:SculptPrimitive,side:SculptWallSide){if(shape.kind==='polygon'){const edge=sculptSourceEdge(shape,side);return edge?Math.hypot(edge.b[0]-edge.a[0],edge.b[1]-edge.a[1]):0;}return side==='curve'?Math.PI*(shape.width+shape.depth)/2:side==='north'||side==='south'?shape.width:shape.depth;}
 function primitivePolygon(shape:SculptPrimitive):MultiPolygon{
  const ring=sculptPrimitiveBoundary(shape);
  return [[ring.map(p=>[...p] as [number,number]).concat([[...ring[0]] as [number,number]])]];
@@ -121,6 +127,7 @@ function wallSource(shapes:SculptPrimitive[],a:[number,number],b:[number,number]
  const x=(a[0]+b[0])/2,z=(a[1]+b[1])/2;
  for(const shape of shapes){
   if(shape.operation==='subtract'&&!includeCuts)continue;
+  if(shape.kind==='polygon'){const loop=sculptPrimitiveBoundary(shape);for(let i=0;i<loop.length;i++){const q=loop[i],r=loop[(i+1)%loop.length],dx=r[0]-q[0],dz=r[1]-q[1],length=Math.hypot(dx,dz),t=((x-q[0])*dx+(z-q[1])*dz)/(length*length||1),distance=Math.abs((x-q[0])*dz-(z-q[1])*dx)/(length||1),facing=(dz/length)*nx-(dx/length)*nz;if(distance<.03&&t>=-.01&&t<=1.01&&facing*(shape.operation==='add'?1:-1)>.8){const side=shape.edgeIds?.[i]??`edge:${i}`;return {shapeId:shape.id,side,u:Math.max(0,Math.min(1,side==='north'||side==='west'?1-t:t))};}}continue;}
   if(shape.kind==='ellipse'){
    const rx=(x-shape.x)/(shape.width/2),rz=(z-shape.z)/(shape.depth/2);
    const facing=nx*rx/(shape.width/2)+nz*rz/(shape.depth/2);
@@ -139,14 +146,15 @@ function wallSource(shapes:SculptPrimitive[],a:[number,number],b:[number,number]
 function sourcePoint(anchor:SculptWallAnchor,shapes:SculptPrimitive[]):{x:number;z:number}|null{
  const shape=shapes.find(s=>s.id===anchor.shapeId);if(!shape)return null;
  const u=Math.max(0,Math.min(1,anchor.u));
+ if(shape.kind==='polygon'){const edge=sculptSourceEdge(shape,anchor.side);return edge?{x:edge.a[0]+(edge.b[0]-edge.a[0])*u,z:edge.a[1]+(edge.b[1]-edge.a[1])*u}:null;}
  if(anchor.side==='curve'){const angle=u*Math.PI*2;return {x:shape.x+Math.cos(angle)*shape.width/2,z:shape.z+Math.sin(angle)*shape.depth/2};}
  if(shape.kind!=='rectangle')return null;
  return anchor.side==='north'?{x:shape.x+(u-.5)*shape.width,z:shape.z+shape.depth/2}:anchor.side==='south'?{x:shape.x+(u-.5)*shape.width,z:shape.z-shape.depth/2}:anchor.side==='east'?{x:shape.x+shape.width/2,z:shape.z+(u-.5)*shape.depth}:{x:shape.x-shape.width/2,z:shape.z+(u-.5)*shape.depth};
 }
-export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):SculptWall[]{
+export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):SculptWall[]{
  const walls:SculptWall[]=[];let bottom=.65;
  for(let floor=0;floor<d.floors;floor++){
-  const top=bottom+(floor?3:d.groundHeight);
+  const top=bottom+(floor?(d.upperHeight??3):d.groundHeight);
   const shapes=effectiveSculptShapes(recipe,floor);
   for(const polygon of sculptFootprint(effectiveSculptShapes(recipe,floor)))for(const [ringIndex,ring] of polygon.entries())for(let i=0;i<ring.length;i++){
    const a=ring[i],b=ring[(i+1)%ring.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
@@ -158,7 +166,7 @@ export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'flo
  return walls;
 }
 /** Volume-owned defaults are resolved on exposed walls, not painted into every bay. */
-export function sculptKitWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):KitWall[]{
+export function sculptKitWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):KitWall[]{
  const volumes=(recipe.version===4||recipe.version===5||recipe.version===6)?new Map(recipe.volumes.map(v=>[v.id,v])):null;
  return sculptWalls(recipe,d).map(w=>{
   const owner=w.source&&volumes?.get(w.source.shapeId);
@@ -168,7 +176,7 @@ export function sculptKitWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'
    curved:w.source?.side==='curve'};
  }).filter(w=>!w.curved||w.length>=1.1);
 }
-export function reprojectSculptTiles(recipe:SculptRecipe,kit:SynarcKitChoice|undefined,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):SynarcKitChoice|undefined{
+export function reprojectSculptTiles(recipe:SculptRecipe,kit:SynarcKitChoice|undefined,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):SynarcKitChoice|undefined{
  if((recipe.version!==4&&recipe.version!==5)||!kit||!recipe.tileAnchors?.length)return kit;
  const walls=sculptWalls(recipe,d);
  const placements=assembleSynarcKit(sculptKitWalls(recipe,d),kit).placements.filter(isKitWallBay);
@@ -192,6 +200,7 @@ function wallAnchor(wall:SculptWall,x:number,z:number,shapes:SculptPrimitive[]):
  const dx=wall.b[0]-wall.a[0],dz=wall.b[1]-wall.a[1],t=Math.max(0,Math.min(1,((x-wall.a[0])*dx+(z-wall.a[1])*dz)/(wall.length**2))),p=wallPoint(wall,t);
  const source=wall.source,shape=shapes.find(s=>s.id===source.shapeId);if(!shape)return undefined;
  if(source.side==='curve')return {...source,u:((Math.atan2((p.z-shape.z)/(shape.depth/2),(p.x-shape.x)/(shape.width/2))+Math.PI*2)%(Math.PI*2))/(Math.PI*2)};
+ if(shape.kind==='polygon'){const edge=sculptSourceEdge(shape,source.side);if(!edge)return undefined;const dx=edge.b[0]-edge.a[0],dz=edge.b[1]-edge.a[1];return {...source,u:Math.max(0,Math.min(1,((p.x-edge.a[0])*dx+(p.z-edge.a[1])*dz)/(dx*dx+dz*dz||1)))};}
  return {...source,u:Math.max(0,Math.min(1,source.side==='north'||source.side==='south'?(p.x-(shape.x-shape.width/2))/shape.width:(p.z-(shape.z-shape.depth/2))/shape.depth))};
 }
 function nearestWall(walls:SculptWall[],a:Pick<SculptAttachment,'x'|'z'|'nx'|'nz'|'floor'>){
@@ -214,7 +223,7 @@ function attachedWall(recipe:SculptRecipe,walls:SculptWall[],a:SculptAttachment)
  return best&&best.distance<.45?best:null;
 }
 /** An explicit edit opts older authored intent into stable, source-face relationships. */
-export function upgradeSculpt(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):Extract<SculptRecipe,{version:3}>{
+export function upgradeSculpt(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):Extract<SculptRecipe,{version:3}>{
  if(recipe.version===3)return recipe;
  if((recipe.version===4||recipe.version===5||recipe.version===6))throw new Error('Volume recipes already use stable solid intent.');
  const walls=sculptWalls(recipe,d);
@@ -229,7 +238,7 @@ function insidePolygon(x:number,z:number,polygon:SculptPolygon){
  return inside(polygon[0])&&!polygon.slice(1).some(inside);
 }
 /** Authored positions survive shape edits; an invalid intent stays saved and becomes active again when it fits. */
-export function resolveSculptDecorations(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>):SculptDecoration[]{
+export function resolveSculptDecorations(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):SculptDecoration[]{
  const walls=sculptWalls(recipe,d),attachments=attachmentsOf(recipe),ground=sculptFootprint(effectiveSculptShapes(recipe,0));
  const decorations:SculptDecoration[]=[];
  const defaultDoor=walls.filter(w=>w.floor===0&&w.ring===0&&(w.a[1]+w.b[1])/2>1&&w.length>=1.8).sort((a,b)=>(b.a[1]+b.b[1])-(a.a[1]+a.b[1]))[0];
@@ -267,7 +276,7 @@ export function resolveSculptDecorations(recipe:SculptRecipe,d:Pick<CityBuilding
  }
  return decorations;
 }
-export function addSculptAttachment(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'>,attachment:SculptAttachment):{recipe:SculptRecipe;reason:string|null}{
+export function addSculptAttachment(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>,attachment:SculptAttachment):{recipe:SculptRecipe;reason:string|null}{
  if(attachment.kind==='canopy'||attachment.kind==='pillars'){
   const entrance=resolveSculptDecorations(recipe,d).find(a=>a.kind==='door'&&a.active);
   const wall=sculptWalls(recipe,d).filter(w=>w.floor===0&&w.ring===0&&w.nz>.5).sort((a,b)=>(b.a[1]+b.b[1])-(a.a[1]+a.b[1]))[0];
@@ -287,15 +296,36 @@ export function addSculptAttachment(recipe:SculptRecipe,d:Pick<CityBuildingDesig
  return {recipe,reason:result?.reason||'This placement does not fit.'};
 }
 export function sculptBuildLimit(plotSize:24|48=24){return (plotSize/2-1.5)/(plotSize/24);}
+export function validSculptPolygon(v:SculptPrimitive){
+ if(v.kind!=='polygon')return true;
+ const points=v.vertices,ids=v.edgeIds;
+ if(v.operation!=='add'||!Array.isArray(points)||!Array.isArray(ids)||points.length<3||points.length>12||ids.length!==points.length||new Set(ids).size!==ids.length||ids.some(id=>!validSculptSide(id))||points.some(p=>!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)))return false;
+ const xs=points.map(p=>p[0]),zs=points.map(p=>p[1]);
+ if(Math.abs(Math.min(...xs)+v.width/2)>.02||Math.abs(Math.max(...xs)-v.width/2)>.02||Math.abs(Math.min(...zs)+v.depth/2)>.02||Math.abs(Math.max(...zs)-v.depth/2)>.02)return false;
+ const signed=points.reduce((total,p,i)=>{const q=points[(i+1)%points.length];return total+p[0]*q[1]-q[0]*p[1];},0)/2;
+ if(signed<2)return false;
+ const cross=(a:[number,number],b:[number,number],c:[number,number])=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+ const on=(a:[number,number],b:[number,number],p:[number,number])=>p[0]>=Math.min(a[0],b[0])-.001&&p[0]<=Math.max(a[0],b[0])+.001&&p[1]>=Math.min(a[1],b[1])-.001&&p[1]<=Math.max(a[1],b[1])+.001;
+ for(let i=0;i<points.length;i++){
+  const a=points[i],b=points[(i+1)%points.length],c=points[(i+2)%points.length];
+  if(Math.hypot(b[0]-a[0],b[1]-a[1])<.5||Math.abs(cross(a,b,c))<.05)return false;
+  for(let j=i+2;j<points.length;j++){
+   if((j+1)%points.length===i)continue;
+   const d=points[j],e=points[(j+1)%points.length],abD=cross(a,b,d),abE=cross(a,b,e),deA=cross(d,e,a),deB=cross(d,e,b);
+   if(abD*abE<-.000001&&deA*deB<-.000001||Math.abs(abD)<.000001&&on(a,b,d)||Math.abs(abE)<.000001&&on(a,b,e)||Math.abs(deA)<.000001&&on(d,e,a)||Math.abs(deB)<.000001&&on(d,e,b))return false;
+  }
+ }
+ return true;
+}
 export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=(recipe.version===4||recipe.version===5||recipe.version===6)?recipe.plotSize??24:24):string|null{
  if(recipe.version===5||recipe.version===6){const error=validateStudio(recipe);if(error)return error;}
  const limit=sculptBuildLimit(plotSize);
  if((recipe.version===4||recipe.version===5||recipe.version===6)){
   if(!Array.isArray(recipe.volumes)||(recipe.version===4&&recipe.volumes.length<1)||recipe.volumes.length>32)return 'Use between one and 32 solid volumes.';
-  if(recipe.tileAnchors&&(!Array.isArray(recipe.tileAnchors)||recipe.tileAnchors.length>64||recipe.tileAnchors.some(a=>!a.id||!recipe.volumes.some(v=>v.id===a.volumeId)||!['north','south','east','west','curve'].includes(a.side)||!Number.isFinite(a.u)||a.u<0||a.u>1||!Number.isInteger(a.floor)||a.floor<0||a.floor>=8||!SYNARC_KIT_PAINTS.includes(a.part))))return 'A facade tile anchor is invalid.';
+  if(recipe.tileAnchors&&(!Array.isArray(recipe.tileAnchors)||recipe.tileAnchors.length>64||recipe.tileAnchors.some(a=>!a.id||!recipe.volumes.some(v=>v.id===a.volumeId)||!validSculptSide(a.side)||!Number.isFinite(a.u)||a.u<0||a.u>1||!Number.isInteger(a.floor)||a.floor<0||a.floor>=8||!SYNARC_KIT_PAINTS.includes(a.part))))return 'A facade tile anchor is invalid.';
   const ids=new Set<string>();
   for(const v of recipe.volumes){
-   if(!v.id||ids.has(v.id)||!['rectangle','ellipse'].includes(v.kind)||!['add','subtract'].includes(v.operation)||
+   if(!v.id||ids.has(v.id)||!['rectangle','ellipse','polygon'].includes(v.kind)||!['add','subtract'].includes(v.operation)||!validSculptPolygon(v)||
     ![v.x,v.z,v.width,v.depth].every(Number.isFinite)||v.width<2||v.depth<2||
     Math.abs(v.x)+v.width/2>limit||Math.abs(v.z)+v.depth/2>limit||
     (v.wallTexture!==undefined&&!TEXTURE_IDS.includes(v.wallTexture))||
@@ -311,7 +341,7 @@ export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=
   }
   if(recipe.volumes.length&&!recipe.volumes.some(v=>v.operation==='add'))return 'Add at least one solid volume.';
  }else if(![1,2,3].includes(recipe.version)||!Array.isArray(recipe.levels)||recipe.levels.length<1||recipe.levels.length>8||recipe.levels[0].floor!==0)return 'The floor stack is incomplete.';
- if(recipe.version!==1){if(!Array.isArray(recipe.attachments)||recipe.attachments.length>32)return 'Too many architectural attachments.';const ids=new Set<string>(),single=new Set<string>();for(const a of recipe.attachments){if(!a.id||ids.has(a.id)||!['door','canopy','pillars','trim','planter','bollard'].includes(a.kind)||!['simple','stone','metal'].includes(a.style)||!Number.isInteger(a.floor)||a.floor<0||a.floor>=floors||![a.x,a.z,a.nx,a.nz,a.span].every(Number.isFinite)||Math.abs(a.x)>11||Math.abs(a.z)>11||a.span<.5||a.span>(a.kind==='trim'?20:12)||(['door','canopy','pillars'].includes(a.kind)&&single.has(a.kind))||(a.anchor&&(!a.anchor.shapeId||!['north','south','east','west','curve'].includes(a.anchor.side)||!Number.isFinite(a.anchor.u)||a.anchor.u<0||a.anchor.u>1))||(a.spanMode&&!['fixed','full-wall'].includes(a.spanMode)))return 'An architectural attachment is invalid.';ids.add(a.id);if(['door','canopy','pillars'].includes(a.kind))single.add(a.kind);}}
+ if(recipe.version!==1){if(!Array.isArray(recipe.attachments)||recipe.attachments.length>32)return 'Too many architectural attachments.';const ids=new Set<string>(),single=new Set<string>();for(const a of recipe.attachments){if(!a.id||ids.has(a.id)||!['door','canopy','pillars','trim','planter','bollard'].includes(a.kind)||!['simple','stone','metal'].includes(a.style)||!Number.isInteger(a.floor)||a.floor<0||a.floor>=floors||![a.x,a.z,a.nx,a.nz,a.span].every(Number.isFinite)||Math.abs(a.x)>11||Math.abs(a.z)>11||a.span<.5||a.span>(a.kind==='trim'?20:12)||(['door','canopy','pillars'].includes(a.kind)&&single.has(a.kind))||(a.anchor&&(!a.anchor.shapeId||!validSculptSide(a.anchor.side)||!Number.isFinite(a.anchor.u)||a.anchor.u<0||a.anchor.u>1))||(a.spanMode&&!['fixed','full-wall'].includes(a.spanMode)))return 'An architectural attachment is invalid.';ids.add(a.id);if(['door','canopy','pillars'].includes(a.kind))single.add(a.kind);}}
  // Volumes are independent operands. A detached island, unsupported upper mass,
  // or subtractive cut that crosses several solids is valid sculpting intent.
  // Only the older floor-outline recipes enforce architectural connectivity.
@@ -348,7 +378,7 @@ export function buildSculptGraph(recipe:SculptRecipe,d:CityBuildingDesignV3):Scu
  for(const intent of attachmentsOf(recipe))nodes.push({id:`intent:${intent.id}`,stage:'intent',dependsOn:[]});
  let bottom=.65;
  for(let floor=0;floor<d.floors;floor++){
-  const top=bottom+(floor?3:d.groundHeight),polygons=sculptFootprint(effectiveSculptShapes(recipe,floor));
+  const top=bottom+(floor?(d.upperHeight??3):d.groundHeight),polygons=sculptFootprint(effectiveSculptShapes(recipe,floor));
   floors.push({floor,polygons,bottom,top});
   const outlineId=`outline:${floor}`;nodes.push({id:outlineId,stage:'outline',dependsOn:floor&&recipe.levels.every(l=>l.floor!==floor)?[`outline:${floor-1}`]:[]});
   polygons.forEach((polygon,p)=>polygon.forEach((ring,r)=>ring.forEach((a,i)=>{
@@ -403,8 +433,9 @@ function pitchedRoof(out:number[],shape:SculptPrimitive,base:number){
 export function resolveSculpt(recipe:SculptRecipe,d:CityBuildingDesignV3):SculptResolved{
  if(recipe.version===5||recipe.version===6){
   const error=validateSculpt(recipe,d.floors)||validateStudio(recipe);if(error)throw Error(error);
+  const generated=expandBuildingVariation(recipe,d);recipe=generated.recipe;
   const base:SculptResolved=recipe.volumes.length?resolveSculpt({...recipe,version:4},{...d,roof:'flat',synarcKit:undefined}):{floors:[],entrance:null,decorations:[],vertices:{wall:[],trim:[],roof:[],glass:[],door:[]},bounds:{minX:0,maxX:0,minZ:0,maxZ:0}};
-  const studio=resolveStudio(recipe,d,base),entry=studio.bays.find(b=>b.entrance);
+  const studio=resolveStudio(recipe,d,base,true),entry=studio.bays.find(b=>b.entrance);studio.inactive.push(...generated.diagnostics);
   return {...base,vertices:{...base.vertices,roof:studio.roof},volumeVertices:{},studio,kit:undefined,entrance:entry?{x:entry.x,z:entry.z,angle:entry.rotation}:null};
  }
  const error=validateSculpt(recipe,d.floors);if(error)throw new Error(error);
@@ -425,7 +456,7 @@ export function resolveSculpt(recipe:SculptRecipe,d:CityBuildingDesignV3):Sculpt
  const entryEdge=chosenDoor?groundEdges.find(edge=>{const t=((chosenDoor.x-edge.a[0])*edge.dx+(chosenDoor.z-edge.a[1])*edge.dz)/(edge.length*edge.length);return t>=0&&t<=1&&Math.hypot(edge.a[0]+edge.dx*t-chosenDoor.x,edge.a[1]+edge.dz*t-chosenDoor.z)<.15;})
   :groundEdges.filter(edge=>edge.z>1&&edge.length>=1.1).sort((a,b)=>b.z-a.z)[0];
  for(let f=0;f<d.floors;f++){
-  const activeShapes=effectiveSculptShapes(recipe,f),height=f?3:d.groundHeight,top=y+height,polygons=graph?.floors[f].polygons??sculptFootprint(activeShapes);floors.push({floor:f,polygons,bottom:y,top});
+  const activeShapes=effectiveSculptShapes(recipe,f),height=f?(d.upperHeight??3):d.groundHeight,top=y+height,polygons=graph?.floors[f].polygons??sculptFootprint(activeShapes);floors.push({floor:f,polygons,bottom:y,top});
   const pitched=(recipe.version===3||recipe.version===4)&&f===d.floors-1&&d.roof==='pitched'&&sculptPitchedRoofFits(recipe,f);
   if(pitched)pitchedRoof(vertices.roof,activeShapes[0],top-.03);
   if(recipe.version===4){

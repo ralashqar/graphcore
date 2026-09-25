@@ -1,5 +1,6 @@
 import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon} from 'polygon-clipping';
+// @deno-types="npm:@types/three@0.186.0"
 import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,type SculptPolygon,type SculptResolved} from './citySculpt.ts';
 import {STUDIO_FURNITURE} from './cityStudioFurniture.ts';
@@ -42,7 +43,7 @@ function roomRegions(polygons:SculptPolygon[],walls:{id:string;a:[number,number]
 
 type StairFit={void:MultiPolygon;decks:StudioDeck[];blocks:StudioInteriorBlock[];reason?:string};
 function fitStair(stair:StudioInteriorStair,base:SculptResolved,d:CityBuildingDesignV3,layout:'straight'|'switchback'):StairFit{
- const lower=base.floors[stair.floor]?.polygons??[],upper=base.floors[stair.floor+1]?.polygons??[],low=sculptFloorBottom(stair.floor,d.groundHeight)+.04,top=sculptFloorBottom(stair.floor+1,d.groundHeight)+.04,rise=top-low,run=layout==='straight'?rise*1.5:Math.max(2.3,rise*.8),sign=stair.flip?-1:1,r=stair.rotation;
+ const lower=base.floors[stair.floor]?.polygons??[],upper=base.floors[stair.floor+1]?.polygons??[],low=sculptFloorBottom(stair.floor,d.groundHeight,d.upperHeight)+.04,top=sculptFloorBottom(stair.floor+1,d.groundHeight,d.upperHeight)+.04,rise=top-low,run=layout==='straight'?rise*1.5:Math.max(2.3,rise*.8),sign=stair.flip?-1:1,r=stair.rotation;
  const blocks:StudioInteriorBlock[]=[],decks:StudioDeck[]=[],footprints:MultiPolygon[]=[];
  const lanes=layout==='straight'?[0]:[0,1.45*sign],flights=lanes.length;
  for(let f=0;f<flights;f++){
@@ -111,7 +112,7 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   const original=base.floors[floor]?.polygons??[];let geometry:MultiPolygon=original.reduce<MultiPolygon>((acc,p)=>acc.length?polygonClipping.union(acc,closed(p)):closed(p),[]);
   for(const room of levels[floor].rooms.filter(room=>room.openToBelow&&floor>0))if(geometry.length)geometry=polygonClipping.difference(geometry,closed(room.polygon));
   for(const cut of voids.get(floor)??[])if(geometry.length)geometry=polygonClipping.difference(geometry,cut);
-  const polygons=polygonsOf(geometry),y=sculptFloorBottom(floor,d.groundHeight)+.04;
+  const polygons=polygonsOf(geometry),y=sculptFloorBottom(floor,d.groundHeight,d.upperHeight)+.04;
   for(const [i,polygon] of polygons.entries()){
    triangulate(levels[floor].slab,polygon,y,true);triangulate(levels[floor].underside,polygon,y-.16,false);
    for(const ring of polygon)for(let k=0;k<ring.length;k++){const a=ring[k],b=ring[(k+1)%ring.length];levels[floor].slab.push(a[0],y,a[1],b[0],y,b[1],a[0],y-.16,a[1],b[0],y,b[1],b[0],y-.16,b[1],a[0],y-.16,a[1]);}
@@ -128,10 +129,10 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   const room=level.rooms.find(room=>interiorContains([room.polygon],item.x,item.z));if(!room||room.openToBelow){inactive.push({id:item.id,reason:'Place this furnishing inside a covered room.'});continue;}
   const corners=[[-.45,-.45],[.45,-.45],[-.45,.45],[.45,.45]] as const;
   if(corners.some(([u,v])=>{const p=shift(item.x,item.z,item.rotation,u*spec.width,v*spec.depth);return !interiorContains([room.polygon],p.x,p.z)||!decks.some(deck=>deck.id.startsWith(`interior/${item.floor}/`)&&studioDeckContains(deck,p.x,p.z));})){inactive.push({id:item.id,reason:'Needs clear floor space away from walls and openings.'});continue;}
-  const floorY=sculptFloorBottom(item.floor,d.groundHeight)+.04;
+  const floorY=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;
   const stairBlocked=decks.some(deck=>((deck.id.includes('/ramp')||deck.id.endsWith('/upper')||deck.id.startsWith('entry/'))&&Math.abs(deck.y-floorY)<.65&&(()=>{const dx=item.x-deck.x,dz=item.z-deck.z,c=Math.cos(deck.rotation),s=Math.sin(deck.rotation),u=dx*c-dz*s,v=dx*s+dz*c;return Math.abs(u)<(deck.width+spec.width)/2+.15&&Math.abs(v)<(deck.depth+spec.depth)/2+.15;})()));
   if(stairBlocked||portals.some(door=>door.floor===item.floor&&Math.hypot(door.x-item.x,door.z-item.z)<Math.max(spec.width,spec.depth)/2+1.1)||level.furniture.some(other=>{const s=STUDIO_FURNITURE[other.kind];return Math.hypot(other.x-item.x,other.z-item.z)<Math.max(spec.width,spec.depth,s.width,s.depth)/2+.2;})){inactive.push({id:item.id,reason:'Keep stairs, doorways and other furnishings clear.'});continue;}
-  level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight)+.04;blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
+  level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
  }
  return {...studio,portals,interiorLevels:levels,blockers,decks,inactive};
 }

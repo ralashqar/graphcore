@@ -36,7 +36,7 @@ export function CityVolumeSculptControls({land,plot,draft,orbitEnabled,viewTopDo
   }
   gl.domElement.dataset.citySculptHandles=JSON.stringify({selected:chosen.id,positions});
  });
- const planeY=activeFloor===0?.7:sculptFloorTop(activeFloor-1,draft.design.groundHeight)+.12;
+ const planeY=activeFloor===0?.7:sculptFloorTop(activeFloor-1,draft.design.groundHeight,draft.design.upperHeight)+.12;
  useEffect(()=>()=>{clearSculptPreview(plot.id);delete gl.domElement.dataset.citySculptHandles;},[plot.id,gl]);
  const localPoint=(clientX:number,clientY:number,y:number,grid=.25)=>{
   const rect=gl.domElement.getBoundingClientRect();mouse.current.set((clientX-rect.left)/rect.width*2-1,-(clientY-rect.top)/rect.height*2+1);
@@ -140,7 +140,7 @@ export function CityVolumeSculptControls({land,plot,draft,orbitEnabled,viewTopDo
  <group ref={root} position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>
   <gridHelper args={[limit*2,Math.round(limit*2),'#8aab9a','#8aab9a']} position={[0,.69,0]} raycast={()=>null}><lineBasicMaterial transparent opacity={.24} depthWrite={false}/></gridHelper>
   {tool!=='select'&&<mesh name="volume-drawing-plane" rotation={[-Math.PI/2,0,0]} position={[0,planeY,0]} onPointerDown={e=>{const p=localPoint(e.nativeEvent.clientX,e.nativeEvent.clientY,planeY);if(!p||Math.abs(p.x)>limit-1||Math.abs(p.z)>limit-1){setIssue('Start inside the buildable area.');return;}const startFloor=floorRef.current,v:SculptVolume={id:crypto.randomUUID(),kind:tool==='rectangle'?'rectangle':'ellipse',operation:'add',x:p.x,z:p.z,width:2,depth:2,startFloor,spanFloors:Math.min(spanRef.current,8-startFloor)};begin(e,'draw',v);}}><planeGeometry args={[limit*2,limit*2]}/><meshBasicMaterial transparent opacity={0} depthWrite={false}/></mesh>}
-  {visible.map(v=>{const bottom=v.startFloor===0?.65:sculptFloorTop(v.startFloor-1,draft.design.groundHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,draft.design.groundHeight),h=top-bottom,active=v.id===selected;
+  {visible.map(v=>{const bottom=v.startFloor===0?.65:sculptFloorTop(v.startFloor-1,draft.design.groundHeight,draft.design.upperHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,draft.design.groundHeight,draft.design.upperHeight),h=top-bottom,active=v.id===selected;
    return <group key={v.id}>
     <mesh name={`sculpt-volume-${v.id}`} position={[v.x,(bottom+top)/2,v.z]} scale={[v.width,h,v.depth]} onPointerDown={e=>{if(tool!=='select')return;const picked=selectedHandleAt(e.nativeEvent.clientX,e.nativeEvent.clientY);begin(e,'handle',picked&&chosen?chosen:v,picked??'move-free');}}>{v.kind==='ellipse'?<cylinderGeometry args={[.5,.5,1,32]}/>:<boxGeometry args={[1,1,1]}/>}<meshBasicMaterial color={v.operation==='subtract'?'#f0a878':active?'#68e3bc':'#74acd0'} transparent opacity={active?.48:.055} depthWrite={false} wireframe={v.operation==='subtract'||active}/></mesh>
     {active&&tool==='select'&&<group ref={handleRoot}>
@@ -151,7 +151,7 @@ export function CityVolumeSculptControls({land,plot,draft,orbitEnabled,viewTopDo
      {([['scale-width',v.x+v.width/2,(bottom+top)/2,v.z],['scale-depth',v.x,(bottom+top)/2,v.z+v.depth/2],['scale-height',v.x-v.width/2+.65,top,v.z-v.depth/2+.65]] as const).map(([handle,x,y,z])=><mesh key={handle} name={`sculpt-handle-${handle}`} position={[x,y,z]} onPointerDown={e=>begin(e,'handle',v,handle)}><boxGeometry args={[.8,.8,.8]}/><meshBasicMaterial color="#f5d17b" depthTest={false}/></mesh>)}
     </group>}
    </group>})}
-  {ghost&&<group position={[ghost.x,sculptFloorTop(ghost.startFloor+ghost.spanFloors-1,draft.design.groundHeight)+.7,ghost.z]}><Html center style={{pointerEvents:'none'}}><span className={`city-volume-readout${issue?' is-invalid':''}`}>{ghost.width} × {ghost.depth} m · {ghost.spanFloors} {ghost.spanFloors===1?'floor':'floors'}</span></Html></group>}
+  {ghost&&<group position={[ghost.x,sculptFloorTop(ghost.startFloor+ghost.spanFloors-1,draft.design.groundHeight,draft.design.upperHeight)+.7,ghost.z]}><Html center style={{pointerEvents:'none'}}><span className={`city-volume-readout${issue?' is-invalid':''}`}>{ghost.width} × {ghost.depth} m · {ghost.spanFloors} {ghost.spanFloors===1?'floor':'floors'}</span></Html></group>}
  </group>
  <primitive object={camera}><Html fullscreen position={[0,0,-1]} style={{pointerEvents:'none'}}><nav className="city-build-tool-rail" aria-label="Building tools" onPointerDown={e=>e.stopPropagation()}>
   {([['select','Select','1'],['rectangle','Box','2'],['circle','Cylinder','3'],['ellipse','Elliptic','4']] as const).map(([id,name,shortcut])=><button key={id} type="button" aria-label={name} aria-pressed={tool===id} onClick={()=>{setTool(id);setIssue('');}} title={`${name} · ${shortcut}`}><span>{name}</span><kbd>{shortcut}</kbd></button>)}

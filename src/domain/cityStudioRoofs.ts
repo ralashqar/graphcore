@@ -30,7 +30,7 @@ export function legacyStudioRoofGeometry(r:StudioRecipe,d:CityBuildingDesignV3,b
   let remaining=exposed;
   for(const [profile,group] of groups){
    if(profile==='flat'||profile==='terrace')continue;
-   const masses=group.map(v=>({x:v.x,z:v.z,width:v.width,depth:v.depth,y:sculptFloorBottom(v.startFloor,d.groundHeight),height:sculptFloorTop(f.floor,d.groundHeight)-sculptFloorBottom(v.startFloor,d.groundHeight)}));
+   const masses=group.map(v=>({x:v.x,z:v.z,width:v.width,depth:v.depth,y:sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight),height:sculptFloorTop(f.floor,d.groundHeight,d.upperHeight)-sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight)}));
    const faces=roofFaces(masses,profile==='pitched'?'gable':'mansard',profile==='pitched'?30:55,0,'z');
    for(const face of faces){if(!remaining.length)break;const region=polygonClipping.intersection(remaining,[[face.polygon]] as MultiPolygon);for(const p of region)surface(p,point=>face.plane[0]*point[0]+face.plane[1]*point[1]+face.plane[2]);if(region.length)remaining=polygonClipping.difference(remaining,region);}
   }

@@ -85,9 +85,24 @@ test('resizing, moving, serializing and restoring a roof host preserves valid ju
 });
 
 import {sculptFootprint,sculptPrimitiveBoundary} from './citySculpt.ts';
+import {bevelOutlineCorner,recessOutlineCorner} from './cityStudioOutline.ts';
 import {roofFlashingGeometry} from './cityRoofFlashing.ts';
 import {ROOF_WALL_CLEARANCE} from './cityStudioRoofEnvelope.ts';
 const polygonArea=(polygons:number[][][][])=>polygons.reduce((total,p)=>total+p.reduce((sum,ring,i)=>sum+(i?-1:1)*Math.abs(ring.reduce((s,a,j)=>{const b=ring[(j+1)%ring.length];return s+a[0]*b[1]-a[1]*b[0];},0))/2,0),0);
+test('a beveled roof host follows its edited outline and leaves the clipped corner uncovered',()=>{
+ const r=recipe([bevelOutlineCorner(volume('wing',{width:8,depth:8}),2,2,'roof-corner')]);
+ const out=resolve(r),faces=out.roofFaces!.filter(face=>face.partId==='wing');
+ assert.equal(validateSculpt(r,1),null);assert.ok(faces.length);assert.ok(out.roof.every(Number.isFinite));
+ for(const face of faces)for(const ring of face.polygon)for(const [x,z] of ring)assert.ok(!(x>2.01&&z>2.01&&x+z>6.01),`roof crosses beveled corner at ${x}, ${z}`);
+});
+test('a gabled roof over a recessed corner keeps the entry void and finite independent faces',()=>{
+ const r=recipe([recessOutlineCorner(volume('wing',{width:8,depth:8}),2,2,'entry')]),out=resolve(r);
+ assert.equal(validateSculpt(r,1),null);assert.ok(out.roofFaces!.length);assert.ok(out.roof.every(Number.isFinite));
+ for(const face of out.roofFaces!.filter(face=>face.partId==='wing'))for(const ring of face.polygon)for(const [x,z] of ring)assert.ok(!(x>2.01&&z>2.01),`roof bridges recess at ${x}, ${z}`);
+});
+test('all roof families resolve a concave recessed part without invalid roof triangles',()=>{
+ for(const type of ROOF_TYPES)for(const overhang of [0,.6]){const r=editStudioRoof(recipe([recessOutlineCorner(volume('wing',{width:8,depth:8}),2,2,`roof-${type.id}`)]),['wing'],{type:type.id,settings:{overhang}});let out;try{out=resolve(r);}catch(error){throw new Error(`${type.id} overhang ${overhang}: ${error instanceof Error?error.message:error}`);}assert.equal(validateSculpt(r,1),null,type.id);assert.ok(out.roof.every(Number.isFinite),type.id);for(let i=0;i<out.roof.length;i+=9){const a=out.roof.slice(i,i+3),b=out.roof.slice(i+3,i+6),c=out.roof.slice(i+6,i+9),u=b.map((v,k)=>v-a[k]),v=c.map((n,k)=>n-a[k]);assert.ok(Math.hypot(u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0])>1e-10,type.id);}}
+});
 function assertBoundaryFit(r:StudioRecipe){
  const resolved=resolveSculpt(r,design(r)),out=resolved.studio!,walls=resolved.floors[1].polygons,edges=walls.flatMap(p=>p.flatMap(r=>r.map((a,i)=>[a,r[(i+1)%r.length]]))),joins=out.roofEdges!.filter(e=>e.partId==='wing'&&e.kind==='abutment');
  assert.ok(joins.length);

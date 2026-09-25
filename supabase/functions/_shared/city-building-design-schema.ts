@@ -1,3 +1,6 @@
+import {validateModularBuilding} from '../../../src/domain/cityBuildingVariation.ts';
+import {validateModularDesign} from '../../../src/domain/cityModularBuilding.ts';
+import type {CityBuildingDesignV3} from '../../../src/domain/cityBuildingV3.ts';
 import {OFFICE_TYPES} from "../../../src/domain/cityOfficeArchitecture.ts";
 import {SYNARC_KIT_STYLES,SYNARC_KIT_WINDOWS,SYNARC_KIT_DOORS,SYNARC_KIT_PAINTS} from "../../../src/domain/citySynarcKit.ts";
 import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../../src/domain/cityProceduralEntrances.ts";
@@ -57,7 +60,9 @@ import { COMPONENTS, SLOT_IDS } from "../../../src/domain/cityBuildingV3.ts";
 const v3 = z.object({
   ...current.shape,
   version: z.literal(3),
-  generatorRevision: z.enum(["city-grammar-1", "city-shell-2", "city-connected-3", "city-office-4"]),
+  modular:z.custom<NonNullable<CityBuildingDesignV3["modular"]>>(validateModularBuilding).optional(),
+  upperHeight:z.number().min(3).max(4.5).optional(),
+  generatorRevision: z.enum(["city-grammar-1", "city-shell-2", "city-connected-3", "city-office-4", "city-variation-5"]),
   synarcKit:z.object({
     version:z.literal(1),style:z.enum(SYNARC_KIT_STYLES),window:z.enum(SYNARC_KIT_WINDOWS),door:z.enum(SYNARC_KIT_DOORS),
     canopy:z.enum(["none","short","long"]),cornice:z.boolean(),plinth:z.boolean(),
@@ -103,6 +108,8 @@ const v3 = z.object({
   density: z.enum(["restrained", "full"]),
   slots: z.partialRecord(z.enum(SLOT_IDS), z.enum(COMPONENTS).nullable()),
 }).strict().superRefine((d, ctx) => {
+  if(d.generatorRevision==="city-variation-5"){const issue=validateModularDesign(d as CityBuildingDesignV3);if(issue)ctx.addIssue({code:"custom",message:issue});if(d.finish!=="procedural"||d.crown!=="none"||Object.entries(d.slots).some(([key,value])=>value&&key!=="brand.entrance"))ctx.addIssue({code:"custom",message:"Modular buildings use their authored facade and entrance sign."});}
+  else if(d.modular||d.upperHeight!==undefined)ctx.addIssue({code:"custom",message:"Variation data requires its generator revision."});
   if(d.synarcKit&&d.generatorRevision==="city-office-4")ctx.addIssue({code:'custom',message:'Curved and bridge architecture uses its existing facade until the curved tile kit is ready.'});
   if(d.generatorRevision==="city-office-4" && !OFFICE_TYPES.some(t=>t===d.archetype))ctx.addIssue({code:"custom",message:"Connected office envelopes require a matching preset."});
   if(d.generatorRevision!=="city-office-4" && (d.officeArchitecture || OFFICE_TYPES.some(t=>t===d.archetype)))ctx.addIssue({code:"custom",message:"Office architecture requires its generator revision."});

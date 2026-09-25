@@ -1,3 +1,6 @@
+import {CityVariationPanel} from './CityVariationPanel';
+import {createModularDesign,resizeModularStructure,validateModularDesign} from '../../domain/cityModularBuilding';
+import {COLLECTION_PRESETS} from '../../domain/cityCollectionPresets';
 import {createCityRenderer,useCityRendererEpoch} from "./cityRenderer";
 import { CityLookControls } from "./CityLook";
 import {DOOR_FAMILIES,DOOR_SURROUNDS} from "../../domain/cityProceduralEntrances";
@@ -356,6 +359,8 @@ export function CityBuildingDesigner(
     key: K,
     value: CityBuildingDesignV3[K],
   ) => {
+    if(d.modular&&["floors","width","depth","groundHeight","upperHeight"].includes(key)){const next=resizeModularStructure(d,{[key]:Number(value)});if(!validateModularDesign(next))commit(next);return;}
+    if(d.modular&&key==="grounds"){commit({...d,grounds:value as typeof d.grounds});return;}
     if (key === "floors") {
       const n = Number(value), crown = n === 1 ? "none" : d.crown;
       commit({ ...d, crown, middleFloors: n - 1 - (crown === "none" ? 0 : 1) });
@@ -401,7 +406,7 @@ export function CityBuildingDesigner(
   );
   const properties = useMemo(() => [property], [property]);
   const height = design.version !== 1
-    ? design.groundHeight + (design.floors - 1) * 3
+    ? design.groundHeight + (design.floors - 1) * (design.version===3?(design.upperHeight??3):3)
     : design.floors * 2.25;
   const ranges = (
     label: string,
@@ -591,11 +596,11 @@ export function CityBuildingDesigner(
             role="group"
             aria-label="Design controls"
           >
-            {["Presets", "Windows", "Entrances", "Advertising", "Branding", "Grounds"].map((t) => (
+            {["Presets", "Variations", "Windows", "Entrances", "Advertising", "Branding", "Grounds"].map((t) => (
               <button
                 key={t}
                 type="button"
-                disabled={d.generatorRevision==="city-office-4" && ["Windows","Entrances","Advertising"].includes(t)}
+                disabled={(d.generatorRevision==="city-office-4"||d.generatorRevision==="city-variation-5") && ["Windows","Entrances","Advertising"].includes(t)}
                 title={d.generatorRevision==="city-office-4" ? "Connected office openings and integrated branding are controlled under Presets." : undefined}
                 aria-pressed={tab === t}
                 onClick={() => { setTab(t); if (t === "Advertising") setView("fixed"); }}
@@ -656,6 +661,7 @@ export function CityBuildingDesigner(
                 {CITY_LIGHT_MODE && <small>Light mode currently displays procedural windows instead of Quaternius façade blocks.</small>}
               </div>
             )}
+            {tab === "Variations" && <><p className="city-studio-note">Blender building templates with editable tile pools. Choosing a template replaces the current building; Undo restores it.</p><label>Building template<select aria-label="Variation building template" value={d.modular?.template??""} onChange={e=>commit(createModularDesign(d,Number(e.target.value)))}><option value="" disabled>Choose a Blender building</option>{COLLECTION_PRESETS.map((p,i)=><option key={p.id} value={i}>{p.name}</option>)}</select></label>{d.modular&&<><div className="city-variation">{(["width","depth","floors","groundHeight","upperHeight"] as const).map(k=><label key={k}>{({width:"Width",depth:"Depth",floors:"Floors",groundHeight:"Ground floor height",upperHeight:"Upper floor height"})[k]}<input aria-label={k} type="number" min={k==="floors"?1:k.includes("Height")?3:8} max={k==="floors"?8:k.includes("Height")?4.5:18} step={k.includes("Height")?.25:1} value={d[k]??3} onChange={e=>{const n=resizeModularStructure(d,{[k]:Number(e.target.value)});if(!validateModularDesign(n))commit(n);}}/></label>)}</div><CityVariationPanel recipe={d.modular.recipe} design={d} onChange={(recipe,heights)=>commit({...d,...heights,modular:{...d.modular!,recipe}})}/></>}</>}
             {tab === "Presets" && (
               <div className="city-art-controls">
                 <p className="city-studio-note">Choose a complete building, then fine-tune it below. Presets set the footprint, architecture and grounds; your business identity and colours stay intact.</p>
@@ -699,7 +705,7 @@ export function CityBuildingDesigner(
                   <label>Office character<select aria-label="Office character" value={d.officeArchitecture?.style||"international"} onChange={e=>commit({...d,officeArchitecture:{...d.officeArchitecture,style:e.target.value as "international"|"deco"|"brutalist"}})}><option value="international">International glass</option><option value="deco">Art Deco verticals</option><option value="brutalist">Solid civic / narrow windows</option></select></label>
                   {d.archetype==="twin-tower" && <>{([["bridgeFloor","Bridge storey",1,7,3],["towerGap","Tower separation",2,6,4],["shorterTower","Right tower fewer floors",0,3,0]] as const).map(([key,label,min,max,fallback])=><label key={key}>{label}<input aria-label={label} type="range" min={min} max={max} step="1" value={d.officeArchitecture?.[key]??fallback} onChange={e=>commit({...d,officeArchitecture:{...d.officeArchitecture,[key]:Number(e.target.value)}})}/><output>{d.officeArchitecture?.[key]??fallback}</output></label>)}<small>Bridge storey 1 is the first storey above the shared lobby. Both towers must reach the selected storey.</small></>}
                 </fieldset>}
-                <h3>Fine-tune building</h3>
+                {d.modular?<button type="button" onClick={()=>setTab("Variations")}>Edit this building’s variation rules</button>:<><h3>Fine-tune building</h3>
                 <p className="city-studio-note">Adjust dimensions and details within this building. To change its shape, choose another preset above.</p>
                 <div className="city-art-controls">
                   {ranges("Floors", "floors", 1, 8)}
@@ -742,7 +748,7 @@ export function CityBuildingDesigner(
                     </label>
                   </details>
                 </div>
-                <fieldset disabled={d.generatorRevision==="city-office-4"}><details>
+                <fieldset disabled={(d.generatorRevision==="city-office-4"||d.generatorRevision==="city-variation-5")}><details>
                   <summary>Advanced floor stack</summary>
                   <label>
                     Ground-floor treatment<select
@@ -852,8 +858,8 @@ export function CityBuildingDesigner(
                     </button>
                   ))}
                 </div>
-                <CitySynarcKitControls value={d.synarcKit} assembly={assemblyStatus.synarcKitAssembly} disabledReason={d.generatorRevision==='city-office-4'?'Curved and bridge towers keep their existing façade until a curved tile kit is ready.':undefined} onChange={next=>commit({...d,synarcKit:next,finish:'procedural'})}/>
-                <fieldset disabled={d.generatorRevision==="city-office-4"||!!d.synarcKit}><label>
+                <CitySynarcKitControls value={d.synarcKit} assembly={assemblyStatus.synarcKitAssembly} disabledReason={d.modular?'Use the Variations tile pools for this building.':d.generatorRevision==='city-office-4'?'Curved and bridge towers keep their existing façade until a curved tile kit is ready.':undefined} onChange={next=>commit({...d,synarcKit:next,finish:'procedural'})}/>
+                <fieldset disabled={(d.generatorRevision==="city-office-4"||d.generatorRevision==="city-variation-5")||!!d.synarcKit}><label>
                   Building finish<select
                     aria-label="Building finish"
                     value={d.finish}
@@ -998,7 +1004,7 @@ export function CityBuildingDesigner(
                   Façade variation {d.facadeSeed}{" "}
                   · Shape and brand colours stay fixed.
                 </small>
-                </fieldset>
+                </fieldset></>}
               </div>
             )}
             {tab === "Advertising" && (

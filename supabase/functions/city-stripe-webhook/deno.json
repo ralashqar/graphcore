@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "three": "npm:three@0.186.0",
+    "polygon-clipping": "npm:polygon-clipping@0.15.7"
+  }
+}

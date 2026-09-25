@@ -1,3 +1,4 @@
+import {CityModularBuildings} from './CityModularBuildings';
 import {useCityLook} from "./CityLook";
 import { useCityReflection } from "./cityReflections";
 import { CityBuildingGrounding } from "./CityBuildingGrounding";
@@ -310,5 +311,5 @@ export function CityDesignBuildings(props: Parameters<typeof BuildingBatches>[0]
 
 /** Draw only already-prepared recipes; construction controls asynchronous preparation and swaps. */
 export function CityPreparedBuildings(props:Parameters<typeof BuildingBatches>[0]){
- return <CityVisibility properties={props.properties} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props}/>{props.layer!=="building"&&<CityBuildingGrounding properties={props.properties} center={props.center} reduced={props.reduced}/>}</CityVisibility>;
+ return <CityVisibility properties={props.properties} enabled={!!props.center} simpleOnly={CITY_LIGHT_MODE}><BuildingBatches {...props}/>{props.layer!=="grounds"&&<CityModularBuildings properties={props.properties} onSelect={props.onSelect}/>}{props.layer!=="building"&&<CityBuildingGrounding properties={props.properties} center={props.center} reduced={props.reduced}/>}</CityVisibility>;
 }

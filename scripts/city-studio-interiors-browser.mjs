@@ -15,7 +15,10 @@ try{
  await page.getByRole('button',{name:'Draw wall'}).click();await page.waitForFunction(()=>{const state=JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}');return state.tool==='interior-partition'&&!state.busy&&!document.querySelector('.studio-preparing');},null,{timeout:30000});
  const anchors=await page.locator('canvas').evaluate(canvas=>JSON.parse(canvas.dataset.cityStudio).interiorAnchors);
  const draw=async(a,b)=>{await page.mouse.move(a.x,a.y);await page.mouse.down();await page.mouse.move(b.x,b.y,{steps:16});await page.mouse.up();};
- await draw(anchors.left,anchors.right);
+ await page.mouse.move(anchors.left.x,anchors.left.y);await page.mouse.down();await page.mouse.move(anchors.right.x,anchors.right.y,{steps:16});
+ await page.getByText(/m · ~\d+ bays?/).waitFor({timeout:10000});
+ await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas')?.dataset.citySculptPreview||'{}').state==='ready',null,{timeout:15000});
+ await page.mouse.up();
  await page.waitForFunction(()=>Object.keys(localStorage).some(key=>key.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(key)).plots.some(plot=>plot.owner&&plot.draft?.sculpt?.interior?.partitions?.length===1)),null,{timeout:30000});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing')&&!JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}').busy,null,{timeout:30000});await page.waitForTimeout(350);
  await page.getByRole('button',{name:'Door',exact:true}).last().click();await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}').tool==='interior-door');await page.mouse.click(anchors.door.x,anchors.door.y);

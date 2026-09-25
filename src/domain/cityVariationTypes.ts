@@ -1,0 +1,12 @@
+import type {StudioAnchor,StudioRecipe} from './cityStudioTypes.ts';
+export const VARIATION_LAYERS=['ground','windows','corners','balconies','accents','roof','props'] as const;
+export type VariationLayer=typeof VARIATION_LAYERS[number];
+export type VariationPattern='aligned'|'groups'|'alternating'|'independent';
+export type VariationPoolItem={id:string;weight:number};
+export type VariationLayerRule={pool:VariationPoolItem[];coverage:number;spacing:number;pattern:VariationPattern;uniformity:number;zone:'all'|'front'|'back'|'perimeter'|'centre'|'corners';seed:number;locked:boolean};
+export type VariationScope={kind:'building'|'part'|'floor'|'region';partId?:string;fromFloor?:number;toFloor?:number;faces?:{partId:string;side:StudioAnchor['side'];from:number;to:number}[]};
+export type VariationRule={id:string;name:string;scope:VariationScope;layers:Partial<Record<VariationLayer,Partial<VariationLayerRule>>>};
+export type BuildingVariation={version:1;seed:number;layers:Record<VariationLayer,VariationLayerRule>;rules:VariationRule[]};
+export type StudioStamp={id:string;stamp:string;anchor:StudioAnchor};
+export type ModularBuilding={version:1;template:string;recipe:StudioRecipe};
+export type VariationDiagnostic={id:string;reason:string};

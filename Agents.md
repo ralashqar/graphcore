@@ -1,5 +1,9 @@
 # GraphCore AI Agents
 
+## Shared building variation authoring (September 2026)
+
+The business Variations tab and construction Variation tool share deterministic weighted tile pools, scoped overrides, layer locks, dimension controls and protected manual edits. Seventeen multi-bay storefront stamps compose the existing Blender v5 catalog. Opt-in `city-variation-5` business recipes carry bounded modular intent; older revisions retain their paths. City rendering instances modules and roofs with aperture-preserving distant detail. The five City profile endpoints and world worker `2026-09-25-city-variation-1` require paired designated-staging rollout; none has been deployed. No migration or provider request. Verification and limitations: [docs/city-building-variations.md](docs/city-building-variations.md).
+
 ## Playful City driving (September 2026)
 
 The City uses a locally bundled CC0 Kenney hatchback, wheel/body animation, fixed-step arcade handling and render-independent spatial-hash plot collision. Pavements are driveable; plots and central structures remain protected. The same collision queries support camera obstruction and recovery. No schema, backend or provider change. Native and WebGL2 fallback controls are tested; 72-property frame time remained ~33.5 ms p95 with ~0.2 ms simulation/camera work. The 400-property baseline and physical-mobile acceptance remain outstanding. Details: [docs/city-playful-driving.md](docs/city-playful-driving.md).

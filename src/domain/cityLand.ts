@@ -77,7 +77,8 @@ export class LocalLandRepository implements LandRepository{
  private read(){const raw=this.storage.getItem(this.initial.id);if(!raw)return structuredClone(this.initial);const data=JSON.parse(raw) as LandWorld;if(data.version!==1||data.id!==this.initial.id||!Array.isArray(data.plots)||!Array.isArray(data.occupied))throw new Error('Saved test world is incompatible. Reset it to start again.');return data;}
  private write(w:LandWorld){this.storage.setItem(w.id,JSON.stringify(w));}
  private async atomic<T>(fn:()=>T):Promise<T>{
-  const run=()=>typeof navigator!=='undefined'&&navigator.locks?navigator.locks.request(this.initial.id,fn):Promise.resolve().then(fn);
+  const locks=typeof navigator!=='undefined'?(navigator as unknown as {locks?:{request:<T>(name:string,callback:()=>T)=>Promise<T>}}).locks:undefined;
+  const run=()=>locks?locks.request(this.initial.id,fn):Promise.resolve().then(fn);
   const pending=this.queue.then(run,run);this.queue=pending.catch(()=>{});return pending;
  }
  async list(){return this.atomic(()=>{const w=this.read();this.write(w);return w;});}

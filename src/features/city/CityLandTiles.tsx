@@ -65,7 +65,7 @@ export function CityLandTiles({land,plot,draft,selectedVolume}:{land:CityLandCon
  const center=landPosition(plot),scale=plot.size/24;
  return <>
   {interaction==='part'&&volumes.length>0&&<group position={[center.x,0,center.z]} rotation={[0,plot.rotation*Math.PI/2,0]} scale={scale}>
-   {volumes.map(v=>{const bottom=v.startFloor===0?.65:sculptFloorTop(v.startFloor-1,d.groundHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight),active=v.id===selectedVolume;
+   {volumes.map(v=>{const bottom=v.startFloor===0?.65:sculptFloorTop(v.startFloor-1,d.groundHeight,d.upperHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight),active=v.id===selectedVolume;
     return <mesh key={v.id} name={`tile-select-volume-${v.id}`} position={[v.x,(bottom+top)/2,v.z]} scale={[v.width,top-bottom,v.depth]}
       onPointerDown={e=>{if(e.button!==0)return;e.stopPropagation();land.setSelectedVolume(v.id);setSelected('');}}>
       {v.kind==='ellipse'?<cylinderGeometry args={[.5,.5,1,32]}/>:<boxGeometry args={[1,1,1]}/>}

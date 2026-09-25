@@ -14,6 +14,12 @@ OUT = ROOT / f'public/city/synarc-kit/v{VERSION}'
 SOURCE = ROOT / f'assets/city/synarc-kit/v{VERSION}'
 SOURCE.mkdir(parents=True, exist_ok=True)
 catalogue = json.loads((OUT / 'catalogue.json').read_text())
+if VERSION == 4:
+    previous = bpy.data.scenes.get('SynArc Studio Kit v4')
+    if previous:
+        previous.name='NYC previous authoring scene'
+        for obj in previous.objects:
+            if obj.get('catalogue_id'):obj.name='previous/'+obj.name
 scene = bpy.data.scenes.new(f'SynArc Studio Kit v{VERSION}')
 original_scene = bpy.context.window.scene
 bpy.context.window.scene = scene
@@ -47,13 +53,17 @@ def scroll(parent,x,y,z,rx=.16,ry=.22):
     points=[(x+rx*math.cos(i*math.pi/8),y+ry*math.sin(i*math.pi/8),z) for i in range(17)]
     for a,b in zip(points,points[1:]):rod(parent,'iron scroll',a,b,.018)
 
+if VERSION == 4:
+    exec((ROOT/'scripts/city-nyc-geometry.py').read_text(), globals())
 roots=[]
 for part in catalogue['parts']:
     ident=part['id'];cat=part['category'];w,h,d=part['size']
     root=bpy.data.objects.new(f'v{VERSION}/{ident}' if VERSION>2 else ident,None);scene.collection.objects.link(root);roots.append(root)
     root['catalogue_id']=ident
     opening=part['opening']
-    if opening:
+    if VERSION == 4 and 'nyc' in ident:
+        build_nyc(part, root)
+    elif opening:
         ow=opening['width'];low=opening['bottom'];high=opening['top'];jamb=(w-ow)/2
         for side in [-1,1]:box(root,'wall jamb',side*(ow/2+jamb/2),h/2,0,jamb,h,.3,'wall')
         box(root,'wall below',0,low/2,0,ow,low,.3,'wall')
@@ -155,8 +165,18 @@ for part in catalogue['parts']:
     points=[];triangles=0
     for child in root.children:
         if child.type!='MESH':continue
+        if VERSION == 4:
+            bpy.context.view_layer.objects.active=child
+            for modifier in list(child.modifiers):bpy.ops.object.modifier_apply(modifier=modifier.name)
+            if not child.data.uv_layers:
+                uv=child.data.uv_layers.new(name='UVMap')
+                for polygon in child.data.polygons:
+                    for loop in polygon.loop_indices:
+                        co=child.data.vertices[child.data.loops[loop].vertex_index].co
+                        uv.data[loop].uv=(co.x,co.y)
         child.data.calc_loop_triangles();triangles+=len(child.data.loop_triangles)
         points.extend(child.matrix_world@Vector(v) for v in child.bound_box)
+    if VERSION == 4:points=[Vector((p.x,p.z,-p.y)) for p in points]
     part['triangles']=triangles
     part['bounds']={'min':[min(p[i] for p in points) for i in range(3)],'max':[max(p[i] for p in points) for i in range(3)]}
 

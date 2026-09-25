@@ -13,7 +13,7 @@ export function CityVisibility({properties,enabled,simpleOnly=false,children}:{p
  const playback=useMarketMotion();
  const state=useRef<Visibility>({revision:0,levels:new Map()});
  const {plotAxis,plotSize}=useCityMapLayout();
- const bounds=useMemo(()=>properties.map(p=>({id:p.id,center:new Vector3(plotAxis(p.x),plotSize*.55,plotAxis(p.z)),box:new Box3(new Vector3(plotAxis(p.x)-plotSize*.6,-5,plotAxis(p.z)-plotSize*.6),new Vector3(plotAxis(p.x)+plotSize*.6,plotSize*4,plotAxis(p.z)+plotSize*.6))})),[properties,plotAxis,plotSize]);
+ const bounds=useMemo(()=>properties.map(p=>({id:p.id,modular:p.profile.buildingDesign?.version===3&&p.profile.buildingDesign.generatorRevision==='city-variation-5',center:new Vector3(plotAxis(p.x),plotSize*.55,plotAxis(p.z)),box:new Box3(new Vector3(plotAxis(p.x)-plotSize*.6,-5,plotAxis(p.z)-plotSize*.6),new Vector3(plotAxis(p.x)+plotSize*.6,plotSize*4,plotAxis(p.z)+plotSize*.6))})),[properties,plotAxis,plotSize]);
  const scratch=useMemo(()=>({frustum:new Frustum(),matrix:new Matrix4(),view:new Vector3()}),[]);
  const elapsed=useRef(1);
  const remembered=useRef(new Map<string,CityRepresentation>());
@@ -32,7 +32,8 @@ export function CityVisibility({properties,enabled,simpleOnly=false,children}:{p
 
    const moving=playback && performance.now()-playback.started<3100 && playback.event.moves.some(move=>move.id===item.id);
    const chosen=cityRepresentation(remembered.current.get(item.id),pixels,scratch.frustum.intersectsBox(item.box),!!moving);
-   const next=simpleOnly && chosen!=="hidden" ? "simple" : chosen;
+   const farModular=item.modular&&Math.hypot(camera.position.x-item.center.x,camera.position.z-item.center.z)>(old==="full"?65:55);
+   const next=(simpleOnly||farModular) && chosen!=="hidden" ? "simple" : chosen;
    if(next!=="hidden")remembered.current.set(item.id,next);
    if(old!==next){state.current.levels.set(item.id,next);changed=true;}
   }

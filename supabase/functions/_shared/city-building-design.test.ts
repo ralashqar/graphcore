@@ -227,3 +227,11 @@ Deno.test("connected office presets round trip and reject incompatible revisions
   assert.equal(buildingDesignSchema.safeParse({...d,officeArchitecture:{script:"bad"}}).success,false);
  }
 });
+
+
+import {createModularDesign} from '../../../src/domain/cityModularBuilding.ts';
+Deno.test('modular variation profiles are strict, revision-pinned and round-trip all templates',()=>{
+ for(let i=0;i<24;i++){const d=createModularDesign(newDesign('schema-variation'),i);assert.deepEqual(buildingDesignSchema.parse(JSON.parse(JSON.stringify(d))),JSON.parse(JSON.stringify(d)));}
+ const d=createModularDesign(newDesign('schema-variation'),8);
+ for(const change of [(v:any)=>v.generatorRevision='city-shell-2',(v:any)=>delete v.modular,(v:any)=>v.modular.recipe.studio.arbitrary=true,(v:any)=>v.modular.recipe.volumes[0].spanFloors=99,(v:any)=>v.modular.recipe.studio.variation.layers.ground.pool=[{id:'remote-module',weight:1}],(v:any)=>v.upperHeight=8,(v:any)=>v.modular.recipe.studio.openings[0].anchor.side='invalid']){const n=structuredClone(d);change(n);assert.equal(buildingDesignSchema.safeParse(n).success,false);}
+});

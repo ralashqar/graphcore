@@ -1,0 +1,45 @@
+/** Versioned NYC catalog. Existing v2/v3 assets and IDs are immutable. */
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+const root=new URL('../',import.meta.url),base=new URL('public/city/synarc-kit/v4/',root);
+mkdirSync(base,{recursive:true});
+const old=JSON.parse(readFileSync(new URL('public/city/synarc-kit/v3/catalogue.json',root)));
+const parts=[];
+function part(id,label,category,size,opening=null,extra={}){
+ const [w,h]=size;
+ parts.push({id,label,category,size,front:'+Z',origin:'bottom-centre',opening,stretch:opening?[]:['x'],channels:['wall','trim','frame','door','glass'],connectors:{left:[-w/2,0,0],right:[w/2,0,0],top:[0,h,0],bottom:[0,0,0]},clearance:{size},collision:opening?'opening':'solid',minDetail:'medium',...extra});
+}
+part('window-nyc-sash','NYC recessed sash','window',[2,3,.48],{width:1.18,bottom:.7,top:2.55});
+part('window-nyc-paired','NYC paired sash','window',[2,3,.48],{width:1.55,bottom:.65,top:2.55});
+part('window-nyc-loft','SoHo loft window','window',[2,3,.5],{width:1.65,bottom:.4,top:2.65});
+part('window-nyc-industrial','Industrial steel window','window',[2,3,.44],{width:1.6,bottom:.55,top:2.6});
+part('window-nyc-shop','NYC display window','window',[2,3.8,.52],{width:1.65,bottom:.3,top:3.05});
+part('window-nyc-shop-wide','Broad display window','window',[4,3.8,.52],{width:3.55,bottom:.3,top:3.05},{baySpan:2});
+part('door-nyc-shop','Recessed shop entrance','door',[2,3.8,.62],{width:1.35,bottom:0,top:2.65});
+part('door-nyc-double','Double glazed shop entry','door',[2,3.8,.58],{width:1.6,bottom:0,top:2.65});
+part('door-nyc-residential','Residential street entry','door',[2,3.8,.5],{width:1.05,bottom:0,top:2.65});
+part('wall-nyc-garage','Wide roller shutter · closed','wall',[4,3.8,.55],{width:3.45,bottom:0,top:3.05},{baySpan:2,collision:'solid'});
+part('wall-nyc-brick','NYC brick infill','wall',[2,3,.3]);
+part('nyc-pier','Masonry corner pier','trim',[.38,3,.45]);
+part('nyc-pilaster','Cast-iron pilaster','trim',[.24,3,.32]);
+part('nyc-band','Stone belt course','trim',[2,.22,.42]);
+part('nyc-sill','Projecting stone sill','trim',[1.4,.16,.38]);
+part('nyc-lintel','Keystone lintel','trim',[1.5,.28,.32]);
+part('nyc-spandrel','Recessed spandrel panel','trim',[2,.4,.24]);
+part('nyc-rosette','Carved accent panel','ornament',[.55,.55,.16],null,{minDetail:'near'});
+part('nyc-sign','Recessed shop sign fascia','trim',[2,.5,.18]);
+part('nyc-awning','Fabric shop awning','canopy',[2,.55,1.3]);
+part('nyc-awning-end','Awning end and bracket','canopy',[.08,.7,1.3]);
+part('nyc-awning-corner','Corner awning connection','canopy',[1.3,.55,1.3]);
+part('nyc-balcony','Iron balcony deck','balcony',[2,.18,1.4]);
+part('nyc-rail','NYC iron railing','balcony',[2,1.05,.09]);
+part('nyc-bracket','Balcony support bracket','balcony',[.14,.65,1.05]);
+part('nyc-cornice','Bracketed NYC cornice','trim',[2,.58,.72]);
+part('nyc-cornice-return','Cornice corner return','trim',[.72,.58,.72]);
+part('nyc-cornice-end','Cornice termination','trim',[.12,.58,.72]);
+part('nyc-parapet','Brick parapet and coping','trim',[2,.75,.4]);
+part('nyc-chimney','Brick chimney','roof',[.85,1.5,.85],null,{stretch:[]});
+part('nyc-vent','Roof exhaust vent','roof',[.6,.85,.6],null,{stretch:[],minDetail:'near'});
+part('nyc-hatch','Roof access hatch','roof',[1.2,.4,1.5],null,{stretch:[]});
+part('nyc-water-tank','Timber rooftop water tank','roof',[2.8,4.3,2.8],null,{stretch:[]});
+writeFileSync(new URL('catalogue.json',base),JSON.stringify({version:4,id:'synarc-kit-4',families:old.families,parts:[...old.parts,...parts]},null,2)+'\n');
+console.log(`Prepared ${parts.length} NYC modules, ${old.parts.length+parts.length} total.`);

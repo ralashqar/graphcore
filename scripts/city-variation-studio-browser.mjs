@@ -1,0 +1,38 @@
+import {chromium} from 'playwright';
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
+const presets=JSON.parse(readFileSync('public/city/synarc-kit/v5/presets.json')),backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native';
+const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
+mkdirSync('output/playwright',{recursive:true});
+try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],records=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(`${process.env.CITY_TEST_ORIGIN||'http://127.0.0.1:5188'}/city?demo=1&cityStudio=1&cityStudioTest=1${backend==='webgl'?'&cityBackend=webgl':''}`);
+ await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')),null,{timeout:90000});
+ await page.evaluate(async()=>{const {initialLandDraft,LAND_OWNER}=await import('/src/domain/cityLand.ts');const {collectionPreset}=await import('/src/domain/cityCollectionPresets.ts');const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),world=JSON.parse(localStorage.getItem(key)),plot=world.plots[0];plot.owner=LAND_OWNER;plot.purchaseId='collection-browser';plot.revision=1;plot.draft=collectionPreset(initialLandDraft(plot),16,plot.size);localStorage.setItem(key,JSON.stringify(world));});
+ const open=async()=>{await page.reload();await page.getByRole('button',{name:'Drive mode',exact:true}).click();await page.getByRole('button',{name:'Visit test plot'}).click();await page.getByRole('region',{name:'Construction studio'}).waitFor({timeout:90000});await page.waitForFunction(()=>document.querySelector('canvas')?.dataset.cityStudioKit==='ready',null,{timeout:90000});};
+ await open();
+ assert.equal(await page.locator('canvas').getAttribute('data-city-backend'),backend==='webgl'?'webgl2':'webgpu');
+
+ await page.getByRole('button',{name:'Variation',exact:true}).click();
+ await page.getByRole('button',{name:'Enable variation rules',exact:true}).click();
+ await page.getByRole('button',{name:'Advanced rules',exact:true}).click();
+ await page.getByRole('button',{name:'Add floor rule',exact:true}).click();
+ await page.getByLabel('Tile coverage',{exact:true}).fill('0.5');
+ await page.getByLabel('Variation target',{exact:true}).selectOption('building');
+ await page.getByRole('button',{name:'Shuffle ground floor',exact:true}).click();
+ await page.getByText('Structure dimensions',{exact:true}).click();
+ await page.getByLabel('Structure upperHeight',{exact:true}).fill('4');
+ await page.waitForFunction(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.design.upperHeight===4;},null,{timeout:20000});
+ const read=()=>page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft;});
+ const intended=await read();assert.equal(intended.design.upperHeight,4);assert.equal(intended.sculpt.studio.variation.rules.length,1);
+ await page.getByRole('button',{name:'Shuffle ground floor',exact:true}).click();await page.getByRole('button',{name:'Undo',exact:true}).click();await page.waitForFunction(expected=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.stringify(JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt)===expected;},JSON.stringify(intended.sculpt),{timeout:20000});assert.deepEqual((await read()).sculpt,intended.sculpt);
+ await page.getByRole('button',{name:'Openings',exact:true}).click();await page.getByRole('button',{name:'Paint Café · 4 m',exact:true}).click();
+ await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(500);
+ const target=await page.evaluate(async()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),d=JSON.parse(localStorage.getItem(key)).plots[0].draft,{previewStorefront}=await import('/src/domain/cityBuildingVariation.ts'),{studioBays}=await import('/src/domain/cityStudio.ts'),screen=JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays;const b=studioBays(d.sculpt,d.design).find(b=>b.anchor.floor===0&&b.anchor.side==='north'&&!previewStorefront(d.sculpt,d.design,'stamp-cafe-2',b.anchor).reason);return b&&screen.find(s=>s.id===b.id);});
+ assert.ok(target,'front ground floor stamp target');await page.mouse.move(target.x,target.y);await page.waitForTimeout(250);await page.mouse.click(target.x,target.y);await page.waitForFunction(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt.studio.stamps?.length===1;},null,{timeout:20000});
+ assert.equal((await read()).sculpt.studio.stamps.length,1);
+ await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);await page.getByRole('button',{name:'Variation',exact:true}).click();await page.screenshot({path:`output/playwright/city-variation-studio-${backend}.png`});
+ await open();assert.equal((await read()).design.upperHeight,4);assert.equal((await read()).sculpt.studio.stamps.length,1);
+ assert.deepEqual(errors,[]);console.log('Studio variation, floor rule, shuffle undo, height, 3D storefront painting and reload passed.');
+}finally{await browser.close();}

@@ -2,9 +2,14 @@ import {ROOF_EXAMPLES,studioRoofExample} from './cityStudioRoofExamples.ts';
 import type {LandDraft} from './cityLand.ts';
 import type {StudioRecipe} from './cityStudioTypes.ts';
 import {freshStudio,studioBays,studioDraft} from './cityStudio.ts';
+import {NYC_PRESETS,nycPreset} from './cityNycPresets.ts';
+import {COLLECTION_PRESETS,collectionPreset} from './cityCollectionPresets.ts';
 
-export const STUDIO_EXAMPLES=[{name:'Corner café',thumbnail:'window-shop'},{name:'Garden townhouse',thumbnail:'window-shuttered'},{name:'Courtyard apartment',thumbnail:'stair-flight'},...ROOF_EXAMPLES];
+export const STUDIO_EXAMPLES=[{name:'Corner café',thumbnail:'window-shop',preview:undefined as string|undefined},{name:'Garden townhouse',thumbnail:'window-shuttered',preview:undefined as string|undefined},{name:'Courtyard apartment',thumbnail:'stair-flight',preview:undefined as string|undefined},...ROOF_EXAMPLES.map(p=>({...p,preview:undefined as string|undefined})),...NYC_PRESETS.map(p=>({name:p.name,thumbnail:'window-nyc-sash',preview:`/city/synarc-kit/v4/presets/${p.id}.png`})),...COLLECTION_PRESETS.map(p=>({name:p.name,thumbnail:`window-collection-${p.window}`,preview:`/city/synarc-kit/v5/presets/${p.id}.png`}))];
+export const BLENDER_EXAMPLE_START=3+ROOF_EXAMPLES.length;
 export function studioExample(draft:LandDraft,index:number,size:24|48):LandDraft {
+ if(index>=BLENDER_EXAMPLE_START+NYC_PRESETS.length)return collectionPreset(draft,index-BLENDER_EXAMPLE_START-NYC_PRESETS.length,size);
+ if(index>=3+ROOF_EXAMPLES.length)return nycPreset(draft,index-3-ROOF_EXAMPLES.length,size);
  if(index>=3)return studioRoofExample(draft,index-3,size);
  const r:StudioRecipe={version:5,plotSize:size,attachments:[],studio:freshStudio(),volumes:[{id:'main',kind:'rectangle',operation:'add',x:0,z:0,width:12,depth:8,startFloor:0,spanFloors:index===0?2:3}]};
  if(index===0){r.studio.defaults.family='warm-brick';r.studio.defaults.roof='terrace';}

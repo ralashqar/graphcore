@@ -25,7 +25,7 @@ export function resolveStudioStair(r:StudioRecipe,d:CityBuildingDesignV3,base:Sc
  if(!source)return fail('The original stair wall is no longer exposed.');
  if(source.anchor.floor!==0||source.anchor.side==='curve')return fail('Start stairs on a straight ground-floor wall.');
  if(source.entrance)return fail('Keep the main entrance clear; choose a side wall.');
- const destination=assembly.destination??1,top=sculptFloorBottom(destination,d.groundHeight),bottom=.18;
+ const destination=assembly.destination??1,top=sculptFloorBottom(destination,d.groundHeight,d.upperHeight),bottom=.18;
  const floorCount=Math.max(1,...r.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors));
  if(destination<1||destination>8||destination>floorCount)return fail('Choose a storey or accessible roof this building reaches.');
  const wall=studioWallRun(bays,source),sourceT=proj(source,source.rotation),normal=plane(source,source.rotation);
@@ -40,7 +40,7 @@ export function resolveStudioStair(r:StudioRecipe,d:CityBuildingDesignV3,base:Sc
  if(!terrace&&!upper.length)return fail('Needs an exposed upper wall for an access door.');
  const terraceExit=terrace&&assembly.exit?terraceEdges.find(b=>b.anchor.shapeId===assembly.exit!.shapeId&&b.anchor.side===assembly.exit!.side&&Math.abs(b.anchor.u-assembly.exit!.u)<=b.anchorSpan/2+.002):undefined;
  const eligible=(terrace?[undefined]:pinned?[pinned]:upper).sort((a,b)=>Math.abs((a?proj(a,source.rotation):sourceT)-sourceT)-Math.abs((b?proj(b,source.rotation):sourceT)-sourceT));
- const heights=Array.from({length:destination},(_,i)=>sculptFloorBottom(i+1,d.groundHeight)-(i?sculptFloorBottom(i,d.groundHeight):bottom));
+ const heights=Array.from({length:destination},(_,i)=>sculptFloorBottom(i+1,d.groundHeight,d.upperHeight)-(i?sculptFloorBottom(i,d.groundHeight,d.upperHeight):bottom));
  const straightRun=Math.ceil((top-bottom)/.18)*.30,halfRun=Math.max(...heights.map(h=>Math.ceil(h/2/.18)*.30));
  const sign=assembly.flip?-1:1;
  let chosen:{exitBay?:StudioBay;layout:'straight'|'switchback';run:number;centre:number}|undefined;
@@ -60,10 +60,10 @@ export function resolveStudioStair(r:StudioRecipe,d:CityBuildingDesignV3,base:Sc
  const flights=layout==='straight'?1:destination*2;
  let height=bottom;
  for(let j=0;j<flights;j++){
-  const storey=Math.floor(j/2),target=layout==='straight'?top:sculptFloorBottom(storey+1,d.groundHeight),endY=j===flights-1?top:layout==='straight'?top:j%2?target:height+(target-height)/2;
+  const storey=Math.floor(j/2),target=layout==='straight'?top:sculptFloorBottom(storey+1,d.groundHeight,d.upperHeight),endY=j===flights-1?top:layout==='straight'?top:j%2?target:height+(target-height)/2;
   const actualRise=endY-height,lane=layout==='switchback'&&j%2?2.08:.78,direction=sign*(layout==='switchback'&&j%2?-1:1),angle=rotation+direction*Math.PI/2;
   const middle=place(origin,0,lane);result.decks.push({id:`${assembly.id}/ramp${j}`,...middle,y:height,width:1.2,depth:run,rotation:angle,rise:actualRise});
-  if(r.studio.catalogue==='synarc-kit-3')for(const side of [-1,1]){
+  if(r.studio.catalogue!=='synarc-kit-2')for(const side of [-1,1]){
    const edge=place(origin,0,lane+side*.65);
    add(`${assembly.id}/stringer${j}/${side}`,side<0?'stair-stringer-left':'stair-stringer-right',edge,height,[1,actualRise/1.05,run/2.4],angle);
   }
@@ -80,14 +80,14 @@ export function resolveStudioStair(r:StudioRecipe,d:CityBuildingDesignV3,base:Sc
   for(const edge of [-1,1]){const support=place(origin,direction*(run/2+.65),(layout==='switchback'?1.43:lane)+edge*(layout==='switchback'?1.18:.55));add(`${assembly.id}/support${j}/${edge}`,'stair-support',support,bottom,[1,Math.max(.1,endY-bottom)/.18,1]);}
   rail(`${assembly.id}/landing-outer${j}`,direction*(run/2+.65),layout==='switchback'?2.78:1.48,endY,1.3);
   if(j<flights-1){
-   if(r.studio.catalogue==='synarc-kit-3'){const edge=place(origin,direction*(run/2+1.3),layout==='switchback'?1.43:lane);add(`${assembly.id}/return-guard${j}`,'stair-return-guard',edge,endY,[landingDepth/1.4,1,1],rotation+Math.PI/2);result.blockers.push({id:`${assembly.id}/return-guard${j}`,...edge,y:endY+.55,width:landingDepth,height:1.1,depth:.1,rotation:rotation+Math.PI/2});}
+   if(r.studio.catalogue!=='synarc-kit-2'){const edge=place(origin,direction*(run/2+1.3),layout==='switchback'?1.43:lane);add(`${assembly.id}/return-guard${j}`,'stair-return-guard',edge,endY,[landingDepth/1.4,1,1],rotation+Math.PI/2);result.blockers.push({id:`${assembly.id}/return-guard${j}`,...edge,y:endY+.55,width:landingDepth,height:1.1,depth:.1,rotation:rotation+Math.PI/2});}
    else rail(`${assembly.id}/landing-end${j}`,direction*(run/2+1.3),layout==='switchback'?1.43:lane,endY,landingDepth,rotation+Math.PI/2);
   }
   height=endY;
  }
  const foot=place(origin,-sign*(run/2+.65),.78);add(`${assembly.id}/foot`,'stair-foot',foot,0,[1.4/1.2,1,1]);
  result.decks.push({id:`${assembly.id}/foot`,...foot,y:.18,width:1.4,depth:1.2,rotation});
- if(r.studio.catalogue==='synarc-kit-3'){
+ if(r.studio.catalogue!=='synarc-kit-2'){
   const finalDirection=layout==='straight'?sign:-sign,upper=place(origin,finalDirection*(run/2+.65),.6),balcony=assembly.exitKind==='balcony';
   add(`${assembly.id}/exit-link`,balcony?'stair-balcony-link':'stair-top-threshold',upper,top-.18,[1,1,1]);
   result.decks.push({id:`${assembly.id}/exit-link`,...upper,y:top,width:1.3,depth:balcony?.9:.55,rotation});

@@ -1,3 +1,4 @@
+import {studioKitVersion as getStudioKitVersion} from '../../domain/cityStudioCatalog';
 import {CityRoofMeshes} from './CityRoofMeshes';
 import {CityStudioMeshes} from './CityStudioMeshes';
 import {CityStudioInteriorMeshes} from './CityStudioInteriorMeshes';
@@ -44,7 +45,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  const target=useRef<SculptPreview>(preview),designRef=useRef(draft.design),busy=useRef(false),timer=useRef<ReturnType<typeof setTimeout>|null>(null),lastStart=useRef(0),completed=useRef(-1),alive=useRef(true),pumpRef=useRef<()=>void>(()=>{});
  const previewTiming=useRef<{revision:number;started:number;workerMs:number}|null>(null);
  designRef.current=draft.design;
- const key=JSON.stringify([draft.sculpt,draft.design.floors,draft.design.groundHeight,draft.design.base,draft.design.roof,draft.design.synarcKit,land?.previewRetry]);
+ const key=JSON.stringify([draft.sculpt,draft.design.floors,draft.design.groundHeight,draft.design.upperHeight,draft.design.base,draft.design.roof,draft.design.synarcKit,land?.previewRetry]);
  useEffect(()=>{if(!draft.sculpt)return;let live=true;setPending(true);setError(null);void prepareSculpt(draft.sculpt,draft.design,!!land).then(value=>{if(live){setResult(value);setPreviewResult(null);setPending(false);invalidate();}}).catch(e=>{if(live){setError(e instanceof Error?e.message:String(e));setPreviewResult(null);setPending(false);}});return()=>{live=false;};},[key,invalidate]);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;if(timer.current)clearTimeout(timer.current);};},[]);
  const pump=()=>{
@@ -111,7 +112,7 @@ export function CitySculptBuilding({plot,draft,land}:{plot:LandPlot;draft:LandDr
  const hasCanopy=!!shown?.decorations.some(detail=>detail.kind==='canopy'&&detail.active);
  const usingKit=!!shown?.kit&&!!synarcPack;
  const displayedRecipe=previewResult&&(preview.recipe?.version===5||preview.recipe?.version===6)?preview.recipe:draft.sculpt?.version===5||draft.sculpt?.version===6?draft.sculpt:null;
- const studioKitVersion=displayedRecipe?.studio.catalogue==='synarc-kit-3'?3:2;
+ const studioKitVersion=getStudioKitVersion(displayedRecipe?.studio.catalogue);
  const interior=displayedRecipe?.version===6?displayedRecipe.interior:null;
  const sliced=!!interior&&!!land&&floorView.mode!=='whole';
  const kitPlacements=useMemo(()=>{const placements=shown?.kit?.placements??[];if(!sliced)return placements;return placements.filter(piece=>{if(floorView.mode==='floor')return piece.floor===floorView.floor;if(piece.floor>floorView.floor)return false;if(piece.floor<floorView.floor)return true;const sector=(Math.round(piece.rotation/(Math.PI/4))+8)%8;return Math.cos((sector-cameraSector)*Math.PI/4)<=.35;});},[shown?.kit?.placements,sliced,floorView.mode,floorView.floor,cameraSector]);

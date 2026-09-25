@@ -1,5 +1,6 @@
 import {STUDIO_FAMILIES,STUDIO_MODULE_MAP} from './cityStudioCatalog.ts';
 import polygonClipping,{type MultiPolygon} from 'polygon-clipping';
+// @deno-types="npm:@types/three@0.186.0"
 import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,sculptFloorTop,sculptPrimitiveBoundary,sculptFootprint,type SculptResolved,type SculptVolume} from './citySculpt.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
@@ -46,7 +47,7 @@ function cachedWallTileEnvelope(polygons:MultiPolygon):MultiPolygon{
 }
 function plane3(a:[number,number,number],b:[number,number,number],c:[number,number,number]):Plane{const dx=b[0]-a[0],dz=b[2]-a[2],ex=c[0]-a[0],ez=c[2]-a[2],det=dx*ez-ex*dz;const x=((b[1]-a[1])*ez-(c[1]-a[1])*dz)/det,z=(dx*(c[1]-a[1])-ex*(b[1]-a[1]))/det;return [x,z,a[1]-x*a[0]-z*a[2]];}
 function candidates(r:StudioRecipe,v:SculptVolume,d:CityBuildingDesignV3,notes:string[]):StudioRoofFace[]{
- const {type,settings:s}=roofChoice(r,v.id),base=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight),e=type==='flat'||type==='terrace'?0:s.overhang,w=v.width/2+e,h=v.depth/2+e,rise=s.rise,domain=footprint(v,s.connection==='separate'?-.035:e);let profile=type;
+ const {type,settings:s}=roofChoice(r,v.id),base=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight),e=type==='flat'||type==='terrace'?0:s.overhang,w=v.width/2+e,h=v.depth/2+e,rise=s.rise,domain=footprint(v,s.connection==='separate'?-.035:e);let profile=type;
  if(v.kind==='ellipse'&&!['flat','terrace','cone'].includes(profile)){profile='flat';notes.push('This round part keeps a flat roof. Choose Conical for a pointed roof.');}
  if(profile==='cone'&&v.kind!=='ellipse')notes.push('Conical roofs follow rectangular parts as pyramidal caps. Use a round part for a circular cone.');
  if(profile==='cone')return domain.map((a,i)=>{const b=domain[(i+1)%domain.length];return {partId:v.id,base,polygon:[[a,b,[v.x,v.z]]],plane:plane3([a[0],base,a[1]],[b[0],base,b[1]],[v.x,base+rise,v.z])};});
@@ -59,7 +60,12 @@ function candidates(r:StudioRecipe,v:SculptVolume,d:CityBuildingDesignV3,notes:s
  else if(profile==='hip')planes=[...pair(cross,rise/span,base+rise),...pair(cross==='x'?'z':'x',rise/((cross==='x'?h:w)*(1-s.crown)),base+rise/(1-s.crown))];
  else if(profile==='pyramid')planes=[...pair('x',rise/w,base+rise),...pair('z',rise/h,base+rise)];
  else {planes=pair(cross,rise/span,base+rise);if(profile==='half-hip')planes.push(...pair(cross==='x'?'z':'x',rise/span,base+rise*s.shoulder+rise*(cross==='x'?h:w)/span));}
- return planes.flatMap(plane=>{let poly=domain;for(const other of planes)if(other!==plane)poly=clip(poly,[other[0]-plane[0],other[1]-plane[1],other[2]-plane[2]]);return poly.length>=3?[{partId:v.id,base,plane,polygon:[poly]}]:[];});
+ const concave=domain.some((p,i)=>{const a=domain[(i+domain.length-1)%domain.length],b=domain[(i+1)%domain.length];return (p[0]-a[0])*(b[1]-p[1])-(p[1]-a[1])*(b[0]-p[0])<-.00001;});
+ if(!concave)return planes.flatMap(plane=>{let poly=domain;for(const other of planes)if(other!==plane)poly=clip(poly,[other[0]-plane[0],other[1]-plane[1],other[2]-plane[2]]);return poly.length>=3?[{partId:v.id,base,plane,polygon:[poly]}]:[];});
+ // Convex triangles from the concave boundary can be clipped independently.
+ // This avoids coincident-edge failures in polygon booleans at eave offsets.
+ const triangles=ShapeUtils.triangulateShape(domain.map(p=>new Vector2(...p)),[]);
+ return planes.flatMap(plane=>triangles.flatMap(indices=>{let poly=indices.map(i=>domain[i]);for(const other of planes)if(other!==plane)poly=clip(poly,[other[0]-plane[0],other[1]-plane[1],other[2]-plane[2]]);return poly.length>=3&&Math.abs(poly.reduce((sum,p,i)=>{const q=poly[(i+1)%poly.length];return sum+p[0]*q[1]-p[1]*q[0];},0))>1e-8?[{partId:v.id,base,plane,polygon:[poly]}]:[];}));
 }
 function splitRoofEdges(rings:Point[][],faces:StudioRoofFace[]){
  const result:[Point,Point][]=[],vertices=faces.flatMap(f=>f.polygon.flat());
@@ -86,7 +92,7 @@ function buildingLayers(r:StudioRecipe,d:CityBuildingDesignV3,floors?:SculptReso
   layers.push({bottom,top,polygons,wallEnvelope:cachedWallTileEnvelope(polygons)});keys.push(key);
  };
  if(floors){for(const f of floors)add(f.bottom,f.top,f.polygons);return layers;}
- const parts=r.volumes.map(v=>({v,bottom:sculptFloorBottom(v.startFloor,d.groundHeight),top:sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight)}));
+ const parts=r.volumes.map(v=>({v,bottom:sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight),top:sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight)}));
  const heights=[...new Set(parts.flatMap(p=>[p.bottom,p.top]))].sort((a,b)=>a-b);
  for(let i=0;i<heights.length-1;i++){
   const bottom=heights[i],top=heights[i+1],mid=(bottom+top)/2,active=parts.filter(p=>p.bottom<mid&&p.top>mid);
@@ -135,13 +141,13 @@ export function connectedStudioRoofs(r:StudioRecipe,d:CityBuildingDesignV3,floor
   const connection=roofChoice(r,face.partId).settings.connection,host=r.volumes.find(v=>v.id===face.partId)!;
   if(connection!=='auto')for(const other of r.volumes){
    if(other.id===host.id||other.operation!=='add')continue;
-   const top=sculptFloorTop(other.startFloor+other.spanFloors-1,d.groundHeight),bottom=sculptFloorBottom(other.startFloor,d.groundHeight);
+   const top=sculptFloorTop(other.startFloor+other.spanFloors-1,d.groundHeight,d.upperHeight),bottom=sculptFloorBottom(other.startFloor,d.groundHeight,d.upperHeight);
    const priority=other.width*other.depth-host.width*host.depth||other.x-host.x||other.z-host.z||other.width-host.width||other.depth-host.depth||host.id.localeCompare(other.id);
    const yields=top>face.base+.001||Math.abs(top-face.base)<.001&&(roofChoice(r,other.id).settings.connection==='auto'||priority>0);
    if(yields&&bottom<=face.base+.001)domain=difference(domain,region(footprint(other,ROOF_WALL_CLEARANCE+(connection==='separate'?.035:0))));
   }
 
-  for(const cut of r.volumes.filter(v=>v.operation==='subtract'))if(sculptFloorTop(cut.startFloor+cut.spanFloors-1,d.groundHeight)>=face.base-.01&&sculptFloorBottom(cut.startFloor,d.groundHeight)<=face.base+.01)domain=difference(domain,region(footprint(cut)));
+  for(const cut of r.volumes.filter(v=>v.operation==='subtract'))if(sculptFloorTop(cut.startFloor+cut.spanFloors-1,d.groundHeight,d.upperHeight)>=face.base-.01&&sculptFloorBottom(cut.startFloor,d.groundHeight,d.upperHeight)<=face.base+.01)domain=difference(domain,region(footprint(cut)));
   let cells=fragments(face,domain);for(const layer of layers)cells=cells.flatMap(cell=>subtractLayer(cell,layer));return cells;
  });
  const faces:StudioRoofFace[]=[];

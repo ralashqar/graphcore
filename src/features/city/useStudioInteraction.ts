@@ -1,3 +1,6 @@
+import {STAMP_MAP} from '../../domain/cityStorefrontStamps';
+import {expandBuildingVariation,previewStorefront} from '../../domain/cityBuildingVariation';
+import {STUDIO_MODULE_MAP} from '../../domain/cityStudioCatalog';
 import {connectedRoofParts,editStudioRoof,roofChoice} from '../../domain/cityStudioRoofEnvelope';
 import {preparedStudioPlot} from './cityStudioRegistry';
 import {prepareSculpt} from './citySculptService';
@@ -11,31 +14,39 @@ import type {StudioAssemblyKind,StudioBay,StudioChannel,StudioRecipe,StudioFurni
 import type {CityLandController} from './useCityLand';
 import {clearSculptPreview,setSculptPreview} from './citySculptPreview';
 import {interiorContains} from '../../domain/cityStudioInteriors';
+import {bevelOutlineCorner,outlineEdges,outlineFastCheck,pullOutlineEdge,pullOutlineSection,recessOutlineCorner} from '../../domain/cityStudioOutline';
+import {sculptPrimitiveBoundary} from '../../domain/citySculpt';
 
-export type StudioTool='roof'|'select'|'block'|'round'|'oval'|'cut'|'opening'|'surface'|'interior-room'|'interior-partition'|'interior-door'|'interior-stair'|'interior-furniture'|StudioAssemblyKind;
+export type StudioTool='roof'|'select'|'outline'|'block'|'round'|'oval'|'cut'|'opening'|'surface'|'interior-room'|'interior-partition'|'interior-door'|'interior-stair'|'interior-furniture'|StudioAssemblyKind;
 export type StudioHandle='roof-rise'|'roof-eave'|'roof-crown'|'move'|'east'|'west'|'north'|'south'|'height'|'lift';
-export type StudioInteractionOptions={land:CityLandController;plot:LandPlot;draft:LandDraft;recipe:StudioRecipe|null;camera:PerspectiveCamera;tool:StudioTool;setTool:(t:StudioTool)=>void;floor:number;opening:string;scope:'spot'|'wall'|'part';channel:StudioChannel;color:string;texture:string;erase:boolean;eyedropper:boolean;onSample:(b:StudioBay)=>void;destination:number;exitKind:'door'|'balcony'|'terrace';layout:'auto'|'straight'|'switchback';flip:boolean;look:'simple'|'ornate';interiorEditId:string|null;interiorDoorStyle:'panelled'|'glazed';interiorDoorHinge:'left'|'right';furnitureKind:StudioFurnitureKind;furnitureRotation:number;onRoomSelect:(id:string|null)=>void;walking:boolean;roofConnected:boolean;onRoofSelect:()=>void};
-type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;draw:boolean;stroke:boolean;interior?:'partition'|'stair';detail?:string;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean};
+export type StudioInteractionOptions={land:CityLandController;plot:LandPlot;draft:LandDraft;recipe:StudioRecipe|null;camera:PerspectiveCamera;tool:StudioTool;setTool:(t:StudioTool)=>void;outlineCornerMode:'bevel'|'recess';outlineEdgeMode:'whole'|'bay';floor:number;opening:string;scope:'spot'|'wall'|'part';channel:StudioChannel;color:string;texture:string;erase:boolean;eyedropper:boolean;onSample:(b:StudioBay)=>void;destination:number;exitKind:'door'|'balcony'|'terrace';layout:'auto'|'straight'|'switchback';flip:boolean;look:'simple'|'ornate';detailModule:string;interiorEditId:string|null;interiorDoorStyle:'panelled'|'glazed';interiorDoorHinge:'left'|'right';furnitureKind:StudioFurnitureKind;furnitureRotation:number;onRoomSelect:(id:string|null)=>void;walking:boolean;roofConnected:boolean;onRoofSelect:()=>void};
+type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;outline?:{kind:'edge'|'section'|'corner';index:number;id:string;sourceU?:number;cornerMode:'bevel'|'recess'};draw:boolean;stroke:boolean;interior?:'partition'|'stair';detail?:string;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean};
+export type StudioWallGhost={a:[number,number];b:[number,number];floor:number;bottom:number;height:number;valid:boolean;reason:string};
+export type StudioOutlineGhost={volume:SculptVolume;valid:boolean;reason:string};
 const snap=(v:number,step=.25)=>Math.round(v/step)*step;
-export function studioHandles(v:SculptVolume,groundHeight:number):{id:StudioHandle;point:Vector3}[]{
- const bottom=sculptFloorBottom(v.startFloor,groundHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight),mid=(bottom+top)/2;
- return [{id:'move',point:new Vector3(v.x,top+.5,v.z)},{id:'east',point:new Vector3(v.x+v.width/2,mid,v.z)},{id:'west',point:new Vector3(v.x-v.width/2,mid,v.z)},{id:'north',point:new Vector3(v.x,mid,v.z+v.depth/2)},{id:'south',point:new Vector3(v.x,mid,v.z-v.depth/2)},{id:'height',point:new Vector3(v.x-v.width*.3,top+.2,v.z-v.depth*.3)},{id:'lift',point:new Vector3(v.x+v.width*.3,top+1.4,v.z-v.depth*.3)}];
+export function studioHandles(v:SculptVolume,groundHeight:number,upperHeight=3):{id:StudioHandle;point:Vector3}[]{
+ const bottom=sculptFloorBottom(v.startFloor,groundHeight,upperHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight,upperHeight),mid=(bottom+top)/2;
+ return [{id:'move',point:new Vector3(v.x,top+.5,v.z)},...(v.kind==='polygon'?[]:[{id:'east' as StudioHandle,point:new Vector3(v.x+v.width/2,mid,v.z)},{id:'west' as StudioHandle,point:new Vector3(v.x-v.width/2,mid,v.z)},{id:'north' as StudioHandle,point:new Vector3(v.x,mid,v.z+v.depth/2)},{id:'south' as StudioHandle,point:new Vector3(v.x,mid,v.z-v.depth/2)}]),{id:'height',point:new Vector3(v.x-v.width*.3,top+.2,v.z-v.depth*.3)},{id:'lift',point:new Vector3(v.x+v.width*.3,top+1.4,v.z-v.depth*.3)}];
 }
+export function studioOutlineHandles(v:SculptVolume,groundHeight:number,exposed?:Set<string>,edgeMode:'whole'|'bay'='whole',bays:StudioBay[]=[],upperHeight=3){if(v.kind==='ellipse')return [];const y=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight,upperHeight)+.3,points=sculptPrimitiveBoundary(v),edges=outlineEdges(v),visible=(side:string)=>!exposed||exposed.has(side),edgeHandles=edgeMode==='bay'?bays.filter(b=>b.anchor.shapeId===v.id&&b.anchor.floor===v.startFloor+v.spanFloors-1).flatMap(b=>{const edge=edges.find(edge=>edge.side===b.anchor.side);return edge&&edge.length>=3?[{id:`section-${edge.index}-${b.id}`,kind:'section' as const,index:edge.index,sourceU:b.anchor.u,point:new Vector3(b.x,y,b.z)}]:[];}):edges.filter(edge=>visible(edge.side)).map(edge=>({id:`edge-${edge.index}`,kind:'edge' as const,index:edge.index,point:new Vector3((edge.a[0]+edge.b[0])/2,y,(edge.a[1]+edge.b[1])/2)}));return [...edgeHandles,...points.flatMap((p,index)=>visible(edges[index].side)&&visible(edges[(index+edges.length-1)%edges.length].side)?[{id:`corner-${index}`,kind:'corner' as const,index,point:new Vector3(p[0],y,p[1])}]:[])];}
 
-export function studioRoofHandles(v:SculptVolume,groundHeight:number,r:StudioRecipe){const s=roofChoice(r,v.id).settings,top=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight);if(['flat','terrace'].includes(roofChoice(r,v.id).type))return [];return [{id:'roof-rise' as StudioHandle,point:new Vector3(v.x,top+s.rise+.3,v.z)},{id:'roof-eave' as StudioHandle,point:new Vector3(v.x+v.width/2+s.overhang,top+.2,v.z)},{id:'roof-crown' as StudioHandle,point:new Vector3(v.x-v.width*s.crown/2,top+s.rise+.2,v.z)}].filter(h=>h.id!=='roof-crown'||['mansard','gambrel'].includes(roofChoice(r,v.id).type));}
+export function studioRoofHandles(v:SculptVolume,groundHeight:number,r:StudioRecipe,upperHeight=3){const s=roofChoice(r,v.id).settings,top=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight,upperHeight);if(['flat','terrace'].includes(roofChoice(r,v.id).type))return [];return [{id:'roof-rise' as StudioHandle,point:new Vector3(v.x,top+s.rise+.3,v.z)},{id:'roof-eave' as StudioHandle,point:new Vector3(v.x+v.width/2+s.overhang,top+.2,v.z)},{id:'roof-crown' as StudioHandle,point:new Vector3(v.x-v.width*s.crown/2,top+s.rise+.2,v.z)}].filter(h=>h.id!=='roof-crown'||['mansard','gambrel'].includes(roofChoice(r,v.id).type));}
 
 export function useStudioInteraction(options:StudioInteractionOptions){
  const {gl,invalidate}=useThree(),current=useRef(options);current.current=options;
  const [hover,setHover]=useState<StudioBay|null>(null),[issue,setIssue]=useState(''),[transient,setTransient]=useState<StudioRecipe|null>(null),[active,setActive]=useState(false),[touchPending,setTouchPending]=useState(false);
+ const [wallGhost,setWallGhost]=useState<StudioWallGhost|null>(null);
+ const [outlineGhost,setOutlineGhost]=useState<StudioOutlineGhost|null>(null);
+ const [hoverOutline,setHoverOutline]=useState<string|null>(null);
  const commitTicket=useRef(0),validating=useRef(false);
  const gesture=useRef<Gesture|null>(null),pendingTouch=useRef<Gesture|null>(null),lastPreview=useRef(0);
- const bays=useMemo(()=>options.recipe?studioBays(options.recipe,options.draft.design):[],[options.recipe,options.draft.design]);
+ const bays=useMemo(()=>options.recipe?studioBays(expandBuildingVariation(options.recipe,options.draft.design).recipe,options.draft.design):[],[options.recipe,options.draft.design]);
  const baysRef=useRef(bays);baysRef.current=bays;
  const plot=options.plot,center=landPosition(plot),scale=plot.size/24;
  const transform=useMemo(()=>new Matrix4().compose(new Vector3(center.x,0,center.z),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),plot.rotation*Math.PI/2),new Vector3(scale,scale,scale)),[plot.id,plot.rotation,scale]);
  const inverse=useMemo(()=>transform.clone().invert(),[transform]);
- const cancel=()=>{commitTicket.current++;validating.current=false;gesture.current=null;pendingTouch.current=null;setActive(false);setTouchPending(false);setTransient(null);clearSculptPreview(plot.id);setIssue('');};
- const commit=async(g:Gesture)=>{const o=current.current,ticket=++commitTicket.current;if(g.detail&&g.changed){validating.current=true;setActive(true);try{const result=await prepareSculpt(g.next,studioDraft(o.draft,g.next).design,true);const invalid=result.studio?.inactive.find(a=>a.id===g.detail);if(invalid)g.invalid=invalid.reason;else {const route=result.studio?.accessRoutes?.find(a=>a.id===g.detail),assembly=g.next.studio.assemblies.find(a=>a.id===g.detail);if(route&&assembly){assembly.exit=route.exit;assembly.exitKind=route.kind;}}}catch(e){g.invalid=e instanceof Error?e.message:String(e);}finally{if(ticket===commitTicket.current){validating.current=false;setActive(false);}}}if(ticket!==commitTicket.current)return;const error=checkStudioDraft(o.draft,g.next)||g.invalid;if(error){setIssue(error);clearSculptPreview(plot.id);}else if(g.changed){clearSculptPreview(plot.id,true);o.land.edit(studioDraft(o.draft,g.next));if(g.volume){o.land.setSelectedVolume(g.volume.id);o.setTool(g.handle?.startsWith('roof-')?'roof':'select');}setIssue('');}else clearSculptPreview(plot.id);setTransient(null);setTouchPending(false);pendingTouch.current=null;};
+ const cancel=()=>{commitTicket.current++;validating.current=false;gesture.current=null;pendingTouch.current=null;setActive(false);setTouchPending(false);setTransient(null);setWallGhost(null);setOutlineGhost(null);clearSculptPreview(plot.id);setIssue('');};
+ const commit=async(g:Gesture)=>{const o=current.current,ticket=++commitTicket.current;if(g.detail&&g.changed){validating.current=true;setActive(true);try{const result=await prepareSculpt(g.next,studioDraft(o.draft,g.next).design,true);const invalid=result.studio?.inactive.find(a=>a.id===g.detail);if(invalid)g.invalid=invalid.reason;else {const route=result.studio?.accessRoutes?.find(a=>a.id===g.detail),assembly=g.next.studio.assemblies.find(a=>a.id===g.detail);if(route&&assembly){assembly.exit=route.exit;assembly.exitKind=route.kind;}}}catch(e){g.invalid=e instanceof Error?e.message:String(e);}finally{if(ticket===commitTicket.current){validating.current=false;setActive(false);}}}if(ticket!==commitTicket.current)return;const error=checkStudioDraft(o.draft,g.next)||g.invalid;if(error){setIssue(error);clearSculptPreview(plot.id);}else if(g.changed){clearSculptPreview(plot.id,true);o.land.edit(studioDraft(o.draft,g.next));if(g.volume){o.land.setSelectedVolume(g.volume.id);o.setTool(g.outline?'outline':g.handle?.startsWith('roof-')?'roof':'select');}setIssue('');}else clearSculptPreview(plot.id);setTransient(null);setWallGhost(null);setOutlineGhost(null);setTouchPending(false);pendingTouch.current=null;};
  useEffect(()=>{
   const canvas=gl.domElement,raycaster=new Raycaster(),mouse=new Vector2(),point=new Vector3();
   const ray=(x:number,y:number)=>{const rect=canvas.getBoundingClientRect();mouse.set((x-rect.left)/rect.width*2-1,-(y-rect.top)/rect.height*2+1);raycaster.setFromCamera(mouse,current.current.camera);return raycaster.ray.clone().applyMatrix4(inverse);};
@@ -46,17 +57,28 @@ export function useStudioInteraction(options:StudioInteractionOptions){
    let best={x,z,distance:Infinity};for(const [a,b] of segments){const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1))),px=a[0]+dx*t,pz=a[1]+dz*t,distance=Math.hypot(x-px,z-pz);if(distance<best.distance)best={x:px,z:pz,distance};}return best;
   };
   const hitBay=(x:number,y:number)=>{const r=ray(x,y);let hit:StudioBay|null=null,distance=Infinity;for(const bay of baysRef.current){const normal=new Vector3(Math.sin(bay.rotation),0,Math.cos(bay.rotation));if(r.direction.dot(normal)>=0)continue;const p=r.intersectPlane(new Plane().setFromNormalAndCoplanarPoint(normal,new Vector3(bay.x,bay.y,bay.z)),point);if(!p||p.y<bay.y||p.y>bay.y+bay.height)continue;const u=(p.x-bay.x)*Math.cos(bay.rotation)-(p.z-bay.z)*Math.sin(bay.rotation);const dist=p.distanceTo(r.origin);if(Math.abs(u)<=bay.width/2+.01&&dist<distance){distance=dist;hit=bay;}}return hit;};
+  const outlineHit=(v:SculptVolume,x:number,y:number)=>{const o=current.current,rect=canvas.getBoundingClientRect(),exposed=new Set(baysRef.current.filter(b=>b.anchor.shapeId===v.id).map(b=>b.anchor.side));let best:{id:string;kind:'edge'|'section'|'corner';index:number;sourceU?:number;point:Vector3;distance:number}|null=null;for(const h of studioOutlineHandles(v,o.draft.design.groundHeight,exposed,o.outlineEdgeMode,baysRef.current,o.draft.design.upperHeight)){const p=h.point.clone().applyMatrix4(transform).project(o.camera),distance=Math.hypot(x-rect.left-(p.x+1)*rect.width/2,y-rect.top-(1-p.y)*rect.height/2);if(distance<20&&(!best||distance<best.distance))best={...h,distance};}return best;};
+  const sectionConflict=(r:StudioRecipe,v:SculptVolume,side:string)=>r.studio.openings.some(item=>item.anchor.shapeId===v.id&&item.anchor.side===side)||r.studio.surfaces.some(item=>item.anchor.shapeId===v.id&&item.anchor.side===side)||r.studio.assemblies.some(item=>[...item.anchors,...(item.exit?[item.exit]:[])].some(anchor=>anchor.shapeId===v.id&&anchor.side===side))||r.attachments.some(item=>item.anchor?.shapeId===v.id&&item.anchor.side===side)||r.tileAnchors?.some(item=>item.volumeId===v.id&&item.side===side)||baysRef.current.some(b=>b.entrance&&b.anchor.shapeId===v.id&&b.anchor.side===side);
+  const detailedPreview=(g:Gesture)=>{const o=current.current,now=performance.now();if(now-lastPreview.current<150)return;lastPreview.current=now;setSculptPreview(o.plot.id,g.next,studioDraft(o.draft,g.next).design);invalidate();};
   const preview=(g:Gesture)=>{const o=current.current;g.invalid=checkStudioDraft(o.draft,g.next);setIssue(g.invalid??'');setTransient(g.next);const now=performance.now();if(!g.invalid&&now-lastPreview.current>85){lastPreview.current=now;const draft=studioDraft(o.draft,g.next);setSculptPreview(o.plot.id,g.next,draft.design);if(g.detail)void prepareSculpt(g.next,draft.design,true).then(result=>{if(gesture.current!==g)return;const invalid=result.studio?.inactive.find(a=>a.id===g.detail);setIssue(invalid?.reason??'');}).catch(()=>{});}invalidate();};
   const stroke=(g:Gesture,bay:StudioBay|null)=>{if(!bay||g.visited.has(bay.id))return;const o=current.current;g.visited.add(bay.id);o.land.setSelectedVolume(bay.anchor.shapeId);
    if(o.tool==='opening'){
+    if(STAMP_MAP.has(o.opening)&&!o.erase){const fit=previewStorefront(g.next,o.draft.design,o.opening,bay.anchor);if(fit.reason){setIssue(fit.reason);return;}g.next=fit.recipe;fit.run.forEach(b=>g.visited.add(b.id));g.detail=g.next.studio.stamps!.at(-1)!.id;g.changed=true;preview(g);return;}
+    if(g.next.studio.stamps?.some(s=>s.anchor.shapeId===bay.anchor.shapeId&&s.anchor.side===bay.anchor.side&&s.anchor.floor===bay.anchor.floor&&bay.anchor.u>=s.anchor.u-bay.anchorSpan*.5&&bay.anchor.u<=s.anchor.u+((STAMP_MAP.get(s.stamp)?.span??1)-.5)*bay.anchorSpan)){setIssue('Unpack this storefront in Variations before editing its individual tiles.');return;}
     if(bay.entrance&&(o.erase||!o.opening.startsWith('door-'))){setIssue('Keep a door at the main entrance.');return;}
     g.next={...g.next,studio:{...g.next.studio,openings:g.next.studio.openings.filter(p=>!(p.anchor.shapeId===bay.anchor.shapeId&&p.anchor.side===bay.anchor.side&&p.anchor.floor===bay.anchor.floor&&Math.abs(p.anchor.u-bay.anchor.u)<.025))}};
-    if(!o.erase)g.next.studio.openings.push({id:crypto.randomUUID(),anchor:bay.anchor,module:o.opening});
+    if(!o.erase){
+     const span=STUDIO_MODULE_MAP.get(o.opening)?.baySpan??1,id=crypto.randomUUID();
+     const anchor={...bay.anchor};
+     if(span>1&&!bay.id.startsWith('opening/'))anchor.u=Math.min(1-bay.anchorSpan*span/2,anchor.u+bay.anchorSpan*(span-1)/2);
+     g.next.studio.openings.push({id,anchor,module:o.opening,...(span>1?{span}:{})});
+     g.detail=id;
+    }
    }else if(o.tool==='surface')g.next=paintStudio(g.next,bay.anchor,o.scope,o.channel,o.erase?null:{color:o.color,texture:o.texture||undefined});
    else if(g.detail){const assembly=g.next.studio.assemblies.find(a=>a.id===g.detail)!;
     if(assembly.kind==='balcony'&&(bay.anchor.floor===0||!bay.module.startsWith('window-')&&!bay.module.startsWith('door-'))){setIssue('Start on an upper-floor opening.');return;}
     if(['balcony','canopy','stair'].includes(assembly.kind)&&bay.anchor.side==='curve'){setIssue('Choose a straight wall.');return;}
-    if(assembly.kind==='canopy'&&!bay.module.startsWith('door-')&&bay.module!=='window-shop'){setIssue('A canopy belongs above a door or storefront.');return;}
+    if(assembly.kind==='canopy'&&!bay.module.startsWith('door-')&&!bay.module.includes('shop')){setIssue('A canopy belongs above a door or storefront.');return;}
     const previous=assembly.anchors.at(-1),last=previous&&baysRef.current.find(b=>b.anchor===previous);
     if(last&&(bay.anchor.floor!==last.anchor.floor||Math.hypot(last.x-bay.x,last.z-bay.z)>(last.width+bay.width)/2+.2)){setIssue('Follow neighbouring bays on the same storey.');return;}
     if(assembly.kind==='stair'&&assembly.anchors.length)return;
@@ -67,9 +89,9 @@ export function useStudioInteraction(options:StudioInteractionOptions){
   const down=(e:PointerEvent)=>{
    const o=current.current;if(o.walking||!o.recipe||e.button!==0||pendingTouch.current||validating.current)return;
    const r=o.recipe,chosen=r.volumes.find(v=>v.id===o.land.selectedVolume);let handle:StudioHandle|undefined;
-   if(r.version===6&&o.tool==='interior-room'){const point=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight)+.04);const room=point&&preparedStudioPlot(o.plot.id)?.result.interiorLevels?.[o.floor]?.rooms.find(room=>interiorContains([room.polygon],point.x,point.z));o.onRoomSelect(room?.id??null);setIssue(room?'':'Choose a covered room on this floor.');e.preventDefault();return;}
+   if(r.version===6&&o.tool==='interior-room'){const point=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight,o.draft.design.upperHeight)+.04);const room=point&&preparedStudioPlot(o.plot.id)?.result.interiorLevels?.[o.floor]?.rooms.find(room=>interiorContains([room.polygon],point.x,point.z));o.onRoomSelect(room?.id??null);setIssue(room?'':'Choose a covered room on this floor.');e.preventDefault();return;}
    if(r.version===6&&['interior-partition','interior-door','interior-stair','interior-furniture'].includes(o.tool)){
-    const start=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight)+.04);if(!start)return;
+    const start=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight,o.draft.design.upperHeight)+.04);if(!start)return;
     const next=structuredClone(r),id=o.interiorEditId&&((o.tool==='interior-partition'&&r.interior.partitions.some(p=>p.id===o.interiorEditId))||(o.tool==='interior-stair'&&r.interior.stairs.some(s=>s.id===o.interiorEditId)))?o.interiorEditId:crypto.randomUUID(),g:Gesture={pointer:e.pointerId,startX:e.clientX,startY:e.clientY,start,base:r,next,draw:false,stroke:false,visited:new Set(),changed:false,invalid:null,touch:e.pointerType==='touch',detail:id};
     if(o.tool==='interior-furniture'){
      next.interior.furniture=[...(next.interior.furniture??[]),{id,floor:o.floor,kind:o.furnitureKind,x:snap(start.x),z:snap(start.z),rotation:o.furnitureRotation}];g.changed=true;void commit(g);return;
@@ -79,11 +101,21 @@ export function useStudioInteraction(options:StudioInteractionOptions){
      if(!nearest){setIssue('Choose an interior partition for this door.');return;}
      next.interior.doors=next.interior.doors.filter(d=>d.partitionId!==nearest.id);next.interior.doors.push({id,partitionId:nearest.id,u:nearest.u,style:o.interiorDoorStyle,hinge:o.interiorDoorHinge});g.changed=true;void commit(g);return;
     }
-    if(o.tool==='interior-partition'){const p=snapInterior(r,o.floor,start.x,start.z);if(p.distance>.55){setIssue('Start on an outside or interior wall.');return;}g.interior='partition';g.start.set(p.x,start.y,p.z);next.interior.partitions=next.interior.partitions.filter(item=>item.id!==id);next.interior.partitions.push({id,floor:o.floor,a:[p.x,p.z],b:[p.x+1.25,p.z]});}
+    if(o.tool==='interior-partition'){const p=snapInterior(r,o.floor,start.x,start.z);if(p.distance>.55){setIssue('Start on an outside or interior wall.');return;}g.interior='partition';g.start.set(p.x,start.y,p.z);next.interior.partitions=next.interior.partitions.filter(item=>item.id!==id);next.interior.partitions.push({id,floor:o.floor,a:[p.x,p.z],b:[p.x+1.25,p.z]});setWallGhost({a:[p.x,p.z],b:[p.x,p.z],floor:o.floor,bottom:start.y,height:o.floor?2.82:o.draft.design.groundHeight-.18,valid:false,reason:'Drag to another wall'});}
     else {if(o.floor>=Math.max(1,...r.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors))-1){setIssue('Choose a floor with another storey above it.');return;}g.interior='stair';next.interior.stairs=next.interior.stairs.filter(item=>item.id!==id);next.interior.stairs.push({id,floor:o.floor,x:snap(start.x),z:snap(start.z),rotation:0,layout:o.layout,flip:o.flip});}
     gesture.current=g;setActive(true);setIssue('');canvas.setPointerCapture(e.pointerId);e.preventDefault();return;
    }
-   if((o.tool==='select'||o.tool==='roof')&&chosen){const rect=canvas.getBoundingClientRect();for(const h of o.tool==='roof'?studioRoofHandles(chosen,o.draft.design.groundHeight,r):studioHandles(chosen,o.draft.design.groundHeight)){const p=h.point.clone().applyMatrix4(transform).project(o.camera);if(Math.hypot(e.clientX-rect.left-(p.x+1)*rect.width/2,e.clientY-rect.top-(1-p.y)*rect.height/2)<18){handle=h.id;break;}}}
+   if(o.tool==='outline'){
+    if(!chosen){setIssue('Choose a part first.');return;}
+    if(chosen.kind==='ellipse'||chosen.operation==='subtract'){setIssue('Outline sculpting works on solid block parts.');return;}
+    const hit=outlineHit(chosen,e.clientX,e.clientY);
+    if(!hit)return;
+    if(hit.kind==='section'&&sectionConflict(r,chosen,outlineEdges(chosen)[hit.index].side)){setIssue('This wall has a door, paint or detail. Pull the whole wall to keep its attachments.');return;}
+    const start=ground(e.clientX,e.clientY,hit.point.y);if(!start)return;
+    const g:Gesture={pointer:e.pointerId,startX:e.clientX,startY:e.clientY,start,base:r,next:structuredClone(r),volume:chosen,outline:{kind:hit.kind,index:hit.index,id:crypto.randomUUID(),sourceU:hit.sourceU,cornerMode:o.outlineCornerMode},draw:false,stroke:false,detail:`outline/${chosen.id}`,visited:new Set(),changed:false,invalid:null,touch:e.pointerType==='touch'};
+    gesture.current=g;setOutlineGhost({volume:chosen,valid:true,reason:''});setActive(true);setIssue('');canvas.setPointerCapture(e.pointerId);e.preventDefault();return;
+   }
+   if((o.tool==='select'||o.tool==='roof')&&chosen){const rect=canvas.getBoundingClientRect();for(const h of o.tool==='roof'?studioRoofHandles(chosen,o.draft.design.groundHeight,r,o.draft.design.upperHeight):studioHandles(chosen,o.draft.design.groundHeight,o.draft.design.upperHeight)){const p=h.point.clone().applyMatrix4(transform).project(o.camera);if(Math.hypot(e.clientX-rect.left-(p.x+1)*rect.width/2,e.clientY-rect.top-(1-p.y)*rect.height/2)<18){handle=h.id;break;}}}
    const draw=['block','round','oval','cut'].includes(o.tool),bay=hitBay(e.clientX,e.clientY);
    if(o.eyedropper&&bay&&o.tool==='surface'){o.onSample(bay);return;}
    if(!handle&&!draw&&(o.tool==='select'||o.tool==='roof')){
@@ -93,31 +125,40 @@ export function useStudioInteraction(options:StudioInteractionOptions){
     const roofFaces=preparedStudioPlot(o.plot.id)?.result.roofFaces;
     const inside=(p:Vector3,ring:[number,number][])=>{let yes=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>p.z)!==(b[1]>p.z)&&p.x<(b[0]-a[0])*(p.z-a[1])/(b[1]-a[1])+a[0])yes=!yes;}return yes;};
     for(const f of roofFaces??[]){const normal=new Vector3(-f.plane[0],1,-f.plane[1]),plane=new Plane(normal,-f.plane[2]).normalize(),p=rayAt.intersectPlane(plane,new Vector3());if(p&&rayAt.direction.dot(normal)<0&&inside(p,f.polygon[0])&&!f.polygon.slice(1).some(ring=>inside(p,ring))&&p.distanceTo(rayAt.origin)<distance){picked=f.partId;distance=p.distanceTo(rayAt.origin);roofPicked=true;}}
-    for(const v of r.volumes.filter(v=>v.operation==='add'&&!roofFaces)){const top=v.startFloor+v.spanFloors-1,p=ground(e.clientX,e.clientY,sculptFloorTop(top,o.draft.design.groundHeight));if(!p||!contains(v,p)||p.distanceTo(rayAt.origin)>=distance)continue;
+    for(const v of r.volumes.filter(v=>v.operation==='add'&&!roofFaces)){const top=v.startFloor+v.spanFloors-1,p=ground(e.clientX,e.clientY,sculptFloorTop(top,o.draft.design.groundHeight,o.draft.design.upperHeight));if(!p||!contains(v,p)||p.distanceTo(rayAt.origin)>=distance)continue;
      if(r.volumes.some(c=>c.operation==='subtract'&&c.startFloor<=top&&c.startFloor+c.spanFloors>top&&contains(c,p)))continue;
      picked=v.id;distance=p.distanceTo(rayAt.origin);roofPicked=true;
     }
     o.land.setSelectedVolume(picked);if(roofPicked)o.onRoofSelect();setHover(bay);return;
    }
    if(!draw&&!handle&&!bay)return;
-   const start=ground(e.clientX,e.clientY,handle&&chosen?sculptFloorBottom(chosen.startFloor,o.draft.design.groundHeight):sculptFloorBottom(o.floor,o.draft.design.groundHeight));if(!start)return;
+   const start=ground(e.clientX,e.clientY,handle&&chosen?sculptFloorBottom(chosen.startFloor,o.draft.design.groundHeight,o.draft.design.upperHeight):sculptFloorBottom(o.floor,o.draft.design.groundHeight,o.draft.design.upperHeight));if(!start)return;
    const limit=sculptBuildLimit(o.plot.size);if(draw&&(Math.abs(start.x)>limit-1||Math.abs(start.z)>limit-1)){setIssue('Start inside your plot.');return;}
    const volume=draw?{id:crypto.randomUUID(),kind:o.tool==='round'||o.tool==='oval'?'ellipse' as const:'rectangle' as const,operation:o.tool==='cut'||e.altKey?'subtract' as const:'add' as const,x:snap(start.x),z:snap(start.z),width:4,depth:4,startFloor:o.floor,spanFloors:1}:chosen;
    const next=structuredClone(r),g:Gesture={pointer:e.pointerId,startX:e.clientX,startY:e.clientY,start,base:r,next,volume,handle,draw,stroke:!draw&&!handle,visited:new Set(),changed:draw,invalid:null,touch:e.pointerType==='touch'};
    if(draw&&volume){next.volumes.push(volume);if(chosen&&r.studio.parts[chosen.id])next.studio.parts[volume.id]=structuredClone(r.studio.parts[chosen.id]);}
-   if(g.stroke&&!['opening','surface'].includes(o.tool)){g.detail=crypto.randomUUID();next.studio.assemblies.push({id:g.detail,kind:o.tool as StudioAssemblyKind,anchors:[],look:o.look,destination:o.destination,exitKind:o.tool==='stair'?o.exitKind:undefined,layout:o.tool==='stair'?o.layout:undefined,flip:o.flip});}
+   if(g.stroke&&!['opening','surface'].includes(o.tool)){g.detail=crypto.randomUUID();next.studio.assemblies.push({id:g.detail,kind:o.tool as StudioAssemblyKind,anchors:[],look:o.look,module:o.tool==='ornament'?o.detailModule||undefined:undefined,variant:['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)?'nyc':undefined,destination:o.destination,exitKind:o.tool==='stair'?o.exitKind:undefined,layout:o.tool==='stair'?o.layout:undefined,flip:o.flip});}
    gesture.current=g;setActive(true);setIssue('');canvas.setPointerCapture(e.pointerId);e.preventDefault();
    if(g.stroke)stroke(g,bay);else if(draw)preview(g);
   };
   const move=(e:PointerEvent)=>{
-   const o=current.current;if(o.walking)return;const bay=hitBay(e.clientX,e.clientY);setHover(prev=>prev?.id===bay?.id?prev:bay);
-   const g=gesture.current;if(!g||g.pointer!==e.pointerId)return;
+   const o=current.current;if(o.walking)return;const g=gesture.current,bay=g&&(g.outline||g.interior)?null:hitBay(e.clientX,e.clientY);if(!g?.outline&&!g?.interior)setHover(prev=>prev?.id===bay?.id?prev:bay);if(!g&&o.tool==='outline'){const chosen=o.recipe?.volumes.find(v=>v.id===o.land.selectedVolume),hit=chosen&&outlineHit(chosen,e.clientX,e.clientY);setHoverOutline(previous=>previous===hit?.id?previous:hit?.id??null);}
+   if(!g||g.pointer!==e.pointerId)return;
    if(g.interior&&g.next.version===6){const p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;
-    if(g.interior==='partition'){const end=snapInterior(g.base,o.floor,p.x,p.z),line=g.next.interior.partitions.find(item=>item.id===g.detail);if(!line)return;if(end.distance>.55){setIssue('End on an outside or interior wall.');return;}line.b=[end.x,end.z];g.changed=Math.hypot(line.a[0]-end.x,line.a[1]-end.z)>=1.25;}
+    if(g.interior==='partition'){const end=snapInterior(g.base,o.floor,p.x,p.z),line=g.next.interior.partitions.find(item=>item.id===g.detail);if(!line)return;const b:[number,number]=end.distance<=.55?[end.x,end.z]:[snap(p.x),snap(p.z)],length=Math.hypot(line.a[0]-b[0],line.a[1]-b[1]),footprint=sculptFootprint(effectiveSculptShapes(g.base,o.floor)),samples=Array.from({length:9},(_,i)=>i/10+.05),at=(t:number):[number,number]=>[line.a[0]*(1-t)+b[0]*t,line.a[1]*(1-t)+b[1]*t],contained=samples.every(t=>{const [x,z]=at(t);return interiorContains(footprint,x,z);}),floorDecks=preparedStudioPlot(o.plot.id)?.result.decks.filter(deck=>deck.id.startsWith(`interior/${o.floor}/`)&&deck.polygon)??[],covered=!floorDecks.length||samples.every(t=>{const [x,z]=at(t);return floorDecks.some(deck=>interiorContains([deck.polygon!],x,z));}),reason=end.distance>.55?'End on an outside or interior wall.':length<1.25?'Draw at least 1.25 m of wall.':g.next.interior.openFloors?.includes(o.floor)?'This floor is open to the room below.':!contained?'The wall must stay inside this floor.':!covered?'This wall crosses an open stairwell or room.':'';setWallGhost({a:line.a,b,floor:o.floor,bottom:g.start.y,height:o.floor?2.82:o.draft.design.groundHeight-.18,valid:!reason,reason});setIssue(reason);if(reason){g.changed=false;return;}line.b=b;g.changed=true;detailedPreview(g);}
     else {const stair=g.next.interior.stairs.find(item=>item.id===g.detail);if(!stair)return;const dx=p.x-g.start.x,dz=p.z-g.start.z;if(Math.hypot(dx,dz)<.4)return;stair.rotation=Math.round(Math.atan2(dx,dz)/(Math.PI/2))*Math.PI/2;g.changed=true;}
-    if(g.changed)preview(g);return;
+    if(g.changed&&g.interior!=='partition')preview(g);return;
    }
    if(g.stroke){stroke(g,bay);return;}if(!g.volume)return;
+   if(g.outline){
+    const p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;
+    const v=g.volume,edge=outlineEdges(v)[g.outline.index],corner=sculptPrimitiveBoundary(v)[g.outline.index],inward=new Vector2(v.x-corner[0],v.z-corner[1]).normalize(),delta=new Vector2(p.x-g.start.x,p.z-g.start.z),depth=Math.max(0,delta.dot(inward));
+    const distance=delta.x*edge.normal[0]+delta.y*edge.normal[1],candidate=g.outline.kind==='edge'?pullOutlineEdge(v,g.outline.index,distance):g.outline.kind==='section'?pullOutlineSection(v,g.outline.index,g.outline.sourceU??.5,distance,g.outline.id):g.outline.cornerMode==='recess'?recessOutlineCorner(v,g.outline.index,depth,g.outline.id):bevelOutlineCorner(v,g.outline.index,depth,g.outline.id);
+    const limit=g.outline.cornerMode==='recess'?10:11,reason=g.outline.kind==='corner'&&depth>=.5&&candidate===v&&v.kind==='polygon'&&(v.vertices?.length??0)>limit?'This part has reached its 12-edge detail limit.':outlineFastCheck(candidate,sculptBuildLimit(o.plot.size));setOutlineGhost({volume:candidate,valid:!reason,reason:reason??''});setIssue(reason??'');g.changed=!reason&&candidate!==v;
+    g.next={...g.next,volumes:g.next.volumes.map(part=>part.id===v.id&&g.changed?candidate:part.id===v.id?v:part)};
+    if(g.changed)detailedPreview(g);
+    return;
+   }
    if(Math.hypot(e.clientX-g.startX,e.clientY-g.startY)<4)return;
    const v=g.volume,step=e.shiftKey?.05:.25,p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;
    if(g.handle?.startsWith('roof-')){const old=roofChoice(g.base,v.id).settings,amount=(g.startY-e.clientY)*.025;const settings=g.handle==='roof-rise'?{rise:Math.max(.2,Math.min(8,snap(old.rise+amount,.05)))}:g.handle==='roof-eave'?{overhang:Math.max(0,Math.min(1.2,snap(old.overhang+(e.clientX-g.startX)*.012,.05)))}:{crown:Math.max(.15,Math.min(.75,old.crown+(e.clientX-g.startX)*.003))};g.next=editStudioRoof(g.base,o.roofConnected?connectedRoofParts(g.base,v.id):[v.id],{settings});g.changed=true;preview(g);return;}
@@ -135,5 +176,5 @@ export function useStudioInteraction(options:StudioInteractionOptions){
   const menu=(e:Event)=>e.preventDefault();canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('contextmenu',menu);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);window.addEventListener('blur',cancel);window.addEventListener('keydown',key,true);
   return()=>{commitTicket.current++;validating.current=false;canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('contextmenu',menu);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);window.removeEventListener('blur',cancel);window.removeEventListener('keydown',key,true);clearSculptPreview(plot.id);};
  },[gl,plot.id,inverse,transform]);
- return {bays,hover,issue,setIssue,transient,active,touchPending,cancel,confirm:()=>{if(pendingTouch.current)commit(pendingTouch.current);}};
+ return {bays,hover,hoverOutline,issue,setIssue,transient,wallGhost,outlineGhost,active,touchPending,cancel,confirm:()=>{if(pendingTouch.current)commit(pendingTouch.current);}};
 }

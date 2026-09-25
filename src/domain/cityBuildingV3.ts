@@ -1,4 +1,7 @@
 import {officeMasses,officeSlots,resolveOffice,type OfficeArchitecture} from "./cityOfficeArchitecture.ts";
+import {modularMasses,resolveModularBuilding} from './cityModularBuilding.ts';
+import type {ModularBuilding} from './cityVariationTypes.ts';
+import type {StudioResolved} from './cityStudioTypes.ts';
 import {assembleSynarcKit,type KitAssembly,type SynarcKitChoice} from "./citySynarcKit.ts";
 import {connectedRoof,connectedPorch,type ConnectedArchitecture,type AssemblyEnvelope} from "./cityConnectedArchitecture.ts";
 import {proceduralEntrance,type DoorFamily,type DoorSurround} from "./cityProceduralEntrances.ts";
@@ -54,6 +57,8 @@ export const COMPONENTS = [
 ] as const;
 export type ComponentId = typeof COMPONENTS[number];
 export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & GroundsChoices & ArchetypeChoices & {
+  modular?:ModularBuilding;
+  upperHeight?:number;
   synarcKit?:SynarcKitChoice;
   officeArchitecture?: OfficeArchitecture;
   connectedArchitecture?: ConnectedArchitecture;
@@ -68,7 +73,7 @@ export type CityBuildingDesignV3 = Omit<CityBuildingDesignV2, "version"> & Groun
   stairExtension?: "none" | "concrete" | "marble" | "fire-escape" | "spiral" | "straight";
   advertising?: Advertising;
   version: 3;
-  generatorRevision: "city-grammar-1" | "city-shell-2" | "city-connected-3" | "city-office-4";
+  generatorRevision: "city-grammar-1" | "city-shell-2" | "city-connected-3" | "city-office-4" | "city-variation-5";
   entranceStyle?: typeof ENTRANCE_STYLES[number];
   base: "storefront" | "lobby" | "plinth" | "residential";
   middleFloors: number;
@@ -105,6 +110,7 @@ export type Corner = {
   kind: "convex" | "concave" | "end";
 };
 export type ResolvedV3 = ResolvedDesign & {
+  studioAssembly?:StudioResolved;
   synarcKitAssembly?:KitAssembly;
   roofContours?:[number,number][][];
   assemblyEnvelopes?:AssemblyEnvelope[];
@@ -172,6 +178,8 @@ export function upgradeV3(
   });
 }
 export function normalizeV3(d: CityBuildingDesignV3): CityBuildingDesignV3 {
+  if(d.generatorRevision==='city-variation-5'&&d.modular){const volumes=d.modular.recipe.volumes,floors=Math.max(1,...volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors));return {...d,floors,middleFloors:floors-1,crown:'none',finish:'procedural',groundHeight:Math.max(3,Math.min(4.5,d.groundHeight)),upperHeight:Math.max(3,Math.min(4.5,d.upperHeight??3))};}
+  if(d.modular){d={...d};delete d.modular;delete d.upperHeight;}
   const middleFloors=d.stairExtension==="fire-escape" && d.crown==="none" ? Math.max(1,d.middleFloors) : d.middleFloors;
   return {
     ...d,
@@ -314,6 +322,7 @@ export function applyComposition(d: CityBuildingDesignV3, index: number) {
   });
 }
 export function massesV3(d: CityBuildingDesignV3): BuildingMass[] {
+  if(d.generatorRevision==='city-variation-5'&&d.modular)return modularMasses(d);
   if(d.generatorRevision==="city-office-4")return officeMasses(normalizeV3(d));
   const n = normalizeV3(d),
     raw = massesV2({ ...n, version: 2 }),
@@ -410,6 +419,7 @@ export function buildingSlots(
   d: CityBuildingDesignV3,
   masses = massesV3(d),
 ): Slot[] {
+  if(d.generatorRevision==='city-variation-5'&&d.modular){const result=resolveModularBuilding(d,'far'),sign=result.sign;return [{id:'brand.entrance',label:'Entrance sign',position:[sign.x,sign.y,sign.z],size:[sign.width,sign.height,.1],compatible:['brand'],rotation:result.signs[0]?.rotation??0,selected:d.slots['brand.entrance']||null,active:d.slots['brand.entrance']==='brand',reason:null}];}
   if(d.generatorRevision==="city-office-4")return officeSlots(d);
   const ground = masses[0],
     top = masses.find((m) => m.y === masses.at(-1)!.y)!,
@@ -560,6 +570,7 @@ export function resolveV3(
   lod: "near" | "medium" | "far" = "near",
 ): ResolvedV3 {
   const authored = normalizeV3(input);
+  if(authored.generatorRevision==='city-variation-5'&&authored.modular)return resolveModularBuilding(authored,lod);
   if(authored.generatorRevision==="city-office-4")return resolveOffice(authored,brand,lod);
   if(authored.synarcKit)return resolveSynarcKitV3(authored,lod);
   const residential = authored.generatorRevision === "city-connected-3" && authored.base === "residential";
