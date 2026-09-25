@@ -36,7 +36,7 @@ function fromDrag(tool:Tool,start:{x:number;z:number},end:{x:number;z:number},id
 }
 export function CitySculptControls({land,plot,draft,orbitEnabled,viewTopDown}:{land:CityLandController;plot:LandPlot;draft:LandDraft;orbitEnabled:(enabled:boolean)=>void;viewTopDown:()=>void}){
  const {gl,invalidate,camera}=useThree(),group=useRef<Group>(null),brushGroup=useRef<Group>(null),[tool,setTool]=useState<Tool>('select'),[floor,setFloor]=useState(0),[selected,setSelected]=useState<string|null>(null),[selectedFace,setSelectedFace]=useState<FaceSide|null>(null),[ghost,setGhost]=useState<SculptPrimitive|null>(null),[brushGhost,setBrushGhost]=useState<SculptAttachment|null>(null),[brushStyle,setBrushStyle]=useState<SculptAttachment['style']>('simple'),[kitPaintPart,setKitPaintPart]=useState<SynarcKitPaintId>('window-detailed'),[issue,setIssue]=useState('');
- const recipe=(draft.sculpt?.version===4||draft.sculpt?.version===5)?undefined:draft.sculpt;const center=landPosition(plot),scale=plot.size/24;
+ const recipe=(draft.sculpt?.version===4||draft.sculpt?.version===5||draft.sculpt?.version===6)?undefined:draft.sculpt;const center=landPosition(plot),scale=plot.size/24;
  useEffect(()=>()=>clearSculptPreview(plot.id),[plot.id]);
  const active=Math.min(floor,draft.design.floors-1),shapes=recipe?effectiveSculptShapes(recipe,active):[];
  const detached=!!recipe?.levels.some(l=>l.floor===active);
@@ -92,7 +92,7 @@ export function CitySculptControls({land,plot,draft,orbitEnabled,viewTopDown}:{l
  const draggedShape=(p:NonNullable<typeof pointer.current>,pos:{x:number;z:number})=>p.base?p.face?resizeSculptFace(p.base,p.face,p.face==='east'||p.face==='west'?pos.x-p.start.x:pos.z-p.start.z):p.tool==='resize'?{...p.base,width:Math.max(2,snap(p.base.width+2*(pos.x-p.start.x))),depth:Math.max(2,snap(p.base.depth+2*(pos.z-p.start.z)))}:{...p.base,x:p.base.x+snap(pos.x-p.start.x),z:p.base.z+snap(pos.z-p.start.z)}:fromDrag(p.tool,p.start,pos,p.shapeId);
  const dragRecipe=(p:NonNullable<typeof pointer.current>,next:SculptPrimitive)=>{
   let revised=setSculptShapes(recipe!,active,p.base?p.original.map(s=>s.id===p.base!.id?next:s):[...p.original,next]);
-  if(!p.base&&p.tool==='courtyard'&&(revised.version!==4&&revised.version!==5))for(const level of revised.levels.filter(l=>l.floor>active))revised=setSculptShapes(revised,level.floor,[...level.shapes,next]);
+  if(!p.base&&p.tool==='courtyard'&&(revised.version!==4&&revised.version!==5&&revised.version!==6))for(const level of revised.levels.filter(l=>l.floor>active))revised=setSculptShapes(revised,level.floor,[...level.shapes,next]);
   return revised;
  };
  const move=(e:ThreeEvent<PointerEvent>)=>{

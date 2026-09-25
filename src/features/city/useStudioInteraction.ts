@@ -5,16 +5,17 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {Matrix4,Plane,Quaternion,Raycaster,Vector2,Vector3,type PerspectiveCamera} from 'three';
 import {useThree} from '@react-three/fiber';
 import {landPosition,type LandDraft,type LandPlot} from '../../domain/cityLand';
-import {sculptBuildLimit,sculptFloorBottom,sculptFloorTop,type SculptVolume} from '../../domain/citySculpt';
+import {sculptBuildLimit,sculptFloorBottom,sculptFloorTop,sculptFootprint,effectiveSculptShapes,type SculptVolume} from '../../domain/citySculpt';
 import {checkStudioDraft,liftStudioAnchors,paintStudio,studioBays,studioDraft} from '../../domain/cityStudio';
-import type {StudioAssemblyKind,StudioBay,StudioChannel,StudioRecipe} from '../../domain/cityStudioTypes';
+import type {StudioAssemblyKind,StudioBay,StudioChannel,StudioRecipe,StudioFurnitureKind} from '../../domain/cityStudioTypes';
 import type {CityLandController} from './useCityLand';
 import {clearSculptPreview,setSculptPreview} from './citySculptPreview';
+import {interiorContains} from '../../domain/cityStudioInteriors';
 
-export type StudioTool='roof'|'select'|'block'|'round'|'oval'|'cut'|'opening'|'surface'|StudioAssemblyKind;
+export type StudioTool='roof'|'select'|'block'|'round'|'oval'|'cut'|'opening'|'surface'|'interior-room'|'interior-partition'|'interior-door'|'interior-stair'|'interior-furniture'|StudioAssemblyKind;
 export type StudioHandle='roof-rise'|'roof-eave'|'roof-crown'|'move'|'east'|'west'|'north'|'south'|'height'|'lift';
-export type StudioInteractionOptions={land:CityLandController;plot:LandPlot;draft:LandDraft;recipe:StudioRecipe|null;camera:PerspectiveCamera;tool:StudioTool;setTool:(t:StudioTool)=>void;floor:number;opening:string;scope:'spot'|'wall'|'part';channel:StudioChannel;color:string;texture:string;erase:boolean;eyedropper:boolean;onSample:(b:StudioBay)=>void;destination:number;flip:boolean;look:'simple'|'ornate';walking:boolean;roofConnected:boolean;onRoofSelect:()=>void};
-type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;draw:boolean;stroke:boolean;detail?:string;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean};
+export type StudioInteractionOptions={land:CityLandController;plot:LandPlot;draft:LandDraft;recipe:StudioRecipe|null;camera:PerspectiveCamera;tool:StudioTool;setTool:(t:StudioTool)=>void;floor:number;opening:string;scope:'spot'|'wall'|'part';channel:StudioChannel;color:string;texture:string;erase:boolean;eyedropper:boolean;onSample:(b:StudioBay)=>void;destination:number;exitKind:'door'|'balcony'|'terrace';layout:'auto'|'straight'|'switchback';flip:boolean;look:'simple'|'ornate';interiorEditId:string|null;interiorDoorStyle:'panelled'|'glazed';interiorDoorHinge:'left'|'right';furnitureKind:StudioFurnitureKind;furnitureRotation:number;onRoomSelect:(id:string|null)=>void;walking:boolean;roofConnected:boolean;onRoofSelect:()=>void};
+type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;draw:boolean;stroke:boolean;interior?:'partition'|'stair';detail?:string;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean};
 const snap=(v:number,step=.25)=>Math.round(v/step)*step;
 export function studioHandles(v:SculptVolume,groundHeight:number):{id:StudioHandle;point:Vector3}[]{
  const bottom=sculptFloorBottom(v.startFloor,groundHeight),top=sculptFloorTop(v.startFloor+v.spanFloors-1,groundHeight),mid=(bottom+top)/2;
@@ -34,11 +35,16 @@ export function useStudioInteraction(options:StudioInteractionOptions){
  const transform=useMemo(()=>new Matrix4().compose(new Vector3(center.x,0,center.z),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),plot.rotation*Math.PI/2),new Vector3(scale,scale,scale)),[plot.id,plot.rotation,scale]);
  const inverse=useMemo(()=>transform.clone().invert(),[transform]);
  const cancel=()=>{commitTicket.current++;validating.current=false;gesture.current=null;pendingTouch.current=null;setActive(false);setTouchPending(false);setTransient(null);clearSculptPreview(plot.id);setIssue('');};
- const commit=async(g:Gesture)=>{const o=current.current,ticket=++commitTicket.current;if(g.detail&&g.changed){validating.current=true;setActive(true);try{const result=await prepareSculpt(g.next,studioDraft(o.draft,g.next).design,true);const invalid=result.studio?.inactive.find(a=>a.id===g.detail);if(invalid)g.invalid=invalid.reason;}catch(e){g.invalid=e instanceof Error?e.message:String(e);}finally{if(ticket===commitTicket.current){validating.current=false;setActive(false);}}}if(ticket!==commitTicket.current)return;const error=checkStudioDraft(o.draft,g.next)||g.invalid;if(error){setIssue(error);clearSculptPreview(plot.id);}else if(g.changed){clearSculptPreview(plot.id,true);o.land.edit(studioDraft(o.draft,g.next));if(g.volume){o.land.setSelectedVolume(g.volume.id);o.setTool(g.handle?.startsWith('roof-')?'roof':'select');}setIssue('');}else clearSculptPreview(plot.id);setTransient(null);setTouchPending(false);pendingTouch.current=null;};
+ const commit=async(g:Gesture)=>{const o=current.current,ticket=++commitTicket.current;if(g.detail&&g.changed){validating.current=true;setActive(true);try{const result=await prepareSculpt(g.next,studioDraft(o.draft,g.next).design,true);const invalid=result.studio?.inactive.find(a=>a.id===g.detail);if(invalid)g.invalid=invalid.reason;else {const route=result.studio?.accessRoutes?.find(a=>a.id===g.detail),assembly=g.next.studio.assemblies.find(a=>a.id===g.detail);if(route&&assembly){assembly.exit=route.exit;assembly.exitKind=route.kind;}}}catch(e){g.invalid=e instanceof Error?e.message:String(e);}finally{if(ticket===commitTicket.current){validating.current=false;setActive(false);}}}if(ticket!==commitTicket.current)return;const error=checkStudioDraft(o.draft,g.next)||g.invalid;if(error){setIssue(error);clearSculptPreview(plot.id);}else if(g.changed){clearSculptPreview(plot.id,true);o.land.edit(studioDraft(o.draft,g.next));if(g.volume){o.land.setSelectedVolume(g.volume.id);o.setTool(g.handle?.startsWith('roof-')?'roof':'select');}setIssue('');}else clearSculptPreview(plot.id);setTransient(null);setTouchPending(false);pendingTouch.current=null;};
  useEffect(()=>{
   const canvas=gl.domElement,raycaster=new Raycaster(),mouse=new Vector2(),point=new Vector3();
   const ray=(x:number,y:number)=>{const rect=canvas.getBoundingClientRect();mouse.set((x-rect.left)/rect.width*2-1,-(y-rect.top)/rect.height*2+1);raycaster.setFromCamera(mouse,current.current.camera);return raycaster.ray.clone().applyMatrix4(inverse);};
   const ground=(x:number,y:number,height:number)=>ray(x,y).intersectPlane(new Plane(new Vector3(0,1,0),-height),new Vector3());
+  const snapInterior=(r:StudioRecipe,floor:number,x:number,z:number)=>{
+   const polygons=sculptFootprint(effectiveSculptShapes(r,floor)),segments=polygons.flatMap(poly=>poly.flatMap(ring=>ring.map((a,i)=>[a,ring[(i+1)%ring.length]] as const)));
+   if(r.version===6)segments.push(...r.interior.partitions.filter(p=>p.floor===floor).map(p=>[p.a,p.b] as const));
+   let best={x,z,distance:Infinity};for(const [a,b] of segments){const dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1))),px=a[0]+dx*t,pz=a[1]+dz*t,distance=Math.hypot(x-px,z-pz);if(distance<best.distance)best={x:px,z:pz,distance};}return best;
+  };
   const hitBay=(x:number,y:number)=>{const r=ray(x,y);let hit:StudioBay|null=null,distance=Infinity;for(const bay of baysRef.current){const normal=new Vector3(Math.sin(bay.rotation),0,Math.cos(bay.rotation));if(r.direction.dot(normal)>=0)continue;const p=r.intersectPlane(new Plane().setFromNormalAndCoplanarPoint(normal,new Vector3(bay.x,bay.y,bay.z)),point);if(!p||p.y<bay.y||p.y>bay.y+bay.height)continue;const u=(p.x-bay.x)*Math.cos(bay.rotation)-(p.z-bay.z)*Math.sin(bay.rotation);const dist=p.distanceTo(r.origin);if(Math.abs(u)<=bay.width/2+.01&&dist<distance){distance=dist;hit=bay;}}return hit;};
   const preview=(g:Gesture)=>{const o=current.current;g.invalid=checkStudioDraft(o.draft,g.next);setIssue(g.invalid??'');setTransient(g.next);const now=performance.now();if(!g.invalid&&now-lastPreview.current>85){lastPreview.current=now;const draft=studioDraft(o.draft,g.next);setSculptPreview(o.plot.id,g.next,draft.design);if(g.detail)void prepareSculpt(g.next,draft.design,true).then(result=>{if(gesture.current!==g)return;const invalid=result.studio?.inactive.find(a=>a.id===g.detail);setIssue(invalid?.reason??'');}).catch(()=>{});}invalidate();};
   const stroke=(g:Gesture,bay:StudioBay|null)=>{if(!bay||g.visited.has(bay.id))return;const o=current.current;g.visited.add(bay.id);o.land.setSelectedVolume(bay.anchor.shapeId);
@@ -61,6 +67,22 @@ export function useStudioInteraction(options:StudioInteractionOptions){
   const down=(e:PointerEvent)=>{
    const o=current.current;if(o.walking||!o.recipe||e.button!==0||pendingTouch.current||validating.current)return;
    const r=o.recipe,chosen=r.volumes.find(v=>v.id===o.land.selectedVolume);let handle:StudioHandle|undefined;
+   if(r.version===6&&o.tool==='interior-room'){const point=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight)+.04);const room=point&&preparedStudioPlot(o.plot.id)?.result.interiorLevels?.[o.floor]?.rooms.find(room=>interiorContains([room.polygon],point.x,point.z));o.onRoomSelect(room?.id??null);setIssue(room?'':'Choose a covered room on this floor.');e.preventDefault();return;}
+   if(r.version===6&&['interior-partition','interior-door','interior-stair','interior-furniture'].includes(o.tool)){
+    const start=ground(e.clientX,e.clientY,sculptFloorBottom(o.floor,o.draft.design.groundHeight)+.04);if(!start)return;
+    const next=structuredClone(r),id=o.interiorEditId&&((o.tool==='interior-partition'&&r.interior.partitions.some(p=>p.id===o.interiorEditId))||(o.tool==='interior-stair'&&r.interior.stairs.some(s=>s.id===o.interiorEditId)))?o.interiorEditId:crypto.randomUUID(),g:Gesture={pointer:e.pointerId,startX:e.clientX,startY:e.clientY,start,base:r,next,draw:false,stroke:false,visited:new Set(),changed:false,invalid:null,touch:e.pointerType==='touch',detail:id};
+    if(o.tool==='interior-furniture'){
+     next.interior.furniture=[...(next.interior.furniture??[]),{id,floor:o.floor,kind:o.furnitureKind,x:snap(start.x),z:snap(start.z),rotation:o.furnitureRotation}];g.changed=true;void commit(g);return;
+    }
+    if(o.tool==='interior-door'){
+     let nearest:{id:string;u:number;distance:number}|null=null;for(const p of next.interior.partitions.filter(p=>p.floor===o.floor)){const dx=p.b[0]-p.a[0],dz=p.b[1]-p.a[1],u=Math.max(0,Math.min(1,((start.x-p.a[0])*dx+(start.z-p.a[1])*dz)/(dx*dx+dz*dz||1))),distance=Math.hypot(start.x-p.a[0]-dx*u,start.z-p.a[1]-dz*u);if(distance<.45&&(!nearest||distance<nearest.distance))nearest={id:p.id,u,distance};}
+     if(!nearest){setIssue('Choose an interior partition for this door.');return;}
+     next.interior.doors=next.interior.doors.filter(d=>d.partitionId!==nearest.id);next.interior.doors.push({id,partitionId:nearest.id,u:nearest.u,style:o.interiorDoorStyle,hinge:o.interiorDoorHinge});g.changed=true;void commit(g);return;
+    }
+    if(o.tool==='interior-partition'){const p=snapInterior(r,o.floor,start.x,start.z);if(p.distance>.55){setIssue('Start on an outside or interior wall.');return;}g.interior='partition';g.start.set(p.x,start.y,p.z);next.interior.partitions=next.interior.partitions.filter(item=>item.id!==id);next.interior.partitions.push({id,floor:o.floor,a:[p.x,p.z],b:[p.x+1.25,p.z]});}
+    else {if(o.floor>=Math.max(1,...r.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors))-1){setIssue('Choose a floor with another storey above it.');return;}g.interior='stair';next.interior.stairs=next.interior.stairs.filter(item=>item.id!==id);next.interior.stairs.push({id,floor:o.floor,x:snap(start.x),z:snap(start.z),rotation:0,layout:o.layout,flip:o.flip});}
+    gesture.current=g;setActive(true);setIssue('');canvas.setPointerCapture(e.pointerId);e.preventDefault();return;
+   }
    if((o.tool==='select'||o.tool==='roof')&&chosen){const rect=canvas.getBoundingClientRect();for(const h of o.tool==='roof'?studioRoofHandles(chosen,o.draft.design.groundHeight,r):studioHandles(chosen,o.draft.design.groundHeight)){const p=h.point.clone().applyMatrix4(transform).project(o.camera);if(Math.hypot(e.clientX-rect.left-(p.x+1)*rect.width/2,e.clientY-rect.top-(1-p.y)*rect.height/2)<18){handle=h.id;break;}}}
    const draw=['block','round','oval','cut'].includes(o.tool),bay=hitBay(e.clientX,e.clientY);
    if(o.eyedropper&&bay&&o.tool==='surface'){o.onSample(bay);return;}
@@ -83,13 +105,18 @@ export function useStudioInteraction(options:StudioInteractionOptions){
    const volume=draw?{id:crypto.randomUUID(),kind:o.tool==='round'||o.tool==='oval'?'ellipse' as const:'rectangle' as const,operation:o.tool==='cut'||e.altKey?'subtract' as const:'add' as const,x:snap(start.x),z:snap(start.z),width:4,depth:4,startFloor:o.floor,spanFloors:1}:chosen;
    const next=structuredClone(r),g:Gesture={pointer:e.pointerId,startX:e.clientX,startY:e.clientY,start,base:r,next,volume,handle,draw,stroke:!draw&&!handle,visited:new Set(),changed:draw,invalid:null,touch:e.pointerType==='touch'};
    if(draw&&volume){next.volumes.push(volume);if(chosen&&r.studio.parts[chosen.id])next.studio.parts[volume.id]=structuredClone(r.studio.parts[chosen.id]);}
-   if(g.stroke&&!['opening','surface'].includes(o.tool)){g.detail=crypto.randomUUID();next.studio.assemblies.push({id:g.detail,kind:o.tool as StudioAssemblyKind,anchors:[],look:o.look,destination:o.destination,flip:o.flip});}
+   if(g.stroke&&!['opening','surface'].includes(o.tool)){g.detail=crypto.randomUUID();next.studio.assemblies.push({id:g.detail,kind:o.tool as StudioAssemblyKind,anchors:[],look:o.look,destination:o.destination,exitKind:o.tool==='stair'?o.exitKind:undefined,layout:o.tool==='stair'?o.layout:undefined,flip:o.flip});}
    gesture.current=g;setActive(true);setIssue('');canvas.setPointerCapture(e.pointerId);e.preventDefault();
    if(g.stroke)stroke(g,bay);else if(draw)preview(g);
   };
   const move=(e:PointerEvent)=>{
    const o=current.current;if(o.walking)return;const bay=hitBay(e.clientX,e.clientY);setHover(prev=>prev?.id===bay?.id?prev:bay);
    const g=gesture.current;if(!g||g.pointer!==e.pointerId)return;
+   if(g.interior&&g.next.version===6){const p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;
+    if(g.interior==='partition'){const end=snapInterior(g.base,o.floor,p.x,p.z),line=g.next.interior.partitions.find(item=>item.id===g.detail);if(!line)return;if(end.distance>.55){setIssue('End on an outside or interior wall.');return;}line.b=[end.x,end.z];g.changed=Math.hypot(line.a[0]-end.x,line.a[1]-end.z)>=1.25;}
+    else {const stair=g.next.interior.stairs.find(item=>item.id===g.detail);if(!stair)return;const dx=p.x-g.start.x,dz=p.z-g.start.z;if(Math.hypot(dx,dz)<.4)return;stair.rotation=Math.round(Math.atan2(dx,dz)/(Math.PI/2))*Math.PI/2;g.changed=true;}
+    if(g.changed)preview(g);return;
+   }
    if(g.stroke){stroke(g,bay);return;}if(!g.volume)return;
    if(Math.hypot(e.clientX-g.startX,e.clientY-g.startY)<4)return;
    const v=g.volume,step=e.shiftKey?.05:.25,p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;

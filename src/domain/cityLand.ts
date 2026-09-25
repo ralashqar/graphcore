@@ -28,6 +28,20 @@ export function fitLandDesign(d:CityBuildingDesignV3,rotation:number){
 }
 export function initialLandDraft(p:LandPlot):LandDraft{return {name:'My place',color:'#54796b',nature:{style:'garden',density:3,seed:p.vegetationSeed},design:fitLandDesign({...newDesign(p.id),grounds:'minimal',slots:{'brand.entrance':'brand'},enclosure:'garden-wall'},p.rotation)};}
 export function landProperty(p:LandPlot,d:LandDraft):CityProperty{return {id:p.id,slug:p.id,x:p.x,z:p.z,rank:9999,landValue:0,tier:2,saves:0,claims:0,profile:{...emptyCityProfile(),name:d.name,color:d.color,buildingDesign:fitLandDesign(d.design,p.rotation)}};}
+/** Keep procedural planting out of the full route along an authored exterior stair wall. */
+export function studioStairPlantClearance(draft:LandDraft|null,x:number,z:number){
+ const sculpt=draft?.sculpt;if(sculpt?.version!==5)return false;
+ const solids=sculpt.volumes.filter(v=>v.operation==='add');
+ return sculpt.studio.assemblies.some(a=>a.kind==='stair'&&a.anchors.some(anchor=>{
+  const owner=solids.find(v=>v.id===anchor.shapeId);if(!owner||anchor.side==='curve')return false;
+  const horizontal=anchor.side==='north'||anchor.side==='south';
+  const edge=horizontal?owner.z+(anchor.side==='north'?1:-1)*owner.depth/2:owner.x+(anchor.side==='east'?1:-1)*owner.width/2;
+  const aligned=solids.filter(v=>Math.abs((horizontal?v.z+(anchor.side==='north'?1:-1)*v.depth/2:v.x+(anchor.side==='east'?1:-1)*v.width/2)-edge)<.05);
+  const lo=Math.min(...aligned.map(v=>horizontal?v.x-v.width/2:v.z-v.depth/2))-1.8,hi=Math.max(...aligned.map(v=>horizontal?v.x+v.width/2:v.z+v.depth/2))+1.8;
+  const along=horizontal?x:z,out=(horizontal?z:x)-edge,sign=anchor.side==='north'||anchor.side==='east'?1:-1;
+  return along>=lo&&along<=hi&&out*sign>=-.3&&out*sign<=4.2;
+ }));
+}
 export function landPlants(p:LandPlot,draft:LandDraft|null){
  const nature=draft?.nature||{style:'wooded',density:5,seed:p.vegetationSeed};let seed=nature.seed>>>0;
  const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
@@ -43,7 +57,7 @@ export function landPlants(p:LandPlot,draft:LandDraft|null){
   const occupied=draft&&(sculpture?.length?x>Math.min(...xs)-2&&x<Math.max(...xs)+2&&z>Math.min(...zs)-2&&z<Math.max(...zs)+2:Math.abs(x)<draft.design.width/2+2&&Math.abs(z)<draft.design.depth/2+2);
   const t=approach?Math.max(0,Math.min(1,((x-approach.x)*-approach.x+(z-approach.z)*(10.4-approach.z))/(approach.x**2+(10.4-approach.z)**2))):0;
   const pathBlocked=!!approach&&Math.hypot(x-(approach.x*(1-t)),z-(approach.z+(10.4-approach.z)*t))<1.7;
-  if(i>=count||Math.abs(x)<3&&z>0||occupied||pathBlocked||groundDetails.some(a=>Math.hypot(a.x-x,a.z-z)<a.span/2+1.2))continue;
+  if(i>=count||Math.abs(x)<3&&z>0||occupied||pathBlocked||studioStairPlantClearance(draft,x,z)||groundDetails.some(a=>Math.hypot(a.x-x,a.z-z)<a.span/2+1.2))continue;
   out.push({x,z,asset,scale,rotation});
  }return out;
 }

@@ -82,7 +82,7 @@ export function recoverFoot(world:WalkingWorld,last:Pick<FootState,'x'|'z'|'head
  for(let radius=0;radius<=Math.ceil(world.world.bound/33);radius++)for(let x=-radius;x<=radius;x++)for(let z=-radius;z<=radius;z++){if(Math.abs(x)!==radius&&Math.abs(z)!==radius)continue;const px=x*33,pz=z*33;if(x%2&&z%2)continue;if(world.clear(px,pz,FOOT_PROFILE.radius+.05))return createFootState(px,pz,last.heading);}return null;
 }
 export function parkDrive(s:DriveState){Object.assign(s,createDriveState(s.x,s.z,s.heading));}
-export const FOOT_CAMERA={minDistance:2.4,maxDistance:11,minPitch:-.12,maxPitch:1.3} as const;
+export const FOOT_CAMERA={minDistance:1.15,maxDistance:11,minPitch:-.12,maxPitch:1.3} as const;
 export type FootOrbit={heading:number;pitch:number;distance:number};
 export function orbitFootCamera(camera:FootOrbit,dx:number,dy:number){
  camera.heading-=dx*.006;

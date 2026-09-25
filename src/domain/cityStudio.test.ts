@@ -7,7 +7,7 @@ import type {StudioRecipe,StudioResolved} from './cityStudioTypes.ts';
 import {StudioWalkingCollision} from './cityStudioCollision.ts';
 import {DriveWorld} from './cityDriveWorld.ts';
 import {WalkingWorld,advanceFoot,createFootState} from './cityExploration.ts';
-import {STUDIO_MODULES} from './cityStudioCatalog.ts';
+import {STUDIO_MODULES,STUDIO_MODULES_V3} from './cityStudioCatalog.ts';
 
 const volume=(id='main',patch:Partial<SculptVolume>={}):SculptVolume=>({id,kind:'rectangle',operation:'add',x:0,z:0,width:10,depth:8,startFloor:0,spanFloors:3,...patch});
 const recipe=(volumes=[volume()]):StudioRecipe=>({version:5,volumes,attachments:[],plotSize:24,studio:freshStudio()});
@@ -18,6 +18,7 @@ const blank=():StudioResolved=>({bays:[],pieces:[],blockers:[],decks:[],inactive
 test('catalogue contains exactly 64 distinct compatible modules',()=>{
  assert.equal(STUDIO_MODULES.length,64);assert.equal(new Set(STUDIO_MODULES.map(m=>m.id)).size,64);
  for(const part of STUDIO_MODULES){assert.ok(part.size.every(v=>v>0));assert.ok(part.connectors.left);if(part.opening)assert.ok(part.opening.width<part.size[0]);}
+ assert.equal(STUDIO_MODULES_V3.length,72);assert.ok(STUDIO_MODULES_V3.some(m=>m.id==='stair-balcony-link'));
 });
 test('empty studios save before the first solid, while cuts alone are invalid',()=>{
  assert.equal(validateSculpt(recipe([]),1),null);assert.equal(resolved(recipe([])).pieces.length,0);
@@ -38,12 +39,89 @@ test('connected balcony across three bays has one front per bay and only two end
  assert.equal(bays.length,3);r.studio.assemblies.push({id:'balcony',kind:'balcony',anchors:bays.map(b=>b.anchor),look:'simple'});
  const out=resolved(r);assert.deepEqual(out.inactive,[]);assert.equal(out.pieces.filter(p=>p.id.startsWith('balcony/')&&p.id.includes('/end')).length,2);assert.equal(out.decks.filter(d=>d.id.startsWith('balcony/')).length,3);
 });
+test('connected access fits a joined wall and makes an upper door without altering the saved opening',()=>{
+ const r=recipe([volume('west',{x:-3,width:6,depth:7}),volume('east',{x:3,width:6,depth:7})]);
+ const ground=studioBays(r,design(r)).filter(b=>b.anchor.side==='south'&&b.anchor.floor===0);
+ const west=ground.find(b=>b.anchor.shapeId==='west'&&b.x<0)!;
+ r.studio.assemblies.push({id:'access',kind:'stair',anchors:[west.anchor],look:'simple',destination:1,exitKind:'door'});
+ const out=resolved(r);
+ assert.deepEqual(out.inactive,[]);
+ assert.equal(out.accessRoutes?.length,1);
+ assert.equal(out.accessRoutes?.[0].kind,'door');
+ assert.ok(out.decks.some(d=>d.id==='access/foot'));
+ assert.ok(out.decks.some(d=>d.id==='access/landing0'));
+ assert.ok(out.pieces.some(p=>p.module==='stair-stringer-left'));
+ assert.ok(out.pieces.some(p=>p.module==='stair-top-threshold'));
+ assert.ok(out.bays.some(b=>b.module==='door-balcony'&&b.anchor.floor===1));
+ assert.equal(r.studio.openings.length,0);
+ const absent=resolved({...r,studio:{...r.studio,assemblies:[]}});
+ assert.ok(!absent.bays.some(b=>b.module==='door-balcony'));
+});
+test('an exterior stair cannot cover the primary street entrance',()=>{
+ const r=recipe([volume('main',{width:12,depth:7})]),front=studioBays(r,design(r)).find(b=>b.entrance)!;
+ r.studio.assemblies.push({id:'blocked-stair',kind:'stair',anchors:[front.anchor],look:'simple',destination:1,exitKind:'door'});
+ const out=resolved(r);assert.ok(out.inactive.some(a=>a.id==='blocked-stair'&&/main entrance/.test(a.reason)));
+});
+test('a balcony exit uses a connected deck and an access door',()=>{
+ const r=recipe([volume('main',{width:12,depth:7})]),bays=studioBays(r,design(r));
+ const ground=bays.find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
+ const upper=bays.filter(b=>b.anchor.floor===1&&b.anchor.side==='south'&&Math.abs(b.x)<4);
+ r.studio.assemblies.push({id:'balcony',kind:'balcony',anchors:upper.map(b=>b.anchor),look:'simple'});
+ r.studio.assemblies.push({id:'access',kind:'stair',anchors:[ground.anchor],look:'simple',destination:1,exitKind:'balcony'});
+ const out=resolved(r);
+ assert.deepEqual(out.inactive,[]);
+ assert.equal(out.accessRoutes?.[0].kind,'balcony');
+ assert.ok(out.pieces.some(p=>p.module==='stair-balcony-link'));
+ assert.ok(out.bays.some(b=>b.module==='door-balcony'&&b.anchor.floor===1));
+ assert.ok(out.pieces.some(p=>p.module==='balcony-left'||p.module==='balcony-right'));
+});
+test('canopy brush closes the outer ends of a joined storefront run',()=>{
+ const r=recipe(),row=studioBays(r,design(r)).filter(b=>b.anchor.floor===0&&b.anchor.side==='north').slice(0,3);
+ for(const b of row)r.studio.openings.push({id:`shop-${b.id}`,anchor:b.anchor,module:'window-shop'});
+ r.studio.assemblies.push({id:'shade',kind:'canopy',anchors:row.map(b=>b.anchor),look:'ornate'});
+ const out=resolved(r),pieces=out.pieces.filter(p=>p.id.startsWith('shade/'));
+ assert.deepEqual(out.inactive,[]);
+ assert.equal(pieces.filter(p=>p.module==='canopy-end-left'||p.module==='canopy-end-right').length,2);
+ assert.equal(pieces.filter(p=>p.module==='canopy-glass').length,3);
+});
+test('a canopy stroke joining an exterior corner uses a corner module',()=>{
+ const r=recipe(),bays=studioBays(r,design(r)).filter(b=>b.anchor.floor===0);
+ const north=bays.filter(b=>b.anchor.side==='north').sort((a,b)=>b.x-a.x)[0],east=bays.filter(b=>b.anchor.side==='east').sort((a,b)=>b.z-a.z)[0];
+ for(const b of [north,east])r.studio.openings.push({id:`shop-${b.id}`,anchor:b.anchor,module:'window-shop'});
+ r.studio.assemblies.push({id:'corner-shade',kind:'canopy',anchors:[north.anchor,east.anchor],look:'ornate'});
+ const out=resolved(r);assert.deepEqual(out.inactive,[]);assert.ok(out.pieces.some(p=>p.module==='canopy-corner'));
+});
+test('stair exit remains attached to its host or becomes inactive when that host vanishes',()=>{
+ const r=recipe([volume('main',{width:12,depth:7})]),b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
+ r.studio.assemblies.push({id:'access',kind:'stair',anchors:[b.anchor],look:'simple',destination:1,exitKind:'door'});
+ const out=resolved(r),exit=out.accessRoutes?.[0]?.exit;
+ assert.ok(exit);
+ r.studio.assemblies[0].exit=exit;
+ assert.deepEqual(resolved(r).inactive,[]);
+ const cut=volume('upper-cut',{operation:'subtract',startFloor:1,spanFloors:1,x:0,z:-3.5,width:12,depth:2});
+ assert.ok(resolved({...r,volumes:[...r.volumes,cut]}).inactive.some(a=>a.id==='access'));
+});
+test('choosing an upper door never silently turns into a terrace exit',()=>{
+ const r=recipe([volume('main',{width:12,depth:7})]),b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
+ r.studio.defaults.roof='terrace';
+ r.studio.assemblies.push({id:'access',kind:'stair',anchors:[b.anchor],look:'simple',destination:3,exitKind:'door'});
+ const out=resolved(r);assert.equal(out.accessRoutes?.length,0);assert.match(out.inactive[0].reason,/upper wall/i);
+});
+test('a pinned v2 stair keeps its legacy assembly until the building is explicitly upgraded',()=>{
+ const r=recipe([volume('main',{width:12,depth:7})]),b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
+ r.studio.catalogue='synarc-kit-2';delete r.studio.assemblyRevision;
+ r.studio.assemblies.push({id:'old-stair',kind:'stair',anchors:[b.anchor],look:'simple',destination:1});
+ assert.equal(resolved(r).accessRoutes?.length,0);
+ const upgraded=structuredClone(r);upgraded.studio.catalogue='synarc-kit-3';upgraded.studio.assemblyRevision='connected-access-1';
+ assert.equal(resolved(upgraded).accessRoutes?.length,1);
+ assert.equal(r.studio.catalogue,'synarc-kit-2');
+});
 test('deleting a host preserves inactive assembly intent; undoing restores it',()=>{
  const r=recipe(),b=studioBays(r,design(r)).find(b=>b.anchor.floor===1)!;r.studio.assemblies.push({id:'balcony',kind:'balcony',anchors:[b.anchor],look:'simple'});
  const altered={...r,volumes:[volume('other')]};assert.equal(resolved(altered).inactive[0].id,'balcony');assert.equal(resolved(r).inactive.length,0);
 });
 test('stair surfaces reach their requested landing at both plot scales',()=>{
- for(const size of [24,48] as const){const r=recipe([volume('main',{width:12,depth:7})]);r.plotSize=size;const b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='north'&&Math.abs(b.x)<2)!;
+ for(const size of [24,48] as const){const r=recipe([volume('main',{width:12,depth:7})]);r.plotSize=size;const b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
  r.studio.assemblies.push({id:'stairs',kind:'stair',anchors:[b.anchor],look:'simple',destination:2});const out=resolved(r);assert.deepEqual(out.inactive,[]);const ramps=out.decks.filter(d=>d.id.includes('/ramp'));assert.ok(ramps.length);assert.equal(Math.max(...ramps.map(d=>d.y+(d.rise??0))),6.65);}
 });
 test('pitched and mansard roofs differ from flat and preserve a courtyard hole',()=>{
@@ -72,7 +150,7 @@ test('generated piece identities remain unique when walls need header infill',()
  assert.ok(out.pieces.filter(p=>p.id.endsWith('/header')).every(p=>p.module==='wall-full'));
 });
 test('each switchback storey landing follows the actual floor elevation',()=>{
- const r=recipe([volume('main',{width:12,depth:7})]),d={...design(r),groundHeight:4.2},b=studioBays(r,d).find(b=>b.anchor.floor===0&&b.anchor.side==='north'&&Math.abs(b.x)<2)!;
+ const r=recipe([volume('main',{width:12,depth:7})]),d={...design(r),groundHeight:4.2},b=studioBays(r,d).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
  r.studio.assemblies.push({id:'stairs',kind:'stair',anchors:[b.anchor],look:'simple',destination:3});
  const out=resolveSculpt(r,d).studio!;assert.equal(out.inactive.length,0);
  for(let storey=1;storey<=3;storey++)assert.ok(Math.abs(out.decks.find(d=>d.id===`stairs/landing${storey*2-1}`)!.y-(4.85+(storey-1)*3))<1e-8);
@@ -100,7 +178,7 @@ test('all three reference properties resolve and reopen with their pinned catalo
 
 
 test('character follows generated switchback flights and landings to the terrace',()=>{
- const r=recipe([volume('main',{width:12,depth:7})]),b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='north'&&Math.abs(b.x)<2)!;
+ const r=recipe([volume('main',{width:12,depth:7})]),b=studioBays(r,design(r)).find(b=>b.anchor.floor===0&&b.anchor.side==='south'&&Math.abs(b.x)<2)!;
  r.studio.defaults.roof='terrace';r.studio.assemblies.push({id:'stairs',kind:'stair',anchors:[b.anchor],look:'simple',destination:3});const out=resolved(r);
  const ramps=out.decks.filter(d=>d.id.includes('/ramp')),world=new WalkingWorld(new DriveWorld(100));world.studio.set({id:'p',x:0,z:0,rotation:0,scale:1,result:out});
  const end=(d:typeof ramps[number],sign:number)=>({x:d.x+Math.sin(d.rotation)*d.depth/2*sign,z:d.z+Math.cos(d.rotation)*d.depth/2*sign});

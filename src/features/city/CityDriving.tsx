@@ -1,4 +1,5 @@
 import {subscribeStudioPlots} from './cityStudioRegistry';
+import {stepStudioDoors,studioDoorTarget,toggleStudioDoor} from '../../domain/cityStudioDoorState';
 import {CityLandEditor} from './CityLandEditor';
 import type {CityLandController} from './useCityLand';
 import {landPrice,landEntrance,type LandPlot} from '../../domain/cityLand';
@@ -42,6 +43,10 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
  };
  const nearestPlot=()=>{if(!landRef.current?.world||!foot.current.grounded)return null;let nearest:LandPlot|null=null,distance=Math.min(2,carEntryDistance(foot.current,state.current,walkingWorld));for(const p of landRef.current.world.plots){const entry=landEntrance(p),dist=Math.hypot(entry.x-foot.current.x,entry.z-foot.current.z);if(dist<distance&&walkingWorld.clear(entry.x,entry.z)&&walkingWorld.sweep(foot.current.x,foot.current.z,entry.x-foot.current.x,entry.z-foot.current.z,FOOT_PROFILE.radius).t===1){nearest=p;distance=dist;}}return nearest;};
  interact.current=()=>{
+  if(session.mode==='on-foot'){
+   const door=walkingWorld.studio.nearestDoor(foot.current.x,foot.current.y,foot.current.z);
+   if(door){if(studioDoorTarget(door.plotId,door.doorId)>.5&&!walkingWorld.studio.doorClear(door.plotId,door.doorId,foot.current.x,foot.current.z)){setHint('Step clear of the doorway to close it.');return;}toggleStudioDoor(door.plotId,door.doorId);setHint(studioDoorTarget(door.plotId,door.doorId)>.5?'Door opened':'Door closed');return;}
+  }
   if(landRef.current?.phase==='walkthrough'){landRef.current.setPhase('construction');return;}
   if(session.mode==='driving'){
    if(readiness.current!=='ready'){setHint(readiness.current==='error'?'Character could not load. Use Retry character.':'Character is loading…');return;}
@@ -111,6 +116,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
  const costs=useRef(new Float32Array(240)),costIndex=useRef(0),costCount=useRef(0);
  useFrame((_,dt)=>{
   if(!active||document.hidden)return;
+  stepStudioDoors(Math.min(dt,.1));
   if(landBusy){resumeLand.current=true;if(pedestrian.current){pedestrian.current.position.set(foot.current.x,foot.current.y,foot.current.z);pedestrian.current.rotation.y=foot.current.heading;}Object.assign(displayFoot.current,foot.current);gl.domElement.dataset.cityLand=JSON.stringify({phase:land?.phase,plot:land?.selected?.id});return;}
   gl.domElement.dataset.cityLand=JSON.stringify({phase:'exploring',near:nearPlot?.id});
   const started=performance.now(),d=Math.min(dt,.1),onFoot=session.mode==='on-foot';simulation.current+=d;

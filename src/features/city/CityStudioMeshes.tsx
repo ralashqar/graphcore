@@ -9,20 +9,20 @@ import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 
 type Piece={geometry:BufferGeometry;channel:string};
-let pending:Promise<Map<string,Piece[]>>|undefined;
-export function loadStudioKit(){return pending??=(new GLTFLoader().loadAsync('/city/synarc-kit/v2/kit.glb').then(gltf=>{
+const pending=new Map<2|3,Promise<Map<string,Piece[]>>>();
+export function loadStudioKit(version:2|3=2){const previous=pending.get(version);if(previous)return previous;const loading=new GLTFLoader().loadAsync(`/city/synarc-kit/v${version}/kit.glb`).then(gltf=>{
  const pack=new Map<string,Piece[]>();gltf.scene.updateMatrixWorld(true);
  for(const root of gltf.scene.children){const groups=new Map<string,BufferGeometry[]>();root.traverse(child=>{
   if(!(child instanceof Mesh)||Array.isArray(child.material))return;
-  const channel=(child.material.name as string).split('/').at(-1)!.replace(/^studio_/,''),g=child.geometry.clone().applyMatrix4(child.matrixWorld);
+  const channel=(child.material.name as string).replace(/\.\d+$/,'').split('/').at(-1)!.replace(/^studio_/,''),g=child.geometry.clone().applyMatrix4(child.matrixWorld);
   const geometry=g.index?g.toNonIndexed():g;if(g!==geometry)g.dispose();
   for(const attr of Object.keys(geometry.attributes))if(!['position','normal','uv'].includes(attr))geometry.deleteAttribute(attr);
   const list=groups.get(channel)??[];list.push(geometry);groups.set(channel,list);
  });
- pack.set(root.name,[...groups].flatMap(([channel,geometries])=>{const geometry=geometries.length===1?geometries[0]:mergeGeometries(geometries);if(!geometry)return geometries.map(geometry=>({geometry,channel}));if(geometries.length>1)geometries.forEach(g=>g.dispose());return [{geometry,channel}];}));}
+ pack.set(String(root.userData.name??root.name).replace(/^v3\//,''),[...groups].flatMap(([channel,geometries])=>{const geometry=geometries.length===1?geometries[0]:mergeGeometries(geometries);if(!geometry)return geometries.map(geometry=>({geometry,channel}));if(geometries.length>1)geometries.forEach(g=>g.dispose());return [{geometry,channel}];}));}
  gltf.scene.traverse(child=>{if(child instanceof Mesh){child.geometry.dispose();(Array.isArray(child.material)?child.material:[child.material]).forEach((m:Material)=>m.dispose());}});
- if(pack.size!==64)throw Error('The architectural kit is incomplete.');return pack;
-}).catch(e=>{pending=undefined;throw e;}));}
+ if(pack.size!==(version===3?72:64)||!pack.has('wall-full')||version===3&&!pack.has('stair-top-threshold'))throw Error('The architectural kit is incomplete.');return pack;
+}).catch(e=>{pending.delete(version);throw e;});pending.set(version,loading);return loading;}
 
 function Instances({geometry,channel,placements,texture}:{geometry:BufferGeometry;channel:string;placements:StudioPiece[];texture?:string}){
  const ref=useRef<InstancedMesh>(null),invalidate=useThree(s=>s.invalidate),dummy=useMemo(()=>new Object3D(),[]);
@@ -36,11 +36,11 @@ function Instances({geometry,channel,placements,texture}:{geometry:BufferGeometr
  return <instancedMesh ref={ref} args={[geometry,material,placements.length]} frustumCulled/>;
 }
 
-export function CityStudioMeshes({pieces}:{pieces:StudioPiece[]}){
+export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];version?:2|3}){
  const root=useRef<Group>(null),point=useMemo(()=>new Vector3(),[]),sample=useRef(0);const [near,setNear]=useState(true);
  useFrame(({camera,clock})=>{if(clock.elapsedTime-sample.current<.5||!root.current)return;sample.current=clock.elapsedTime;root.current.getWorldPosition(point);const next=camera.position.distanceToSquared(point)<14400;setNear(old=>old===next?old:next);});
  const [pack,setPack]=useState<Map<string,Piece[]>|null>(null),[retry,setRetry]=useState(0),{gl,invalidate}=useThree();
- useEffect(()=>{let live=true;loadStudioKit().then(pack=>{if(live){setPack(pack);gl.domElement.dataset.cityStudioKit='ready';invalidate();}}).catch(()=>{if(live)gl.domElement.dataset.cityStudioKit='fallback';});return()=>{live=false;};},[retry,gl,invalidate]);
+ useEffect(()=>{let live=true;setPack(null);loadStudioKit(version).then(pack=>{if(live){setPack(pack);gl.domElement.dataset.cityStudioKit='ready';invalidate();}}).catch(()=>{if(live)gl.domElement.dataset.cityStudioKit='fallback';});return()=>{live=false;};},[retry,gl,invalidate,version]);
  useEffect(()=>{const retry=()=>setRetry(n=>n+1);window.addEventListener('online',retry);return()=>window.removeEventListener('online',retry);},[]);
  const groups=useMemo(()=>{const out=new Map<string,{piece:Piece;placements:StudioPiece[];texture?:string}>();
   if(!pack)return out;
@@ -58,5 +58,5 @@ export function CityStudioMeshes({pieces}:{pieces:StudioPiece[]}){
   });
  },[pack,pieces]);
 
- return <group ref={root} name="studio-kit-v2">{pack?[...groups].map(([key,g])=><Instances key={key} geometry={g.piece.geometry} channel={g.piece.channel} placements={g.placements} texture={g.texture}/>):<Instances geometry={fallbackCube} channel="wall" placements={fallback}/>}</group>;
+ return <group ref={root} name={`studio-kit-v${version}`}>{pack?[...groups].map(([key,g])=><Instances key={key} geometry={g.piece.geometry} channel={g.piece.channel} placements={g.placements} texture={g.texture}/>):<Instances geometry={fallbackCube} channel="wall" placements={fallback}/>}</group>;
 }

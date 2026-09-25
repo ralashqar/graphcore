@@ -1,4 +1,4 @@
-"""Deterministic SynArc v2 kit. Execute through Blender MCP with CITY_STUDIO_ROOT.
+"""Deterministic versioned SynArc kit. Execute through Blender MCP with CITY_STUDIO_ROOT.
 Creates only a dedicated scene; preserves every unrelated scene and object.
 """
 import bpy
@@ -9,17 +9,18 @@ from pathlib import Path
 from mathutils import Vector
 
 ROOT = Path(globals().get('CITY_STUDIO_ROOT', Path(__file__).resolve().parents[1]))
-OUT = ROOT / 'public/city/synarc-kit/v2'
-SOURCE = ROOT / 'assets/city/synarc-kit/v2'
+VERSION = int(globals().get('CITY_STUDIO_VERSION', 2))
+OUT = ROOT / f'public/city/synarc-kit/v{VERSION}'
+SOURCE = ROOT / f'assets/city/synarc-kit/v{VERSION}'
 SOURCE.mkdir(parents=True, exist_ok=True)
 catalogue = json.loads((OUT / 'catalogue.json').read_text())
-scene = bpy.data.scenes.new('SynArc Studio Kit v2')
+scene = bpy.data.scenes.new(f'SynArc Studio Kit v{VERSION}')
 original_scene = bpy.context.window.scene
 bpy.context.window.scene = scene
 scene.unit_settings.system = 'METRIC'
 materials = {}
 for role, color in {'wall':(.68,.73,.61,1),'trim':(.9,.85,.73,1),'frame':(.24,.31,.26,1),'door':(.29,.39,.32,1),'glass':(.18,.32,.36,1)}.items():
-    mat = bpy.data.materials.new('studio/'+role)
+    mat = bpy.data.materials.new(f'studio/v{VERSION}/'+role if VERSION>2 else 'studio/'+role)
     shader = next(n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
     shader.inputs['Base Color'].default_value = color
     shader.inputs['Roughness'].default_value = .3 if role == 'glass' else .8
@@ -49,7 +50,7 @@ def scroll(parent,x,y,z,rx=.16,ry=.22):
 roots=[]
 for part in catalogue['parts']:
     ident=part['id'];cat=part['category'];w,h,d=part['size']
-    root=bpy.data.objects.new(ident,None);scene.collection.objects.link(root);roots.append(root)
+    root=bpy.data.objects.new(f'v{VERSION}/{ident}' if VERSION>2 else ident,None);scene.collection.objects.link(root);roots.append(root)
     root['catalogue_id']=ident
     opening=part['opening']
     if opening:
@@ -90,6 +91,14 @@ for part in catalogue['parts']:
         if ident=='wall-panel':
             for xx in [-.72,.72]:box(root,'panel edge',xx,1.5,.18,.04,2.2,.04)
             for yy in [.4,2.6]:box(root,'panel edge',0,yy,.18,1.48,.04,.04)
+    elif ident.startswith('canopy-end'):
+        box(root,'formed end cap',0,h/2,0,w,h,d,'frame')
+        box(root,'edge trim',0,h-.025,d/2,w,.05,.08,'trim')
+        rod(root,'end bracket',(0,-.44,-d/2),(0,.08,d/2),.04)
+    elif ident=='canopy-corner':
+        box(root,'corner roof',0,h/2,0,w,h,d,'frame')
+        for sign in [-1,1]:box(root,'corner fascia',sign*w*.46,h*.7,0,.08,.1,d,'trim')
+        rod(root,'corner bracket',(-w*.38,-.4,-d*.38),(.05,.05,.05),.04)
     elif cat=='canopy':
         box(root,'canopy',0,h/2,0,w,h,d,'glass' if ident=='canopy-glass' else 'door' if ident=='canopy-awning' else 'frame')
         for xx in [-w*.4,w*.4]:rod(root,'support',(xx,-.45,-d/2),(xx,.02,d/2),.035)
@@ -106,6 +115,15 @@ for part in catalogue['parts']:
         else:
             box(root,'balcony slab',0,h/2,0,w,h,d)
             box(root,'fascia',0,h*.6,d/2,w,.14,.06)
+    elif ident.startswith('stair-stringer'):
+        box(root,'closed stair cheek',0,h/2,0,w,h,d,'trim')
+        rod(root,'sloped handrail',(0,h*.4,-d/2),(0,h*.95,d/2),.05,'frame')
+    elif ident=='stair-return-guard':
+        for yy in [.12,h-.08]:box(root,'guard rail',0,yy,0,w,.075,d,'frame')
+        for xx in [-w*.42,0,w*.42]:box(root,'guard baluster',xx,h/2,0,.04,h-.12,.04,'frame')
+    elif ident in ['stair-top-threshold','stair-balcony-link']:
+        box(root,'landing transition',0,h/2,0,w,h,d,'trim')
+        box(root,'contrasting nosing',0,h-.035,d/2,w,.07,.09,'frame')
     elif cat=='stair':
         if ident=='stair-flight':
             for k in range(9):box(root,'tread',0,(k+1)*h/9-.08,-d/2+(k+.5)*d/9,w,.16,d/9)
@@ -147,8 +165,8 @@ bpy.ops.object.select_all(action='DESELECT')
 for root in roots:
     root.select_set(True)
     for child in root.children:child.select_set(True)
-bpy.ops.export_scene.gltf(filepath=str(OUT/'kit.glb'),use_selection=True,export_format='GLB',export_yup=True)
-source=SOURCE/'synarc-city-kit-v2.blend'
+bpy.ops.export_scene.gltf(filepath=str(OUT/'kit.glb'),use_selection=True,use_active_scene=True,export_format='GLB',export_yup=True)
+source=SOURCE/f'synarc-city-kit-v{VERSION}.blend'
 bpy.data.libraries.write(str(source),{scene},fake_user=True)
 catalogue['sourceSha256']=hashlib.sha256(source.read_bytes()).hexdigest()
 catalogue['glbSha256']=hashlib.sha256((OUT/'kit.glb').read_bytes()).hexdigest()

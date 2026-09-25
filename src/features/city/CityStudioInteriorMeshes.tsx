@@ -1,0 +1,36 @@
+import {useEffect,useMemo,useRef} from 'react';
+import {useFrame} from '@react-three/fiber';
+import {BufferGeometry,Float32BufferAttribute,Group,MeshStandardMaterial} from 'three';
+import {studioDoorAngle} from '../../domain/cityStudioDoorState';
+import {STUDIO_FURNITURE} from '../../domain/cityStudioFurniture';
+import type {StudioDeck,StudioInteriorLevel,StudioPortal} from '../../domain/cityStudioTypes';
+import type {StudioFloorView} from './cityStudioView';
+
+function surface(vertices:number[]){const geometry=new BufferGeometry();geometry.setAttribute('position',new Float32BufferAttribute(vertices,3));geometry.computeVertexNormals();return geometry;}
+function rampSurface(deck:StudioDeck){const w=deck.width/2,d=deck.depth/2,r=deck.rise??0,h=.16,vertices:number[]=[],quad=(a:number[],b:number[],c:number[],e:number[])=>vertices.push(...a,...b,...c,...a,...c,...e),nearL=[-w,0,-d],nearR=[w,0,-d],farL=[-w,r,d],farR=[w,r,d],underNearL=[-w,-h,-d],underNearR=[w,-h,-d],underFarL=[-w,r-h,d],underFarR=[w,r-h,d];quad(nearL,farL,farR,nearR);quad(underNearR,underFarR,underFarL,underNearL);quad(nearL,nearR,underNearR,underNearL);quad(farR,farL,underFarL,underFarR);quad(farL,nearL,underNearL,underFarL);quad(nearR,farR,underFarR,underNearR);return surface(vertices);}
+function DoorLeaf({plotId,door}:{plotId:string;door:StudioPortal}){
+ const pivot=useRef<Group>(null),side=door.hinge==='left'?1:-1,half=door.width/2,hingeX=door.x-side*Math.cos(door.rotation)*half,hingeZ=door.z+side*Math.sin(door.rotation)*half;
+ useFrame(()=>{if(pivot.current)pivot.current.rotation.y=door.rotation+side*studioDoorAngle(plotId,door.id)*Math.PI/2;});
+ return <group ref={pivot} position={[hingeX,door.y,hingeZ]} rotation={[0,door.rotation,0]} name={`studio-door-${door.id}`}><mesh position={[side*half,door.height/2,0]}><boxGeometry args={[door.width-.035,door.height-.05,.075]}/><meshStandardMaterial color={door.style==='glazed'?'#354d51':'#715143'} roughness={.72} transparent={door.style==='glazed'} opacity={door.style==='glazed'?.72:1}/></mesh><mesh position={[side*(door.width-.16),door.height*.48,side*.075]}><sphereGeometry args={[.045,8,6]}/><meshStandardMaterial color="#c9ad73" metalness={.45} roughness={.4}/></mesh></group>;
+}
+function Furnishing({item,y}:{item:StudioInteriorLevel['furniture'][number];y:number}){
+ const spec=STUDIO_FURNITURE[item.kind],leg=spec.height*.48;
+ return <group name={`studio-furniture-${item.id}`} position={[item.x,y,item.z]} rotation={[0,item.rotation,0]}>
+  {item.kind==='table'?<><mesh position={[0,spec.height-.06,0]}><boxGeometry args={[spec.width,.12,spec.depth]}/><meshStandardMaterial color={spec.color}/></mesh>{[-1,1].flatMap(x=>[-1,1].map(z=><mesh key={`${x}/${z}`} position={[x*(spec.width/2-.13),leg/2,z*(spec.depth/2-.13)]}><boxGeometry args={[.1,leg,.1]}/><meshStandardMaterial color={spec.color}/></mesh>))}</>:
+  item.kind==='chair'||item.kind==='sofa'?<><mesh position={[0,.38,0]}><boxGeometry args={[spec.width,.23,spec.depth]}/><meshStandardMaterial color={spec.color}/></mesh><mesh position={[0,.66,-spec.depth/2+.11]}><boxGeometry args={[spec.width,.52,.22]}/><meshStandardMaterial color={spec.color}/></mesh></>:
+  item.kind==='plant'?<><mesh position={[0,.22,0]}><cylinderGeometry args={[.18,.14,.44,10]}/><meshStandardMaterial color="#b58e72"/></mesh><mesh position={[0,.8,0]}><sphereGeometry args={[.34,10,8]}/><meshStandardMaterial color={spec.color}/></mesh></>:
+  item.kind==='lamp'?<><mesh position={[0,.7,0]}><cylinderGeometry args={[.025,.025,1.4,8]}/><meshStandardMaterial color="#716b60"/></mesh><mesh position={[0,1.43,0]}><coneGeometry args={[.22,.38,10]}/><meshStandardMaterial color={spec.color} emissive="#6f5732" emissiveIntensity={.12}/></mesh></>:
+  <mesh position={[0,spec.height/2,0]}><boxGeometry args={[spec.width,spec.height,spec.depth]}/><meshStandardMaterial color={spec.color}/></mesh>}
+ </group>;
+}
+export function CityStudioInteriorMeshes({plotId,levels,portals,decks,view,finish,wallColor}:{plotId:string;levels:StudioInteriorLevel[];portals:StudioPortal[];decks:StudioDeck[];view:StudioFloorView;finish:'timber'|'tile'|'stone';wallColor:string}){
+ const geometry=useMemo(()=>levels.map(level=>({top:surface(level.slab),bottom:surface(level.underside),rooms:level.roomSurfaces.map(room=>({id:room.id,finish:room.finish,mesh:surface(room.vertices)}))})),[levels]);
+ useEffect(()=>()=>geometry.forEach(pair=>{pair.top.dispose();pair.bottom.dispose();pair.rooms.forEach(room=>room.mesh.dispose());}),[geometry]);
+ const ramps=useMemo(()=>decks.filter(deck=>deck.id.includes('/ramp')||deck.id.startsWith('entry/')).map(deck=>({deck,geometry:rampSurface(deck),floor:levels.reduce((chosen,level)=>{const y=level.slab[1];return y!==undefined&&y<=deck.y+.2?level.floor:chosen;},0)})),[decks,levels]);
+ useEffect(()=>()=>ramps.forEach(ramp=>ramp.geometry.dispose()),[ramps]);
+ const materials=useMemo(()=>({floor:new MeshStandardMaterial({color:finish==='timber'?'#ad8864':finish==='tile'?'#d0c4aa':'#aaa99b',roughness:.92,side:2}),timber:new MeshStandardMaterial({color:'#ad8864',roughness:.92,side:2}),tile:new MeshStandardMaterial({color:'#d0c4aa',roughness:.92,side:2}),stone:new MeshStandardMaterial({color:'#aaa99b',roughness:.92,side:2}),wall:new MeshStandardMaterial({color:wallColor,roughness:.95}),frame:new MeshStandardMaterial({color:'#c6b59e',roughness:.82}),stair:new MeshStandardMaterial({color:'#b59c7f',roughness:.9}),guard:new MeshStandardMaterial({color:'#5b5147',roughness:.8}),ghost:new MeshStandardMaterial({color:'#a3b5ac',transparent:true,opacity:.13,depthWrite:false,side:2})}),[finish,wallColor]);
+ useEffect(()=>()=>Object.values(materials).forEach(m=>m.dispose()),[materials]);
+ const wallPaint=useMemo(()=>new Map([...new Set(levels.flatMap(level=>level.blocks.map(b=>b.color).filter((color):color is string=>!!color)))].map(color=>[color,new MeshStandardMaterial({color,roughness:.95})])),[levels]);
+ useEffect(()=>()=>wallPaint.forEach(material=>material.dispose()),[wallPaint]);
+ return <group name="city-studio-interiors">{levels.map((level,index)=>{const main=view.mode==='whole'||view.mode==='cutaway'&&level.floor<=view.floor||view.mode==='floor'&&level.floor===view.floor,ghost=view.mode==='floor'&&level.floor===view.floor-1;if(!main&&!ghost)return null;return <group key={level.floor} name={`interior-storey-${level.floor}`}><mesh geometry={geometry[index].top} material={ghost?materials.ghost:materials.floor}/>{main&&geometry[index].rooms.map(room=><mesh key={room.id} geometry={room.mesh} material={materials[room.finish]}/>)}{main&&<mesh geometry={geometry[index].bottom} material={materials.floor}/>}{main&&level.blocks.map(b=><mesh key={b.id} position={[b.x,b.y,b.z]} rotation={[0,b.rotation,0]} scale={[b.width,b.height,b.depth]} material={b.color?wallPaint.get(b.color):materials[b.kind]}><boxGeometry args={[1,1,1]}/></mesh>)}{main&&level.furniture.map(item=><Furnishing key={item.id} item={item} y={(level.slab[1]??.04)}/>)}{main&&ramps.filter(ramp=>ramp.floor===level.floor).map(ramp=><mesh key={ramp.deck.id} geometry={ramp.geometry} material={materials.stair} position={[ramp.deck.x,ramp.deck.y,ramp.deck.z]} rotation={[0,ramp.deck.rotation,0]}/>)}{main&&portals.filter(p=>p.floor===level.floor).map(door=><DoorLeaf key={door.id} plotId={plotId} door={door}/>)}</group>;})}</group>;
+}

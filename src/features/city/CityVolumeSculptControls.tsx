@@ -8,7 +8,7 @@ import {landPosition,type LandDraft,type LandPlot} from '../../domain/cityLand';
 import type {CityLandController} from './useCityLand';
 import {clearSculptPreview,setSculptPreview} from './citySculptPreview';
 
-type VolumeRecipe=Extract<SculptRecipe,{version:4|5}>;
+type VolumeRecipe=Extract<SculptRecipe,{version:4|5|6}>;
 type Tool='select'|'rectangle'|'circle'|'ellipse';
 type Handle='move-free'|'move-x'|'move-z'|'move-y'|'scale-width'|'scale-depth'|'scale-height';
 type Drag={pointer:number;kind:'draw'|'handle';handle?:Handle;startY:number;startX:number;start:{x:number;z:number};planeY:number;base:VolumeRecipe;volume?:SculptVolume;cut:boolean;round:boolean;lastValid:SculptVolume|null;moved:boolean};
@@ -21,7 +21,7 @@ export function CityVolumeSculptControls({land,plot,draft,orbitEnabled,viewTopDo
  const {camera,gl,invalidate}=useThree(),root=useRef<Group>(null),handleRoot=useRef<Group>(null),ray=useRef(new Raycaster()),handleRay=useRef(new Raycaster()),mouse=useRef(new Vector2()),point=useRef(new Vector3());
  const [tool,setTool]=useState<Tool>('select'),[operation,setOperation]=useState<'add'|'subtract'>('add'),[floor,setFloor]=useState(0),[span,setSpan]=useState(1),[snapOn,setSnapOn]=useState(true),[ghost,setGhost]=useState<SculptVolume|null>(null),[brushStyle,setBrushStyle]=useState<SculptAttachment['style']>('simple'),[issue,setIssue]=useState('');
  const drag=useRef<Drag|null>(null),ghostRef=useRef<SculptVolume|null>(null),lastPreview=useRef(0),floorRef=useRef(floor),spanRef=useRef(span),operationRef=useRef(operation);
- const recipe=(draft.sculpt?.version===4||draft.sculpt?.version===5)?(draft.sculpt.plotSize===plot.size?draft.sculpt:{...draft.sculpt,plotSize:plot.size}):null,center=landPosition(plot),scale=plot.size/24,limit=sculptBuildLimit(plot.size);
+ const recipe=(draft.sculpt?.version===4||draft.sculpt?.version===5||draft.sculpt?.version===6)?(draft.sculpt.plotSize===plot.size?draft.sculpt:{...draft.sculpt,plotSize:plot.size}):null,center=landPosition(plot),scale=plot.size/24,limit=sculptBuildLimit(plot.size);
  const chosen=recipe?.volumes.find(v=>v.id===selected),activeFloor=clamp(floor,0,7);
  const lastHandleTelemetry=useRef(0);
  useFrame(()=>{

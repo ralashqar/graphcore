@@ -25,7 +25,7 @@ export const DEFAULT_SYNARC_KIT:SynarcKitChoice={
 export type KitWall={x:number;z:number;nx:number;nz:number;length:number;y:number;height:number;floor:number;courtyard?:boolean;
   style?:SynarcKitStyle;window?:SynarcKitWindow;door?:SynarcKitDoor;role?:'mixed'|'solid'|'windows'|'glazing';curved?:boolean};
 export type KitPlacement={id:string;part:string;x:number;y:number;z:number;rotation:number;scaleX:number;detail:'near'|'medium';floor:number};
-export type KitInfill={x:number;y:number;z:number;rotation:number;width:number;height:number;depth:number};
+export type KitInfill={x:number;y:number;z:number;rotation:number;width:number;height:number;depth:number;floor?:number};
 export type KitInactivePaint={id:string;reason:string};
 export type KitAssembly={placements:KitPlacement[];infill:KitInfill[];entrance:{x:number;z:number;angle:number}|null;inactive:KitInactivePaint[]};
 
@@ -119,7 +119,7 @@ export function assembleSynarcKit(walls:KitWall[],kit:SynarcKitChoice):KitAssemb
       if(kit.acUnits&&wall.floor>0&&name==='wall-full'&&index%3===0)
         putWall('ac-unit',x,wall.y+1.4,z,angle,wall.floor,'near');
     }
-    if(wall.height>3.001)infill.push({x:wall.x,y:round(wall.y+3+(wall.height-3)/2),z:wall.z,
+    if(wall.height>3.001)infill.push({x:wall.x,y:round(wall.y+3+(wall.height-3)/2),z:wall.z,floor:wall.floor,
       rotation:angle,width:round(wall.length),height:round(wall.height-3),depth:.30});
     if(wall.curved)continue;
     for(const side of [-1,1]){
@@ -129,7 +129,7 @@ export function assembleSynarcKit(walls:KitWall[],kit:SynarcKitChoice):KitAssemb
   }
   for(const corner of corners.values()){
     put(corner.courtyard?'corner-concave':'corner-convex',corner.x,corner.y,corner.z,0,corner.floor,'medium',1,corner.style);
-    if(corner.height>3.001)infill.push({x:corner.x,y:round(corner.y+3+(corner.height-3)/2),z:corner.z,
+    if(corner.height>3.001)infill.push({x:corner.x,y:round(corner.y+3+(corner.height-3)/2),z:corner.z,floor:corner.floor,
       rotation:0,width:.5,height:round(corner.height-3),depth:.5});
     if(kit.plinth)put('plinth-corner',corner.x,corner.y,corner.z,0,corner.floor,'medium',1,corner.style);
     if(kit.cornice)put('cornice-corner',corner.x,corner.y+corner.height-.22,corner.z,0,corner.floor,'medium',1,corner.style);

@@ -1,8 +1,10 @@
 import catalogue from '../../public/city/synarc-kit/v2/catalogue.json' with {type:'json'};
+import catalogueV3 from '../../public/city/synarc-kit/v3/catalogue.json' with {type:'json'};
 import type {StudioFamily} from './cityStudioTypes.ts';
 
 export const STUDIO_MODULES = catalogue.parts;
-export const STUDIO_MODULE_MAP = new Map(STUDIO_MODULES.map(part => [part.id, part]));
+export const STUDIO_MODULES_V3 = catalogueV3.parts;
+export const STUDIO_MODULE_MAP = new Map(STUDIO_MODULES_V3.map(part => [part.id, part]));
 export const STUDIO_FAMILIES: Record<StudioFamily, {label: string; wall: string; trim: string; frame: string; door: string; glass: string}> = {
  'warm-brick': {label:'Warm brick',wall:'#af7057',trim:'#e0cba7',frame:'#4d5647',door:'#4c6456',glass:'#537779'},
  'pastel-stucco': {label:'Pastel stucco',wall:'#bdc8ad',trim:'#f0e6cf',frame:'#5d7163',door:'#546f64',glass:'#64858a'},
