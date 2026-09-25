@@ -18,12 +18,13 @@ import type {FurnitureGhost} from './CityFurnitureMeshes';
 import {interiorContains} from '../../domain/cityStudioInteriors';
 import {bevelOutlineCorner,outlineEdges,outlineFastCheck,pullOutlineEdge,pullOutlineSection,recessOutlineCorner} from '../../domain/cityStudioOutline';
 import {sculptPrimitiveBoundary} from '../../domain/citySculpt';
+import {storeySpanForTop,storeyStartForBottom,verticalPlaneHeight} from './studioStoreys';
 
 export type StudioTool='roof'|'select'|'outline'|'block'|'round'|'oval'|'cut'|'opening'|'surface'|'interior-room'|'interior-partition'|'interior-door'|'interior-stair'|'interior-furniture'|'interior-furniture-select'|StudioAssemblyKind;
 export type StudioHandle='roof-rise'|'roof-eave'|'roof-crown'|'move'|'east'|'west'|'north'|'south'|'height'|'lift';
 export type StudioInteractionOptions={land:CityLandController;plot:LandPlot;draft:LandDraft;recipe:StudioRecipe|null;camera:PerspectiveCamera;tool:StudioTool;setTool:(t:StudioTool)=>void;outlineCornerMode:'bevel'|'recess';outlineEdgeMode:'whole'|'bay';floor:number;opening:string;scope:'spot'|'wall'|'part';channel:StudioChannel;color:string;texture:string;erase:boolean;eyedropper:boolean;onSample:(b:StudioBay)=>void;onFillApplied:()=>void;destination:number;exitKind:'door'|'balcony'|'terrace';layout:'auto'|'straight'|'switchback';flip:boolean;look:'simple'|'ornate';detailModule:string;interiorEditId:string|null;interiorDoorStyle:'panelled'|'glazed';interiorDoorHinge:'left'|'right';furnitureKind:StudioFurnitureKind;furnitureRotation:number;furnitureEditId:string|null;onFurnitureSelect:(id:string|null)=>void;onFurnitureRotate:()=>void;onRoomSelect:(id:string|null)=>void;walking:boolean;roofConnected:boolean;onRoofSelect:()=>void};
 type PaintGesture={anchors:StudioAnchor[];scope:'spot'|'wall'|'part';channel:StudioChannel;finish:StudioFinish|null;lastX:number;lastY:number};
-type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;outline?:{kind:'edge'|'section'|'corner';index:number;id:string;sourceU?:number;cornerMode:'bevel'|'recess'};draw:boolean;stroke:boolean;interior?:'partition'|'stair';detail?:string;paint?:PaintGesture;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean};
+type Gesture={pointer:number;startX:number;startY:number;start:Vector3;base:StudioRecipe;next:StudioRecipe;volume?:SculptVolume;handle?:StudioHandle;outline?:{kind:'edge'|'section'|'corner';index:number;id:string;sourceU?:number;cornerMode:'bevel'|'recess'};draw:boolean;stroke:boolean;interior?:'partition'|'stair';detail?:string;paint?:PaintGesture;visited:Set<string>;changed:boolean;invalid:string|null;touch:boolean;rise?:{normal:[number,number];anchor:[number,number,number];y0:number}};
 export type StudioWallGhost={a:[number,number];b:[number,number];floor:number;bottom:number;height:number;valid:boolean;reason:string};
 export type StudioOutlineGhost={volume:SculptVolume;valid:boolean;reason:string};
 const snap=(v:number,step=.25)=>Math.round(v/step)*step;
@@ -178,7 +179,11 @@ export function useStudioInteraction(options:StudioInteractionOptions){
     if(g.changed)detailedPreview(g);
     return;
    }
+   if((g.handle==='height'||g.handle==='lift')&&!g.rise&&g.volume){const r0=ray(g.startX,g.startY),len=Math.hypot(r0.direction.x,r0.direction.z)||1,normal:[number,number]=[r0.direction.x/len,r0.direction.z/len],anchor:[number,number,number]=[g.volume.x,0,g.volume.z],y0=verticalPlaneHeight(r0.origin.toArray(),r0.direction.toArray(),anchor,normal);if(y0!==null)g.rise={normal,anchor,y0};}
    if(Math.hypot(e.clientX-g.startX,e.clientY-g.startY)<4)return;
+   if((g.handle==='height'||g.handle==='lift')&&g.volume&&g.rise){const v=g.volume,r=ray(e.clientX,e.clientY),y=verticalPlaneHeight(r.origin.toArray(),r.direction.toArray(),g.rise.anchor,g.rise.normal);if(y===null)return;const gh=o.draft.design.groundHeight,uh=o.draft.design.upperHeight,dy=y-g.rise.y0,next={...v};
+    if(g.handle==='height')next.spanFloors=storeySpanForTop(v.startFloor,sculptFloorTop(v.startFloor+v.spanFloors-1,gh,uh)+dy,gh,uh);else next.startFloor=storeyStartForBottom(v.spanFloors,sculptFloorBottom(v.startFloor,gh,uh)+dy,gh,uh);
+    g.next={...g.next,volumes:g.next.volumes.map(p=>p.id===v.id?next:p)};if(g.handle==='lift')g.next=liftStudioAnchors({...g.next,studio:g.base.studio},v.id,next.startFloor-v.startFloor);g.changed=next.spanFloors!==v.spanFloors||next.startFloor!==v.startFloor;preview(g);return;}
    const v=g.volume,step=e.shiftKey?.05:.25,p=ground(e.clientX,e.clientY,g.start.y);if(!p)return;
    if(g.handle?.startsWith('roof-')){const old=roofChoice(g.base,v.id).settings,amount=(g.startY-e.clientY)*.025;const settings=g.handle==='roof-rise'?{rise:Math.max(.2,Math.min(8,snap(old.rise+amount,.05)))}:g.handle==='roof-eave'?{overhang:Math.max(0,Math.min(1.2,snap(old.overhang+(e.clientX-g.startX)*.012,.05)))}:{crown:Math.max(.15,Math.min(.75,old.crown+(e.clientX-g.startX)*.003))};g.next=editStudioRoof(g.base,o.roofConnected?connectedRoofParts(g.base,v.id):[v.id],{settings});g.changed=true;preview(g);return;}
    let next={...v};const dx=p.x-g.start.x,dz=p.z-g.start.z;
