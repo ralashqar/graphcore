@@ -3,7 +3,7 @@ import type {MultiPolygon} from 'polygon-clipping';
 // @deno-types="npm:@types/three@0.186.0"
 import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,type SculptPolygon,type SculptResolved} from './citySculpt.ts';
-import {STUDIO_FURNITURE} from './cityStudioFurniture.ts';
+import {STUDIO_FURNITURE,FURNITURE_LIMIT,furniturePlacementIssue} from './cityStudioFurniture.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import type {StudioBay,StudioDeck,StudioInteriorBlock,StudioInteriorLevel,StudioRecipe,StudioResolved,StudioInteriorStair,StudioRoom} from './cityStudioTypes.ts';
 
@@ -126,24 +126,18 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
  }
  for(const item of r.interior.furniture??[]){
   const level=levels[item.floor],spec=STUDIO_FURNITURE[item.kind];if(!level||!spec||openFloors.has(item.floor)){inactive.push({id:item.id,reason:'This furnishing needs a covered floor.'});continue;}
-  const room=level.rooms.find(room=>interiorContains([room.polygon],item.x,item.z));if(!room||room.openToBelow){inactive.push({id:item.id,reason:'Place this furnishing inside a covered room.'});continue;}
-  const corners=[[-.45,-.45],[.45,-.45],[-.45,.45],[.45,.45]] as const;
-  if(corners.some(([u,v])=>{const p=shift(item.x,item.z,item.rotation,u*spec.width,v*spec.depth);return !interiorContains([room.polygon],p.x,p.z)||!decks.some(deck=>deck.id.startsWith(`interior/${item.floor}/`)&&studioDeckContains(deck,p.x,p.z));})){inactive.push({id:item.id,reason:'Needs clear floor space away from walls and openings.'});continue;}
-  const floorY=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;
-  const stairBlocked=decks.some(deck=>((deck.id.includes('/ramp')||deck.id.endsWith('/upper')||deck.id.startsWith('entry/'))&&Math.abs(deck.y-floorY)<.65&&(()=>{const dx=item.x-deck.x,dz=item.z-deck.z,c=Math.cos(deck.rotation),s=Math.sin(deck.rotation),u=dx*c-dz*s,v=dx*s+dz*c;return Math.abs(u)<(deck.width+spec.width)/2+.15&&Math.abs(v)<(deck.depth+spec.depth)/2+.15;})()));
-  if(stairBlocked||portals.some(door=>door.floor===item.floor&&Math.hypot(door.x-item.x,door.z-item.z)<Math.max(spec.width,spec.depth)/2+1.1)||level.furniture.some(other=>{const s=STUDIO_FURNITURE[other.kind];return Math.hypot(other.x-item.x,other.z-item.z)<Math.max(spec.width,spec.depth,s.width,s.depth)/2+.2;})){inactive.push({id:item.id,reason:'Keep stairs, doorways and other furnishings clear.'});continue;}
-  level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
+  const reason=furniturePlacementIssue(item,level,decks,portals);if(reason){inactive.push({id:item.id,reason});continue;}
+  level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;if(spec.blocking)blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
  }
  return {...studio,portals,interiorLevels:levels,blockers,decks,inactive};
 }
 
-function studioDeckContains(deck:StudioDeck,x:number,z:number){if(!deck.polygon)return false;return interiorContains([deck.polygon],x,z);}
 
 export function validateStudioInterior(r:Extract<StudioRecipe,{version:6}>):string|null{
  const i=r.interior;if(!i||!Array.isArray(i.partitions)||!Array.isArray(i.doors)||!Array.isArray(i.stairs)||i.partitions.length>64||i.doors.length>64||i.stairs.length>12)return 'Interior intent is invalid or too large.';
  if(i.openFloors!==undefined&&(!Array.isArray(i.openFloors)||i.openFloors.length>7||i.openFloors.some(floor=>!Number.isInteger(floor)||floor<1||floor>=8)||new Set(i.openFloors).size!==i.openFloors.length))return 'Open floor choices are invalid.';
  if(i.roomFinishes!==undefined&&(!Array.isArray(i.roomFinishes)||i.roomFinishes.length>64))return 'Room choices are invalid.';
- if(i.furniture!==undefined&&(!Array.isArray(i.furniture)||i.furniture.length>48))return 'Too many furnishings.';
+ if(i.furniture!==undefined&&(!Array.isArray(i.furniture)||i.furniture.length>FURNITURE_LIMIT))return 'Too many furnishings.';
  const ids=[...i.partitions,...i.doors,...i.stairs,...(i.roomFinishes??[]),...(i.furniture??[])].map(item=>item.id);if(ids.some(id=>!id)||new Set(ids).size!==ids.length)return 'Interior identities must be unique.';
  const validFloor=(n:number)=>Number.isInteger(n)&&n>=0&&n<8,validPoint=(p:[number,number])=>Array.isArray(p)&&p.length===2&&p.every(v=>Number.isFinite(v)&&Math.abs(v)<=24);
  if(i.partitions.some(p=>!validFloor(p.floor)||!validPoint(p.a)||!validPoint(p.b)||Math.hypot(p.a[0]-p.b[0],p.a[1]-p.b[1])<1.25))return 'An interior wall is invalid.';

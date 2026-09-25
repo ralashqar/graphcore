@@ -14,7 +14,7 @@ try{
  await open();
  assert.equal(await page.locator('canvas').getAttribute('data-city-backend'),backend==='webgl'?'webgl2':'webgpu');
 
- await page.getByRole('button',{name:'Variation',exact:true}).click();
+ await page.getByRole('button',{name:'Build More',exact:true}).click();
  await page.getByRole('button',{name:'Enable variation rules',exact:true}).click();
  await page.getByRole('button',{name:'Advanced rules',exact:true}).click();
  await page.getByRole('button',{name:'Add floor rule',exact:true}).click();
@@ -27,12 +27,17 @@ try{
  const read=()=>page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft;});
  const intended=await read();assert.equal(intended.design.upperHeight,4);assert.equal(intended.sculpt.studio.variation.rules.length,1);
  await page.getByRole('button',{name:'Shuffle ground floor',exact:true}).click();await page.getByRole('button',{name:'Undo',exact:true}).click();await page.waitForFunction(expected=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.stringify(JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt)===expected;},JSON.stringify(intended.sculpt),{timeout:20000});assert.deepEqual((await read()).sculpt,intended.sculpt);
- await page.getByRole('button',{name:'Openings',exact:true}).click();await page.getByRole('button',{name:'Paint Café · 4 m',exact:true}).click();
+ await page.getByRole('button',{name:'Facade',exact:true}).click();await page.getByRole('button',{name:'Doors & windows',exact:true}).click();await page.getByRole('button',{name:'Storefronts',exact:true}).click();await page.getByRole('button',{name:'Paint Café · 4 m',exact:true}).click();
  await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(500);
  const target=await page.evaluate(async()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),d=JSON.parse(localStorage.getItem(key)).plots[0].draft,{previewStorefront}=await import('/src/domain/cityBuildingVariation.ts'),{studioBays}=await import('/src/domain/cityStudio.ts'),screen=JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays;const b=studioBays(d.sculpt,d.design).find(b=>b.anchor.floor===0&&b.anchor.side==='north'&&!previewStorefront(d.sculpt,d.design,'stamp-cafe-2',b.anchor).reason);return b&&screen.find(s=>s.id===b.id);});
  assert.ok(target,'front ground floor stamp target');await page.mouse.move(target.x,target.y);await page.waitForTimeout(250);await page.mouse.click(target.x,target.y);await page.waitForFunction(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt.studio.stamps?.length===1;},null,{timeout:20000});
  assert.equal((await read()).sculpt.studio.stamps.length,1);
- await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);await page.getByRole('button',{name:'Variation',exact:true}).click();await page.screenshot({path:`output/playwright/city-variation-studio-${backend}.png`});
+ await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);await page.getByRole('button',{name:'Build More',exact:true}).click();await page.screenshot({path:`output/playwright/city-variation-studio-${backend}.png`});
  await open();assert.equal((await read()).design.upperHeight,4);assert.equal((await read()).sculpt.studio.stamps.length,1);
+ await page.getByRole('button',{name:'Facade',exact:true}).click();await page.getByRole('button',{name:'Brick',exact:true}).click();await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(400);
+ const protectedBay=await page.locator('canvas').evaluate((canvas,id)=>JSON.parse(canvas.dataset.cityStudio).bays.find(b=>b.id===id),target.id);assert.ok(protectedBay);
+ await page.mouse.click(protectedBay.x,protectedBay.y);await page.getByRole('button',{name:'Unpack storefront',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Unpack storefront',exact:true}).click();await page.waitForFunction(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt.studio.stamps?.length===0;},null,{timeout:20000});
+ await page.mouse.click(protectedBay.x,protectedBay.y);await page.waitForFunction(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots[0].draft.sculpt.studio.surfaces.length>0;},null,{timeout:20000});
  assert.deepEqual(errors,[]);console.log('Studio variation, floor rule, shuffle undo, height, 3D storefront painting and reload passed.');
 }finally{await browser.close();}

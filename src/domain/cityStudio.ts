@@ -37,12 +37,17 @@ export function studioFinish(r:StudioRecipe,a:StudioAnchor,channel:StudioChannel
  for(const scope of ['wall','spot'] as const)for(const s of r.studio.surfaces)if(s.channel===channel&&s.scope===scope&&sameFace(s.anchor,a)&&(scope==='wall'||Math.abs(s.anchor.u-a.u)<=Math.max(.025,span/2+.002)))result=s.finish;
  return result;
 }
-export function paintStudio(r:StudioRecipe,anchor:StudioAnchor,scope:'spot'|'wall'|'part',channel:StudioChannel,finish:StudioFinish|null):StudioRecipe {
- const next=structuredClone(r);
- if(scope==='part'){const part=next.studio.parts[anchor.shapeId]??={};part.finishes??={};if(finish)part.finishes[channel]=finish;else delete part.finishes[channel];}
- else {next.studio.surfaces=next.studio.surfaces.filter(s=>!(s.scope===scope&&s.channel===channel&&sameFace(s.anchor,anchor)&&(scope==='wall'||sameSpot(s.anchor,anchor))));if(finish)next.studio.surfaces.push({id:crypto.randomUUID(),anchor,scope,channel,finish});}
+export function paintStudioStroke(r:StudioRecipe,anchors:StudioAnchor[],scope:'spot'|'wall'|'part',channel:StudioChannel,finish:StudioFinish|null):StudioRecipe {
+ const next=structuredClone(r),visited=new Set<string>();
+ for(const anchor of anchors){
+  const key=scope==='part'?anchor.shapeId:scope==='wall'?`${anchor.shapeId}/${anchor.side}/${anchor.floor}`:`${anchor.shapeId}/${anchor.side}/${anchor.floor}/${Math.round(anchor.u*10000)}`;
+  if(visited.has(key))continue;visited.add(key);
+  if(scope==='part'){const part=next.studio.parts[anchor.shapeId]??={};part.finishes??={};if(finish)part.finishes[channel]=finish;else delete part.finishes[channel];}
+  else {next.studio.surfaces=next.studio.surfaces.filter(s=>!(s.scope===scope&&s.channel===channel&&sameFace(s.anchor,anchor)&&(scope==='wall'||sameSpot(s.anchor,anchor))));if(finish)next.studio.surfaces.push({id:crypto.randomUUID(),anchor:{...anchor},scope,channel,finish:{...finish}});}
+ }
  return next;
 }
+export function paintStudio(r:StudioRecipe,anchor:StudioAnchor,scope:'spot'|'wall'|'part',channel:StudioChannel,finish:StudioFinish|null):StudioRecipe{return paintStudioStroke(r,[anchor],scope,channel,finish);}
 export function validateStudio(r:StudioRecipe):string|null {
  if(r.studio?.variation){if(r.studio.catalogue!=='synarc-kit-5')return 'Variation rules need the Blender catalog.';const error=validateVariation(r.studio.variation);if(error)return error;}
  if(r.studio?.stamps&&(r.studio.catalogue!=='synarc-kit-5'||!Array.isArray(r.studio.stamps)||r.studio.stamps.length>32||r.studio.stamps.some(s=>!s.id||!STAMP_MAP.has(s.stamp)||!s.anchor||typeof s.anchor.shapeId!=='string'||!validSculptSide(s.anchor.side)||!Number.isFinite(s.anchor.u)||s.anchor.u<0||s.anchor.u>1||!Number.isInteger(s.anchor.floor)||s.anchor.floor<0||s.anchor.floor>7)||new Set(r.studio.stamps.map(s=>s.id)).size!==r.studio.stamps.length))return 'A storefront stamp is invalid.';

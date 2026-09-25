@@ -2,15 +2,16 @@ import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import {mkdirSync} from 'node:fs';
 
+let page;
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 try{
- const page=await browser.newPage({viewport:{width:1600,height:950}}),errors=[];
+ page=await browser.newPage({viewport:{width:1600,height:950}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(`${process.env.CITY_TEST_ORIGIN||'http://127.0.0.1:5173'}/city?demo=1&cityStudio=1&cityStudioTest=1${process.env.CITY_BACKEND==='webgl'?'&cityBackend=webgl':''}`);
  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')),null,{timeout:60000});
  await page.evaluate(async()=>{const {initialLandDraft,LAND_OWNER}=await import('/src/domain/cityLand.ts'),{studioExample}=await import('/src/domain/cityStudioExamples.ts'),key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),world=JSON.parse(localStorage.getItem(key)),plot=world.plots[0];plot.owner=LAND_OWNER;plot.purchaseId='browser-interior';plot.revision=1;const draft=studioExample(initialLandDraft(plot),0,plot.size);draft.name='Interior walkthrough';draft.sculpt.volumes=[{id:'west',kind:'rectangle',operation:'add',x:-2.5,z:0,width:5,depth:12,startFloor:0,spanFloors:2},{id:'east',kind:'rectangle',operation:'add',x:2.5,z:0,width:5,depth:12,startFloor:0,spanFloors:2}];draft.sculpt.studio.assemblies=[];draft.sculpt.studio.openings=[];draft.sculpt.studio.defaults.roof='flat';plot.draft=draft;localStorage.setItem(key,JSON.stringify(world));});
  await page.reload();await page.getByRole('button',{name:'Drive mode',exact:true}).click();await page.getByRole('button',{name:'Visit test plot'}).click();await page.getByRole('region',{name:'Construction studio'}).waitFor({timeout:60000});
- await page.getByRole('button',{name:'Rooms',exact:true}).click();await page.getByRole('button',{name:'Add interiors'}).click();
+ await page.getByRole('button',{name:'Inside',exact:true}).click();await page.getByRole('button',{name:'Add interiors'}).click();
  await page.getByRole('button',{name:'Floor 2',exact:true}).click();await page.getByRole('button',{name:'Floor 1',exact:true}).click();
  await page.getByRole('button',{name:'Draw wall'}).click();await page.waitForFunction(()=>{const state=JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}');return state.tool==='interior-partition'&&!state.busy&&!document.querySelector('.studio-preparing');},null,{timeout:30000});
  const anchors=await page.locator('canvas').evaluate(canvas=>JSON.parse(canvas.dataset.cityStudio).interiorAnchors);
@@ -34,9 +35,9 @@ try{
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});
  const roomPanel=page.locator('.studio-room-panel');await roomPanel.getByRole('button',{name:/Room 1/}).click();await roomPanel.getByRole('button',{name:'tile',exact:true}).click();
  await page.waitForFunction(()=>Object.keys(localStorage).some(key=>key.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(key)).plots.some(plot=>plot.owner&&plot.draft?.sculpt?.interior?.roomFinishes?.some(room=>room.floorFinish==='tile'))),null,{timeout:30000});
- await roomPanel.getByRole('button',{name:'Dining table'}).click();const furnitureSpot=await page.locator('canvas').evaluate(canvas=>JSON.parse(canvas.dataset.cityStudio).interiorAnchors.furnitureSpot);await page.mouse.click(furnitureSpot.x,furnitureSpot.y);
+ await page.getByRole('button',{name:'Furniture',exact:true}).click();await page.getByRole('textbox',{name:'Search furniture'}).fill('Dining table');await page.getByRole('button',{name:'Place Dining table',exact:true}).click();const furnitureSpot=await page.locator('canvas').evaluate(canvas=>JSON.parse(canvas.dataset.cityStudio).interiorAnchors.furnitureSpot);await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}').tool==='interior-furniture');await page.mouse.move(furnitureSpot.x,furnitureSpot.y);await page.waitForFunction(()=>{const ghost=JSON.parse(document.querySelector('canvas')?.dataset.cityStudio||'{}').furnitureGhost;return ghost&&!ghost.reason;});await page.mouse.click(furnitureSpot.x,furnitureSpot.y);
  await page.waitForFunction(()=>Object.keys(localStorage).some(key=>key.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(key)).plots.some(plot=>plot.owner&&plot.draft?.sculpt?.interior?.furniture?.length===1)),null,{timeout:30000});
- await page.getByRole('button',{name:'Floor 2',exact:true}).click();
+ await page.getByRole('button',{name:'Rooms',exact:true}).click();await page.getByRole('button',{name:'Floor 2',exact:true}).click();
  await roomPanel.getByRole('button',{name:/Room 1/}).click();await roomPanel.getByRole('button',{name:'Open this room to below'}).click();await page.waitForFunction(()=>Object.keys(localStorage).some(key=>key.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(key)).plots.some(plot=>plot.owner&&plot.draft?.sculpt?.interior?.roomFinishes?.some(room=>room.floor===1&&room.openToBelow))),null,{timeout:30000});await roomPanel.getByRole('button',{name:'Restore this room floor'}).click();
  mkdirSync('output/playwright',{recursive:true});await page.screenshot({path:'output/playwright/city-studio-interiors.png'});
  await page.getByRole('button',{name:'Remove this floor slab'}).click();
@@ -51,4 +52,4 @@ try{
  const saved=await page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots.find(p=>p.owner)?.draft?.sculpt;});
  assert.equal(saved?.version,6);assert.equal(saved?.interior?.partitions.length,1);assert.equal(saved?.interior?.doors.length,1);assert.equal(saved?.interior?.stairs.length,1);assert.equal(saved?.interior?.furniture?.length,1);assert.ok(saved?.interior?.roomFinishes?.some(room=>room.floorFinish==='tile'));assert.equal(saved?.volumes.filter(v=>v.operation==='add').every(v=>v.spanFloors===3),true);assert.deepEqual(errors,[]);
  console.log('Interior studio edits joined floor views, covered slabs, partitions, doors, stairs, undo and added storeys across reload.');
-}finally{await browser.close();}
+}catch(error){if(page){await page.screenshot({path:'output/playwright/interiors-furniture-failure.png'});console.error(await page.locator('.studio-feedback').textContent());console.error(await page.locator('canvas').getAttribute('data-city-studio'));}throw error;}finally{await browser.close();}

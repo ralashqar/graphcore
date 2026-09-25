@@ -35,7 +35,7 @@ try{
  mkdirSync('output/playwright',{recursive:true});
  await page.screenshot({path:'output/playwright/city-studio-access.png'});
  await page.getByRole('button',{name:'Orbit view'}).click();
- await page.getByRole('button',{name:'Details',exact:true}).click();
+ await page.getByRole('button',{name:'Extras',exact:true}).click();
  await page.getByRole('button',{name:'Stair',exact:true}).click();
  await page.getByLabel('Stair exit').getByRole('button',{name:'Balcony'}).waitFor({timeout:10000});
  await page.getByLabel('Stair exit').getByRole('button',{name:'Balcony'}).click();
@@ -52,7 +52,7 @@ try{
  await page.waitForFunction(()=>Object.keys(localStorage).some(key=>key.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(key)).plots.some(plot=>plot.owner&&plot.draft?.sculpt?.studio?.assemblies?.some(a=>a.kind==='stair'&&a.flip&&a.exit))),null,{timeout:30000});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});
  await page.screenshot({path:'output/playwright/city-studio-access-built.png'});
- await page.getByRole('button',{name:'Surfaces',exact:true}).click();
+ await page.getByRole('button',{name:'Facade',exact:true}).click();
  await page.getByRole('button',{name:'frame',exact:true}).waitFor({timeout:10000});
  await page.getByRole('button',{name:'Stone',exact:true}).waitFor({timeout:10000});
  await page.getByRole('button',{name:'Walk around'}).click();

@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {STUDIO_FURNITURE,furniturePlacementIssue,furnitureOverlaps,FURNITURE_CATEGORIES} from './cityStudioFurniture.ts';
+import type {StudioFurniture,StudioInteriorLevel,StudioDeck} from './cityStudioTypes.ts';
+const polygon:[number,number][][]=[[[-5,-5],[5,-5],[5,5],[-5,5]]];
+const level={floor:0,rooms:[{polygon,openToBelow:false}],furniture:[],blocks:[]} as unknown as StudioInteriorLevel;
+const decks:StudioDeck[]=[{id:'interior/0/0',x:0,z:0,y:0,width:10,depth:10,rotation:0,polygon}];
+const item=(kind:StudioFurniture['kind'],x=0,z=0,rotation=0):StudioFurniture=>({id:kind,kind,x,z,rotation,floor:0});
+test('48 Blender pieces cover eight categories and retain the six saved legacy ids',()=>{assert.equal(Object.keys(STUDIO_FURNITURE).length,48);for(const c of FURNITURE_CATEGORIES)assert.equal(Object.values(STUDIO_FURNITURE).filter(v=>v.category===c).length,6);for(const k of ['table','chair','sofa','bookcase','plant','lamp'])assert.ok(Object.hasOwn(STUDIO_FURNITURE,k));});
+test('a rotated footprint fits a wall and adjacent narrow cabinets do not repel each other',()=>{assert.equal(furniturePlacementIssue(item('wardrobe',4.6,0,Math.PI/2),level,decks,[]),null);assert.equal(furniturePlacementIssue(item('kitchen-base',.61),level,decks,[],[item('kitchen-base')]),null);assert.equal(furnitureOverlaps({x:0,z:0,width:2,depth:.4,rotation:Math.PI/2},{x:.5,z:0,width:.4,depth:2,rotation:0}),false);});
+test('full footprints detect narrow floor voids that corner-only checks miss',()=>{const cut=[polygon[0],[[-.1,-2],[-.1,2],[.1,2],[.1,-2]]] as [number,number][][];assert.match(furniturePlacementIssue(item('table'),level,[{...decks[0],polygon:cut}],[])??'',/openings/);});
+test('rugs allow furnishings above them but solid pieces cannot overlap',()=>{assert.equal(furniturePlacementIssue(item('table'),level,decks,[],[item('rug')]),null);assert.equal(furniturePlacementIssue(item('rug'),level,decks,[],[item('table')]),null);assert.match(furniturePlacementIssue(item('sofa'),level,decks,[],[item('table')])??'',/clear/);});
+test('moving an existing piece ignores its own old bounds and floor checks reject outside placement',()=>{assert.equal(furniturePlacementIssue(item('table',.1),level,decks,[],[item('table')]),null);assert.match(furniturePlacementIssue(item('table',5),level,decks,[])??'',/covered room/);});

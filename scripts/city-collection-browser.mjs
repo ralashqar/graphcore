@@ -14,7 +14,7 @@ try{
  await open();
  assert.equal(await page.evaluate(async()=>(await (await import('/src/features/city/CityStudioMeshes.tsx')).loadStudioKit(5)).size),141);
  for(const p of presets){
-  await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByRole('button',{name:'Blender collection',exact:true}).click();
+  await page.getByRole('button',{name:'Structure',exact:true}).click();await page.getByRole('button',{name:'Blender collection',exact:true}).click();
   await page.getByLabel('Building collection categories').getByRole('button',{name:p.group,exact:true}).click();
   await page.locator('.studio-collection-card').filter({has:page.getByText(p.name,{exact:true})}).click();await page.getByRole('button',{name:'Replace building',exact:true}).click();
   await page.waitForFunction(name=>document.querySelector('[aria-label="Building name"]')?.value===name,p.name);
@@ -25,14 +25,14 @@ try{
  }
  await page.getByRole('button',{name:'Undo',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[aria-label="Building name"]')?.value==='Glass atrium campus');
  await page.getByRole('button',{name:'Redo',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[aria-label="Building name"]')?.value==='Faceted city tower');
- await page.getByRole('button',{name:'Openings',exact:true}).click();await page.getByRole('button',{name:'Cottage shutters',exact:true}).waitFor();
- await page.getByRole('button',{name:'Details',exact:true}).click();await page.getByRole('button',{name:'Civic dentil cornice',exact:true}).waitFor();
- await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByRole('button',{name:'Select',exact:true}).click();
+ await page.getByRole('button',{name:'Facade',exact:true}).click();await page.getByRole('button',{name:'Doors & windows',exact:true}).click();await page.getByRole('button',{name:'Cottage shutters',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Extras',exact:true}).click();await page.getByRole('button',{name:'Civic dentil cornice',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Structure',exact:true}).click();await page.getByRole('button',{name:'Select',exact:true}).click();
  const wall=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.filter(b=>b.floor===2).sort((a,b)=>Math.abs(a.x-innerWidth/2)-Math.abs(b.x-innerWidth/2))[0]);
- await page.mouse.click(wall.x,wall.y);await page.getByRole('button',{name:'Roofs',exact:true}).click();await page.getByRole('button',{name:'Solar roof array',exact:true}).click();await page.getByRole('button',{name:'Front left',exact:true}).click();
+ await page.mouse.click(wall.x,wall.y);await page.getByRole('button',{name:'Roof',exact:true}).click();await page.getByRole('button',{name:'Solar roof array',exact:true}).click();await page.getByRole('button',{name:'Front left',exact:true}).click();
  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(k)).plots.some(p=>p.owner&&p.draft?.sculpt?.studio?.roofDetails?.some(d=>d.module==='collection-solar'))),null,{timeout:30000});
  await open();assert.equal(await page.getByLabel('Building name',{exact:true}).inputValue(),'Faceted city tower');
- await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByRole('button',{name:'Blender collection',exact:true}).click();
+ await page.getByRole('button',{name:'Structure',exact:true}).click();await page.getByRole('button',{name:'Blender collection',exact:true}).click();
  await page.locator('.studio-collection').waitFor();
  assert.ok(await page.locator('.studio-collection').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'desktop gallery fits its panel');
  await page.screenshot({path:`output/playwright/city-collection-gallery-${backend}.png`});

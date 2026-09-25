@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {newDesign} from './cityBuildingV3.ts';
 import {resolveSculpt,validateSculpt,type SculptVolume} from './citySculpt.ts';
-import {freshStudio,paintStudio,studioBays,studioFinish,studioFloorCount} from './cityStudio.ts';
+import {freshStudio,paintStudio,paintStudioStroke,studioBays,studioFinish,studioFloorCount} from './cityStudio.ts';
 import type {StudioRecipe,StudioResolved} from './cityStudioTypes.ts';
 import {StudioWalkingCollision} from './cityStudioCollision.ts';
 import {DriveWorld} from './cityDriveWorld.ts';
 import {WalkingWorld,advanceFoot,createFootState} from './cityExploration.ts';
 import {STUDIO_MODULES,STUDIO_MODULES_V3} from './cityStudioCatalog.ts';
+import {protectedStorefrontAtBay} from './cityStorefrontStamps.ts';
 
 const volume=(id='main',patch:Partial<SculptVolume>={}):SculptVolume=>({id,kind:'rectangle',operation:'add',x:0,z:0,width:10,depth:8,startFloor:0,spanFloors:3,...patch});
 const recipe=(volumes=[volume()]):StudioRecipe=>({version:5,volumes,attachments:[],plotSize:24,studio:freshStudio()});
@@ -33,6 +34,25 @@ test('spot finish wins over wall and part; erase restores the inherited finish',
  let r=recipe();const a=studioBays(r,design(r))[0].anchor;
  r=paintStudio(r,a,'part','wall',{color:'#112233'});r=paintStudio(r,a,'wall','wall',{color:'#445566'});r=paintStudio(r,a,'spot','wall',{color:'#778899'});
  assert.equal(studioFinish(r,a,'wall')?.color,'#778899');r=paintStudio(r,a,'spot','wall',null);assert.equal(studioFinish(r,a,'wall')?.color,'#445566');
+});
+test('one brush stroke paints distinct tiles once and later strokes retain earlier paint',()=>{
+ const original=recipe(),bays=studioBays(original,design(original)).filter(b=>b.anchor.floor===0&&b.anchor.side==='north').slice(0,4);
+ assert.equal(bays.length,4);
+ const brick={color:'#ad7052',texture:'brick'};
+ const first=paintStudioStroke(original,[bays[0].anchor,bays[1].anchor,bays[1].anchor], 'spot','wall',brick);
+ assert.equal(first.studio.surfaces.length,2);assert.equal(original.studio.surfaces.length,0);
+ const second=paintStudioStroke(first,[bays[2].anchor,bays[3].anchor], 'spot','wall',brick);
+ assert.equal(second.studio.surfaces.length,4);
+ for(const bay of bays)assert.deepEqual(studioFinish(second,bay.anchor,'wall'),brick);
+ const restored=paintStudioStroke(second,[bays[1].anchor], 'spot','wall',null);
+ assert.equal(restored.studio.surfaces.length,3);assert.equal(studioFinish(restored,bays[1].anchor,'wall'),undefined);
+});
+test('protected storefront spans identify every covered tile',()=>{
+ const r=recipe(),bays=studioBays(r,design(r)).filter(b=>b.anchor.floor===0&&b.anchor.side==='north').sort((a,b)=>a.anchor.u-b.anchor.u).slice(0,3);
+ r.studio.stamps=[{id:'shop',stamp:'stamp-cafe-2',anchor:bays[0].anchor}];
+ assert.equal(protectedStorefrontAtBay(r,bays[0],bays)?.id,'shop');
+ assert.equal(protectedStorefrontAtBay(r,bays[1],bays)?.id,'shop');
+ assert.equal(protectedStorefrontAtBay(r,bays[2],bays),undefined);
 });
 test('connected balcony across three bays has one front per bay and only two ends',()=>{
  const r=recipe(),bays=studioBays(r,design(r)).filter(b=>b.anchor.floor===1&&b.anchor.side==='north').slice(0,3);

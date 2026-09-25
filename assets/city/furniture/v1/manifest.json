@@ -1,0 +1,1052 @@
+{
+  "version": 1,
+  "sourceHash": "9e1c259be037fb512da5f3918d985bc02cb31f2b05401b79ad970fbfaa03f04c",
+  "exportHash": "fa7056caec804578951e503a8e67b948300cfc30905d9622324772d32820af23",
+  "scriptHash": "9f996567211d3e1348fa17d008b053740eebf8bb22dbd7aa16d52b0bdd0b12af",
+  "items": [
+    {
+      "id": "sofa",
+      "size": [
+        1.9,
+        0.85,
+        0.85
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1364,
+      "collision": {
+        "size": [
+          1.9,
+          0.85,
+          0.85
+        ]
+      },
+      "materials": [
+        "furniture/linen.003",
+        "furniture/velvet.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "loveseat",
+      "size": [
+        1.45,
+        0.88,
+        0.82
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1148,
+      "collision": {
+        "size": [
+          1.45,
+          0.88,
+          0.82
+        ]
+      },
+      "materials": [
+        "furniture/linen.003",
+        "furniture/velvet.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "armchair",
+      "size": [
+        0.85,
+        0.88,
+        0.83
+      ],
+      "origin": "bottom-centre",
+      "triangles": 932,
+      "collision": {
+        "size": [
+          0.85,
+          0.88,
+          0.83
+        ]
+      },
+      "materials": [
+        "furniture/sage.003",
+        "furniture/velvet.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "chair",
+      "size": [
+        0.55,
+        0.9,
+        0.55
+      ],
+      "origin": "bottom-centre",
+      "triangles": 912,
+      "collision": {
+        "size": [
+          0.55,
+          0.9,
+          0.55
+        ]
+      },
+      "materials": [
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "stool",
+      "size": [
+        0.43,
+        0.72,
+        0.43
+      ],
+      "origin": "bottom-centre",
+      "triangles": 372,
+      "collision": {
+        "size": [
+          0.43,
+          0.72,
+          0.43
+        ]
+      },
+      "materials": [
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "bench",
+      "size": [
+        1.3,
+        0.47,
+        0.4
+      ],
+      "origin": "bottom-centre",
+      "triangles": 372,
+      "collision": {
+        "size": [
+          1.3,
+          0.47,
+          0.4
+        ]
+      },
+      "materials": [
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "table",
+      "size": [
+        1.5,
+        0.75,
+        0.9
+      ],
+      "origin": "bottom-centre",
+      "triangles": 392,
+      "collision": {
+        "size": [
+          1.5,
+          0.75,
+          0.9
+        ]
+      },
+      "materials": [
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "round-table",
+      "size": [
+        0.85,
+        0.75,
+        0.85
+      ],
+      "origin": "bottom-centre",
+      "triangles": 400,
+      "collision": {
+        "size": [
+          0.85,
+          0.75,
+          0.85
+        ]
+      },
+      "materials": [
+        "furniture/iron.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "coffee-table",
+      "size": [
+        1.1,
+        0.4,
+        0.6
+      ],
+      "origin": "bottom-centre",
+      "triangles": 400,
+      "collision": {
+        "size": [
+          1.1,
+          0.4,
+          0.6
+        ]
+      },
+      "materials": [
+        "furniture/oak.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "side-table",
+      "size": [
+        0.45,
+        0.52,
+        0.45
+      ],
+      "origin": "bottom-centre",
+      "triangles": 972,
+      "collision": {
+        "size": [
+          0.45,
+          0.52,
+          0.45
+        ]
+      },
+      "materials": [
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "writing-desk",
+      "size": [
+        1.25,
+        0.78,
+        0.62
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1272,
+      "collision": {
+        "size": [
+          1.25,
+          0.78,
+          0.62
+        ]
+      },
+      "materials": [
+        "furniture/blue.003",
+        "furniture/brass.003",
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "console",
+      "size": [
+        1.1,
+        0.82,
+        0.35
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1056,
+      "collision": {
+        "size": [
+          1.1,
+          0.82,
+          0.35
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "bookcase",
+      "size": [
+        1.2,
+        2,
+        0.4
+      ],
+      "origin": "bottom-centre",
+      "triangles": 3672,
+      "collision": {
+        "size": [
+          1.2,
+          2,
+          0.4
+        ]
+      },
+      "materials": [
+        "furniture/blue.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/paper.003",
+        "furniture/sage.003",
+        "furniture/velvet.003"
+      ]
+    },
+    {
+      "id": "sideboard",
+      "size": [
+        1.4,
+        0.83,
+        0.42
+      ],
+      "origin": "bottom-centre",
+      "triangles": 3764,
+      "collision": {
+        "size": [
+          1.4,
+          0.83,
+          0.42
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "dresser",
+      "size": [
+        0.95,
+        0.9,
+        0.45
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1172,
+      "collision": {
+        "size": [
+          0.95,
+          0.9,
+          0.45
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "wardrobe",
+      "size": [
+        1.2,
+        2.05,
+        0.58
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1020,
+      "collision": {
+        "size": [
+          1.2,
+          2.05,
+          0.58
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "shoe-cabinet",
+      "size": [
+        0.75,
+        0.9,
+        0.32
+      ],
+      "origin": "bottom-centre",
+      "triangles": 652,
+      "collision": {
+        "size": [
+          0.75,
+          0.9,
+          0.32
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "display-cabinet",
+      "size": [
+        0.85,
+        1.55,
+        0.38
+      ],
+      "origin": "bottom-centre",
+      "triangles": 3024,
+      "collision": {
+        "size": [
+          0.85,
+          1.55,
+          0.38
+        ]
+      },
+      "materials": [
+        "furniture/blue.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/paper.003",
+        "furniture/sage.003",
+        "furniture/velvet.003"
+      ]
+    },
+    {
+      "id": "double-bed",
+      "size": [
+        1.65,
+        1.05,
+        2.15
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1688,
+      "collision": {
+        "size": [
+          1.65,
+          1.05,
+          2.15
+        ]
+      },
+      "materials": [
+        "furniture/ivory.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/sage.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "single-bed",
+      "size": [
+        0.95,
+        0.98,
+        2.05
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1580,
+      "collision": {
+        "size": [
+          0.95,
+          0.98,
+          2.05
+        ]
+      },
+      "materials": [
+        "furniture/ivory.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/sage.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "daybed",
+      "size": [
+        0.9,
+        0.85,
+        2
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1688,
+      "collision": {
+        "size": [
+          0.9,
+          0.85,
+          2
+        ]
+      },
+      "materials": [
+        "furniture/ivory.003",
+        "furniture/linen.003",
+        "furniture/oak.003",
+        "furniture/sage.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "nightstand",
+      "size": [
+        0.46,
+        0.55,
+        0.42
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1172,
+      "collision": {
+        "size": [
+          0.46,
+          0.55,
+          0.42
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "vanity",
+      "size": [
+        1.1,
+        1.45,
+        0.42
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1504,
+      "collision": {
+        "size": [
+          1.1,
+          1.45,
+          0.42
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/mirror.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "ottoman",
+      "size": [
+        0.85,
+        0.43,
+        0.5
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1064,
+      "collision": {
+        "size": [
+          0.85,
+          0.43,
+          0.5
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/sage.003",
+        "furniture/velvet.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "kitchen-base",
+      "size": [
+        0.6,
+        0.9,
+        0.6
+      ],
+      "origin": "bottom-centre",
+      "triangles": 652,
+      "collision": {
+        "size": [
+          0.6,
+          0.9,
+          0.6
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ivory.003",
+        "furniture/sage.003"
+      ]
+    },
+    {
+      "id": "kitchen-drawers",
+      "size": [
+        0.6,
+        0.9,
+        0.6
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1172,
+      "collision": {
+        "size": [
+          0.6,
+          0.9,
+          0.6
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "kitchen-sink",
+      "size": [
+        0.8,
+        1.17,
+        0.6
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1476,
+      "collision": {
+        "size": [
+          0.8,
+          1.17,
+          0.6
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ceramic.003",
+        "furniture/ivory.003",
+        "furniture/sage.003"
+      ]
+    },
+    {
+      "id": "range",
+      "size": [
+        0.7,
+        0.9,
+        0.6
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1824,
+      "collision": {
+        "size": [
+          0.7,
+          0.9,
+          0.6
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003",
+        "furniture/ivory.003",
+        "furniture/mirror.003"
+      ]
+    },
+    {
+      "id": "fridge",
+      "size": [
+        0.66,
+        1.65,
+        0.65
+      ],
+      "origin": "bottom-centre",
+      "triangles": 708,
+      "collision": {
+        "size": [
+          0.66,
+          1.65,
+          0.65
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003",
+        "furniture/ivory.003"
+      ]
+    },
+    {
+      "id": "kitchen-island",
+      "size": [
+        1.3,
+        0.92,
+        0.75
+      ],
+      "origin": "bottom-centre",
+      "triangles": 572,
+      "collision": {
+        "size": [
+          1.3,
+          0.92,
+          0.75
+        ]
+      },
+      "materials": [
+        "furniture/oak.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "bath",
+      "size": [
+        0.78,
+        0.7,
+        1.65
+      ],
+      "origin": "bottom-centre",
+      "triangles": 492,
+      "collision": {
+        "size": [
+          0.78,
+          0.7,
+          1.65
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ceramic.003"
+      ]
+    },
+    {
+      "id": "toilet",
+      "size": [
+        0.42,
+        0.8,
+        0.68
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1112,
+      "collision": {
+        "size": [
+          0.42,
+          0.8,
+          0.68
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ceramic.003",
+        "furniture/ivory.003"
+      ]
+    },
+    {
+      "id": "washstand",
+      "size": [
+        0.75,
+        1.05,
+        0.5
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1476,
+      "collision": {
+        "size": [
+          0.75,
+          1.05,
+          0.5
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ceramic.003",
+        "furniture/ivory.003",
+        "furniture/sage.003"
+      ]
+    },
+    {
+      "id": "shower",
+      "size": [
+        0.85,
+        2,
+        0.85
+      ],
+      "origin": "bottom-centre",
+      "triangles": 328,
+      "collision": {
+        "size": [
+          0.85,
+          2,
+          0.85
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/ceramic.003",
+        "furniture/iron.003"
+      ]
+    },
+    {
+      "id": "towel-rack",
+      "size": [
+        0.6,
+        0.95,
+        0.32
+      ],
+      "origin": "bottom-centre",
+      "triangles": 480,
+      "collision": {
+        "size": [
+          0.6,
+          0.95,
+          0.32
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/linen.003"
+      ]
+    },
+    {
+      "id": "laundry-hamper",
+      "size": [
+        0.48,
+        0.65,
+        0.42
+      ],
+      "origin": "bottom-centre",
+      "triangles": 1512,
+      "collision": {
+        "size": [
+          0.48,
+          0.65,
+          0.42
+        ]
+      },
+      "materials": [
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "lamp",
+      "size": [
+        0.42,
+        1.6,
+        0.42
+      ],
+      "origin": "bottom-centre",
+      "triangles": 740,
+      "collision": {
+        "size": [
+          0.42,
+          1.6,
+          0.42
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003",
+        "furniture/ivory.003",
+        "furniture/linen.003"
+      ]
+    },
+    {
+      "id": "arc-lamp",
+      "size": [
+        0.7,
+        1.7,
+        0.45
+      ],
+      "origin": "bottom-centre",
+      "triangles": 360,
+      "collision": {
+        "size": [
+          0.7,
+          1.7,
+          0.45
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003"
+      ]
+    },
+    {
+      "id": "tripod-lamp",
+      "size": [
+        0.55,
+        1.5,
+        0.55
+      ],
+      "origin": "bottom-centre",
+      "triangles": 736,
+      "collision": {
+        "size": [
+          0.55,
+          1.5,
+          0.55
+        ]
+      },
+      "materials": [
+        "furniture/ivory.003",
+        "furniture/linen.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "lantern",
+      "size": [
+        0.35,
+        0.65,
+        0.35
+      ],
+      "origin": "bottom-centre",
+      "triangles": 464,
+      "collision": {
+        "size": [
+          0.35,
+          0.65,
+          0.35
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003",
+        "furniture/paper.003"
+      ]
+    },
+    {
+      "id": "candelabra",
+      "size": [
+        0.55,
+        1.3,
+        0.35
+      ],
+      "origin": "bottom-centre",
+      "triangles": 400,
+      "collision": {
+        "size": [
+          0.55,
+          1.3,
+          0.35
+        ]
+      },
+      "materials": [
+        "furniture/brass.003",
+        "furniture/iron.003",
+        "furniture/paper.003"
+      ]
+    },
+    {
+      "id": "paper-lamp",
+      "size": [
+        0.44,
+        1.1,
+        0.44
+      ],
+      "origin": "bottom-centre",
+      "triangles": 3240,
+      "collision": {
+        "size": [
+          0.44,
+          1.1,
+          0.44
+        ]
+      },
+      "materials": [
+        "furniture/iron.003",
+        "furniture/linen.003",
+        "furniture/paper.003"
+      ]
+    },
+    {
+      "id": "plant",
+      "size": [
+        0.55,
+        1.3,
+        0.55
+      ],
+      "origin": "bottom-centre",
+      "triangles": 2392,
+      "collision": {
+        "size": [
+          0.55,
+          1.3,
+          0.55
+        ]
+      },
+      "materials": [
+        "furniture/leaf.003",
+        "furniture/leaflight.003",
+        "furniture/oak.003",
+        "furniture/terracotta.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "palm",
+      "size": [
+        0.8,
+        1.65,
+        0.8
+      ],
+      "origin": "bottom-centre",
+      "triangles": 6188,
+      "collision": {
+        "size": [
+          0.8,
+          1.65,
+          0.8
+        ]
+      },
+      "materials": [
+        "furniture/leaf.003",
+        "furniture/leaflight.003",
+        "furniture/oak.003",
+        "furniture/terracotta.003",
+        "furniture/walnut.003"
+      ]
+    },
+    {
+      "id": "rug",
+      "size": [
+        1.8,
+        0.015,
+        1.3
+      ],
+      "origin": "bottom-centre",
+      "triangles": 240,
+      "collision": null,
+      "materials": [
+        "furniture/linen.003",
+        "furniture/sage.003",
+        "furniture/velvet.003"
+      ]
+    },
+    {
+      "id": "runner",
+      "size": [
+        0.65,
+        0.015,
+        2.2
+      ],
+      "origin": "bottom-centre",
+      "triangles": 240,
+      "collision": null,
+      "materials": [
+        "furniture/linen.003",
+        "furniture/sage.003",
+        "furniture/velvet.003"
+      ]
+    },
+    {
+      "id": "mirror",
+      "size": [
+        0.65,
+        1.65,
+        0.32
+      ],
+      "origin": "bottom-centre",
+      "triangles": 536,
+      "collision": {
+        "size": [
+          0.65,
+          1.65,
+          0.32
+        ]
+      },
+      "materials": [
+        "furniture/mirror.003",
+        "furniture/oak.003"
+      ]
+    },
+    {
+      "id": "coat-stand",
+      "size": [
+        0.55,
+        1.75,
+        0.55
+      ],
+      "origin": "bottom-centre",
+      "triangles": 572,
+      "collision": {
+        "size": [
+          0.55,
+          1.75,
+          0.55
+        ]
+      },
+      "materials": [
+        "furniture/walnut.003"
+      ]
+    }
+  ]
+}

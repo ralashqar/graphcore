@@ -22,17 +22,17 @@ try{
  assert.equal(keys.length,105);assert.ok(keys.includes('wall-nyc-garage'));
  await page.getByRole('button',{name:'Front view',exact:true}).click();
  await page.screenshot({path:`output/playwright/city-nyc-garage-${backend}.png`});
- await page.getByRole('button',{name:'Openings',exact:true}).click();await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Facade',exact:true}).click();await page.getByRole('button',{name:'Doors & windows',exact:true}).click();await page.getByRole('button',{name:'Walls',exact:true}).click();await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).waitFor();
  const garage=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.find(b=>b.module==='wall-nyc-garage'));
  await page.getByRole('button',{name:'Erase',exact:true}).click();await page.mouse.click(garage.x,garage.y);
  await page.waitForFunction(()=>!JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays.some(b=>b.module==='wall-nyc-garage'));
- await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).click();
+ await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).click();await page.waitForFunction(()=>[...document.querySelectorAll('.studio-openings .studio-tile')].some(button=>button.getAttribute('aria-label')==='Wide roller shutter · closed'&&button.getAttribute('aria-pressed')==='true'),null,{timeout:10000});
  const raw=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.filter(b=>b.floor===0&&b.side==='north').sort((a,b)=>Number(a.id.split('/').at(-1))-Number(b.id.split('/').at(-1)))[1]);
  await page.mouse.click(raw.x,raw.y);await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays.some(b=>b.module==='wall-nyc-garage'),null,{timeout:30000});
- await page.getByRole('button',{name:'Details',exact:true}).click();await page.getByRole('button',{name:'Stone belt course',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Extras',exact:true}).click();await page.getByRole('button',{name:'Stone belt course',exact:true}).waitFor();
  const records=[];
  for(const name of ['Corner deli','Neighborhood café','SoHo cast-iron loft','Garage workshop loft','Balcony apartments','Ornate commercial corner']){
-  await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByRole('button',{name:'Starting ideas',exact:true}).click();
+  await page.getByRole('button',{name:'Structure',exact:true}).click();await page.getByRole('button',{name:'Starting ideas',exact:true}).click();
   await page.getByRole('button',{name,exact:true}).click();await page.getByRole('button',{name:'Replace building',exact:true}).click();
   await page.waitForFunction(name=>Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(k)).plots.some(p=>p.owner&&p.draft?.name===name)),name,{timeout:30000});
   await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:60000});
@@ -45,10 +45,10 @@ try{
  await page.getByRole('button',{name:'Redo',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[aria-label="Building name"]')?.value==='Ornate commercial corner');
  await page.getByRole('button',{name:'Select',exact:true}).click();
  const wall=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.find(b=>b.floor===3&&b.side==='north'));
- await page.mouse.click(wall.x,wall.y);await page.getByRole('button',{name:'Roofs',exact:true}).click();await page.getByRole('button',{name:'Roof exhaust vent',exact:true}).click();await page.getByRole('button',{name:'Front left',exact:true}).click();
+ await page.mouse.click(wall.x,wall.y);await page.getByRole('button',{name:'Roof',exact:true}).click();await page.getByRole('button',{name:'Roof exhaust vent',exact:true}).click();await page.getByRole('button',{name:'Front left',exact:true}).click();
  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(k)).plots.some(p=>p.owner&&p.draft?.sculpt?.studio?.roofDetails?.some(d=>d.module==='nyc-vent'))),null,{timeout:30000});
- await page.getByRole('button',{name:'Rooms',exact:true}).click();await page.getByRole('button',{name:'Add interiors',exact:true}).click();
- await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:60000});
+ await page.getByRole('button',{name:'Inside',exact:true}).click();await page.getByRole('button',{name:'Add interiors',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector('.studio-preparing')&&Object.keys(localStorage).some(k=>k.startsWith('city-land-v1-')&&JSON.parse(localStorage.getItem(k)).plots.some(p=>p.owner&&p.draft?.sculpt?.version===6)),null,{timeout:60000});
  await page.getByRole('button',{name:'Walk around',exact:true}).click();await page.getByRole('button',{name:'Return to building E'}).click();
  await open();
  const saved=await page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(key)).plots.find(p=>p.owner).draft;});

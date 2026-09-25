@@ -1,0 +1,21 @@
+import {useMemo,useState} from 'react';
+import {Armchair,Table,Books,Bed,CookingPot,Bathtub,Lamp,Plant,MagnifyingGlass,Cursor,ArrowClockwise,Copy,Trash,ArrowsOut} from '@phosphor-icons/react';
+import {FURNITURE_CATEGORIES,FURNITURE_LIMIT,STUDIO_FURNITURE} from '../../domain/cityStudioFurniture';
+import type {StudioFurniture,StudioFurnitureKind} from '../../domain/cityStudioTypes';
+import {loadFurnitureKit,useFurnitureKit} from './CityFurnitureMeshes';
+const icons={seating:Armchair,tables:Table,storage:Books,bedroom:Bed,kitchen:CookingPot,bathroom:Bathtub,lighting:Lamp,decor:Plant};
+type Props={kind:StudioFurnitureKind;placing:boolean;items:StudioFurniture[];total:number;selected:string|null;choose:(kind:StudioFurnitureKind)=>void;select:(id:string|null)=>void;move:()=>void;rotate:()=>void;duplicate:()=>void;remove:()=>void};
+export function CityFurnitureTray(p:Props){
+ const [category,setCategory]=useState<string>('seating'),[query,setQuery]=useState(''),[placed,setPlaced]=useState(false),kit=useFurnitureKit();
+ const choices=useMemo(()=>(Object.entries(STUDIO_FURNITURE) as [StudioFurnitureKind,typeof STUDIO_FURNITURE[StudioFurnitureKind]][]).filter(([,item])=>query?`${item.label} ${item.category}`.toLowerCase().includes(query.toLowerCase()):item.category===category),[category,query]);
+ const selected=p.items.find(item=>item.id===p.selected),spec=selected?STUDIO_FURNITURE[selected.kind]:STUDIO_FURNITURE[p.kind];
+ return <section className="studio-furniture" aria-label="Furniture library">
+  <div className="furniture-heading"><strong>Furnish</strong><span>{p.total} / {FURNITURE_LIMIT}</span><div className="studio-segment"><button aria-pressed={!placed} onClick={()=>setPlaced(false)}>Library</button><button aria-pressed={placed} onClick={()=>setPlaced(true)}>On this floor · {p.items.length}</button></div></div>
+  {!placed?<><label className="furniture-search"><MagnifyingGlass size={17}/><input aria-label="Search furniture" placeholder="Search all 48 pieces" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button aria-label="Clear furniture search" onClick={()=>setQuery('')}>×</button>}</label>
+   <nav className="furniture-categories" aria-label="Furniture categories">{FURNITURE_CATEGORIES.map(id=>{const Icon=icons[id];return <button key={id} aria-pressed={category===id&&!query} onClick={()=>{setCategory(id);setQuery('');}}><Icon size={19}/>{id}</button>;})}</nav>
+   <div className="furniture-grid" aria-label="Furniture catalogue">{choices.map(([id,item])=><button key={id} aria-label={`Place ${item.label}`} aria-pressed={p.placing&&!p.selected&&p.kind===id} onClick={()=>p.choose(id)} disabled={p.total>=FURNITURE_LIMIT}><img loading="lazy" src={item.thumbnail} alt=""/><span>{item.label}</span><small>{item.width.toFixed(2)} × {item.depth.toFixed(2)} m</small></button>)}{!choices.length&&<p>No pieces match “{query}”.</p>}</div></>:
+   <div className="furniture-placed">{p.items.map(item=><button key={item.id} aria-pressed={p.selected===item.id} onClick={()=>p.select(item.id)}><img src={STUDIO_FURNITURE[item.kind].thumbnail} alt=""/><span>{STUDIO_FURNITURE[item.kind].label}</span></button>)}{!p.items.length&&<p>Choose a piece from the library to furnish this floor.</p>}</div>}
+  <div className="furniture-actions"><button aria-label="Select furniture" aria-pressed={!p.placing} onClick={()=>p.select(null)}><Cursor size={17}/> Select</button><span>{selected?spec.label:p.placing?`Placing ${spec.label}`:'Choose a piece'}</span><button aria-label="Rotate furniture" title="Rotate · R" onClick={p.rotate} disabled={!selected&&!p.placing}><ArrowClockwise size={19}/></button>{selected&&<><button aria-label="Move furniture" onClick={p.move}><ArrowsOut size={18}/></button><button aria-label="Duplicate furniture" onClick={p.duplicate} disabled={p.total>=FURNITURE_LIMIT}><Copy size={18}/></button><button aria-label="Delete furniture" onClick={p.remove}><Trash size={18}/></button></>}</div>
+  <div className="furniture-hint">{kit.status==='error'?<><span>Furniture models could not load.</span><button onClick={loadFurnitureKit}>Retry</button></>:kit.status!=='ready'?'Loading furniture models…':p.placing?'Click to place · R to turn · Esc to cancel':'Select a piece in the room or the floor list.'}</div>
+ </section>;
+}
