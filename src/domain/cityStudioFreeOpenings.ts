@@ -21,11 +21,18 @@
  *  removeFreeOpening(recipe,id) -> recipe
  *  resolveStudioFreeFace(recipe,design,shapeId,side,bays?) -> frame + FreeFaceResolution (ghost/preview data)
  * Pass the current `studioBays(recipe,design)` as `bays` to respect walls hidden by other parts.
+ *
+ * Kit pieces (`module`, see cityStudioModuleSpec): the opening hosts a Blender kit window/door/wall tile at its
+ * native size (`width`/`height` = tile size, `bottom` = the storey floor it stands on). Its aperture is cut, it
+ * never merges or clamps, and it conflicts with other kit tiles it overlaps and with openings cut through its
+ * aperture surround. Explicit kit tile intents (studio.openings, storefront stamps) on a generated wall resolve
+ * as derived module openings (studioKitModuleOpenings) that come first, so they win over later free openings.
  */
 import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon,Polygon} from 'polygon-clipping';
 import {sculptFloorBottom,sculptFloorTop,sculptPrimitiveBoundary,sculptSourceEdge,validSculptSide,type SculptWallSide} from './citySculpt.ts';
 import type {StudioBay,StudioRecipe} from './cityStudioTypes.ts';
+import {moduleOpeningSpec,type ModuleOpeningKind} from './cityStudioModuleSpec.ts';
 import {curveLength,curveMaxOpening,curveNormal,curvePoint,curveXAt,type FaceCurve} from './cityStudioFaceCurve.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 
@@ -33,19 +40,28 @@ export const FREE_OPENING_SHAPES=['rect','arch','round','pointed'] as const;
 export const FREE_OPENING_STYLES=['timber','stone','painted'] as const;
 export type FreeOpeningShape=typeof FREE_OPENING_SHAPES[number];
 export type FreeOpeningStyle=typeof FREE_OPENING_STYLES[number];
-export type StudioFreeOpening={id:string;shapeId:string;side:SculptWallSide;u:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean};
-/** Tuning: merge gap/overlap, door sill, face margins (edge/top), minimum wall between openings, size bounds. */
-export const FREE_OPENING={limit:64,mergeGap:.25,mergeOverlap:.6,doorSill:.15,doorSnap:.45,edge:.3,top:.2,minWall:.12,min:.3,max:12} as const;
+export type StudioFreeOpening={id:string;shapeId:string;side:SculptWallSide;u:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean;/** Kit piece hosted by this opening (cityStudioModuleSpec); width/height are its tile size. */module?:string};
+/**
+ * Tuning: merge gap/overlap, door sill, face margins (edge/top), minimum wall between openings, size bounds.
+ * `limit` counts shaped openings; kit-piece openings have their own `moduleLimit` (a converted kit building has one per bay).
+ * `moduleKeep`: the wall kept clear around a kit aperture (its trim surround); `moduleSnap`: bay-centre snap distance.
+ */
+export const FREE_OPENING={limit:64,moduleLimit:400,mergeGap:.25,mergeOverlap:.6,doorSill:.15,doorSnap:.45,edge:.3,top:.2,minWall:.12,min:.3,max:12,moduleKeep:.2,moduleTol:.011,moduleSnap:.35} as const;
 
 export type FreeRect=[number,number,number,number];
 /** `maxWidthAt`: curved faces only, the widest opening/group that may sit flat on the curve around x (see cityStudioFaceCurve). */
 export type FreeFaceSpec={length:number;height:number;ground:boolean;region?:FreeRect[];maxWidthAt?:(x:number)=>number};
-export type FreeFaceOpening={id:string;x:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean};
+export type FreeFaceOpening={id:string;x:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean;module?:string};
 export type FreeOpeningPanel={id:string;shape:FreeOpeningShape;x0:number;x1:number;y0:number;y1:number;rise:number;spring:number;clamped:boolean};
-export type FreeOpeningGroup={id:string;members:string[];panels:FreeOpeningPanel[];role:'window'|'door';x0:number;x1:number;y0:number;y1:number;spring:number;mullions:{x:number;y0:number;y1:number}[];outline:[number,number][];style:FreeOpeningStyle;glazing:boolean;clamped:boolean};
-export type FreeFaceResolution={groups:FreeOpeningGroup[];inactive:{id:string;reason:string}[]};
+/** `module`: the group is a kit piece's aperture (no procedural surround, frame, glass or leaf: the kit piece brings them). */
+export type FreeOpeningGroup={id:string;members:string[];panels:FreeOpeningPanel[];role:'window'|'door';x0:number;x1:number;y0:number;y1:number;spring:number;mullions:{x:number;y0:number;y1:number}[];outline:[number,number][];style:FreeOpeningStyle;glazing:boolean;clamped:boolean;module?:string};
+/** One kit piece on a face: its tile rectangle (face metres) and, for apertures, the group that cuts its hole. */
+export type FreeModulePlacement={id:string;module:string;kind:ModuleOpeningKind;x0:number;x1:number;y0:number;y1:number;group?:string};
+export type FreeFaceResolution={groups:FreeOpeningGroup[];inactive:{id:string;reason:string}[];modules:FreeModulePlacement[]};
 export type FreeOpeningHit={shapeId:string;side:SculptWallSide;u:number;heightAboveBase:number};
-export type FreeOpeningPreset={width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean;id?:string};
+export type FreeOpeningPreset={width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean;id?:string;module?:string};
+/** Door role of a stored opening: kit door modules, else a ground-touching non-round shape (the resolver still checks the face). */
+export const freeOpeningIsDoor=(o:Pick<StudioFreeOpening,'shape'|'bottom'|'module'>)=>o.module?moduleOpeningSpec(o.module)?.category==='door'&&o.bottom<=FREE_OPENING.doorSill:o.shape!=='round'&&o.bottom<=FREE_OPENING.doorSill;
 /**
  * Straight faces: `origin` is the viewer-left end at the base line, x runs along `tangent`.
  * Curved faces (ellipse parts, side 'curve') carry `curve`: x is the arc length (cityStudioFaceCurve), `origin`
@@ -55,17 +71,22 @@ export type FreeOpeningPreset={width:number;height:number;shape:FreeOpeningShape
 export type StudioFaceFrame={shapeId:string;side:SculptWallSide;origin:[number,number];tangent:[number,number];normal:[number,number];rotation:number;length:number;base:number;height:number;ground:boolean;flip:boolean;curve?:FaceCurve};
 
 const finite=(n:unknown,lo:number,hi:number)=>typeof n==='number'&&Number.isFinite(n)&&n>=lo&&n<=hi;
-const KEYS=['id','shapeId','side','u','bottom','width','height','shape','style','glazing'];
+const KEYS=['id','shapeId','side','u','bottom','width','height','shape','style','glazing','module'];
 const idOk=(v:unknown)=>typeof v==='string'&&v.length>0&&v.length<=100&&!['__proto__','constructor','prototype'].includes(v);
+/** Over the shaped-opening or kit-piece limit. */
+const overLimit=(list:readonly {module?:unknown}[])=>{let kit=0;for(const o of list)if(o&&typeof o==='object'&&o.module!==undefined)kit++;return list.length-kit>FREE_OPENING.limit||kit>FREE_OPENING.moduleLimit;};
 export function validateFreeOpenings(list:unknown):string|null {
  if(list===undefined)return null;
- if(!Array.isArray(list)||list.length>FREE_OPENING.limit)return 'This building has reached its free opening limit.';
+ if(!Array.isArray(list)||list.length>FREE_OPENING.limit+FREE_OPENING.moduleLimit||overLimit(list))return 'This building has reached its free opening limit.';
  const ids=new Set<string>();
  for(const o of list as Record<string,unknown>[]){
   if(!o||typeof o!=='object'||Array.isArray(o)||Object.keys(o).some(k=>!KEYS.includes(k)))return 'A free opening is invalid.';
   if(!idOk(o.id)||ids.has(o.id as string)||!idOk(o.shapeId)||!validSculptSide(o.side))return 'A free opening is invalid.';ids.add(o.id as string);
   if(!finite(o.u,0,1)||!finite(o.bottom,0,40)||!finite(o.width,FREE_OPENING.min,FREE_OPENING.max)||!finite(o.height,FREE_OPENING.min,FREE_OPENING.max))return 'A free opening is outside the supported size.';
   if(!FREE_OPENING_SHAPES.includes(o.shape as FreeOpeningShape)||o.style!==undefined&&!FREE_OPENING_STYLES.includes(o.style as FreeOpeningStyle)||o.glazing!==undefined&&typeof o.glazing!=='boolean')return 'A free opening is invalid.';
+  // Kit pieces: a known window/door/wall module at its native tile size, plain rect, no procedural style.
+  if(o.module!==undefined){const spec=typeof o.module==='string'?moduleOpeningSpec(o.module):null;
+   if(!spec||o.shape!=='rect'||o.style!==undefined||o.glazing!==undefined||Math.abs(Number(o.width)-spec.width)>.005||Math.abs(Number(o.height)-spec.height)>.005)return 'A kit piece opening is invalid.';}
  }
  return null;
 }
@@ -127,42 +148,83 @@ function panelFor(face:FreeFaceSpec,o:FreeFaceOpening):{panel?:FreeOpeningPanel;
  const rise=o.shape==='round'?0:freeOpeningRise(o.shape,w,h);
  const panel:FreeOpeningPanel={id:o.id,shape:o.shape,x0,x1:x0+w,y0,y1,rise,spring:o.shape==='round'?y1:y1-rise,clamped};
  if(face.region){
-  const pad=.1,box:FreeRect=[x0-pad,x0+w+pad,door?0:Math.max(0,y0-pad),y1+pad],region=freeRegion(face.region);
-  if(!region.length||multiArea(polygonClipping.difference(toPolygon([[box[0],box[2]],[box[1],box[2]],[box[1],box[3]],[box[0],box[3]]]),region))>1e-4)return {reason:'This part of the wall is hidden by another part.'};
+  const pad=.1,box:FreeRect=[x0-pad,x0+w+pad,door?0:Math.max(0,y0-pad),y1+pad];
+  if(hiddenBy(face,box))return {reason:'This part of the wall is hidden by another part.'};
  }
  return {panel,role:door?'door':'window'};
 }
 const rectGap=(a:FreeOpeningPanel,b:FreeOpeningPanel)=>Math.hypot(Math.max(0,a.x0-b.x1,b.x0-a.x1),Math.max(0,a.y0-b.y1,b.y0-a.y1));
 const mergeable=(a:FreeOpeningPanel,b:FreeOpeningPanel)=>a.shape!=='round'&&b.shape!=='round'&&Math.max(a.x0,b.x0)-Math.min(a.x1,b.x1)<FREE_OPENING.mergeGap&&Math.min(a.y1,b.y1)-Math.max(a.y0,b.y0)>FREE_OPENING.mergeOverlap*Math.min(a.y1-a.y0,b.y1-b.y0);
+/** Strict overlap of two face rectangles, ignoring shared edges (kit tiles abut like bays). */
+const rectsOverlap=(a:FreeRect,b:FreeRect,tol=.02)=>Math.min(a[1],b[1])-Math.max(a[0],b[0])>tol&&Math.min(a[3],b[3])-Math.max(a[2],b[2])>tol;
+const rectOf=(p:FreeOpeningPanel):FreeRect=>[p.x0,p.x1,p.y0,p.y1];
+/** The union of a face's exposed rectangles, built once per region array. */
+const regionCache=new WeakMap<FreeRect[],MultiPolygon>();
+const regionOf=(rects:FreeRect[])=>{let m=regionCache.get(rects);if(!m){m=freeRegion(rects);regionCache.set(rects,m);}return m;};
+/** Whether a box leaves the exposed region (fast path: inside one exposed rectangle). */
+const hiddenBy=(face:FreeFaceSpec,box:FreeRect)=>{if(!face.region)return false;if(face.region.some(r=>box[0]>=r[0]-1e-6&&box[1]<=r[1]+1e-6&&box[2]>=r[2]-1e-6&&box[3]<=r[3]+1e-6))return false;const region=regionOf(face.region);return !region.length||multiArea(polygonClipping.difference(toPolygon([[box[0],box[2]],[box[1],box[2]],[box[1],box[3]],[box[0],box[3]]]),region))>1e-4;};
 
+/**
+ * A kit piece on the face: stored at its exact position and native size (never clamped). Apertures cut a
+ * rectangular hole (door role only for door modules at the base of a ground-level face); `keep` is the wall
+ * that shaped openings must leave clear (the aperture plus its surround, or the whole tile for wall panels).
+ */
+function moduleFor(face:FreeFaceSpec,o:FreeFaceOpening):{tile?:FreeRect;keep?:FreeRect;panel?:FreeOpeningPanel;role?:'window'|'door';kind?:ModuleOpeningKind;reason?:string}{
+ const spec=moduleOpeningSpec(o.module);if(!spec)return {reason:'This kit piece is unavailable.'};
+ const tol=FREE_OPENING.moduleTol,tile:FreeRect=[o.x-spec.width/2,o.x+spec.width/2,o.bottom,o.bottom+spec.height];
+ if(spec.width>face.length+tol)return {reason:'This wall is too narrow for that piece.'};
+ if(tile[3]>face.height+tol)return {reason:'This wall is too low for that piece.'};
+ if(tile[0]<-tol||tile[1]>face.length+tol||tile[2]<-tol)return {reason:'This piece does not fit on this wall.'};
+ const need=spec.aperture?spec.aperture.x1-spec.aperture.x0:spec.width;
+ if(face.maxWidthAt&&face.maxWidthAt(o.x)<need-1e-9)return {reason:'This wall curves too tightly for this piece.'};
+ if(hiddenBy(face,[tile[0]+.02,tile[1]-.02,tile[2]+.02,tile[3]-.02]))return {reason:'This part of the wall is hidden by another part.'};
+ if(!spec.aperture)return {tile,keep:tile,kind:spec.kind};
+ const a=spec.aperture,x0=o.x+a.x0,x1=o.x+a.x1,y0=o.bottom+a.y0,y1=o.bottom+a.y1,door=spec.category==='door'&&face.ground&&y0<=FREE_OPENING.doorSill,k=FREE_OPENING.moduleKeep;
+ return {tile,keep:[x0-k,x1+k,y0-(door?0:k),y1+k],kind:'aperture',role:door?'door':'window',panel:{id:o.id,shape:'rect',x0,x1,y0,y1,rise:0,spring:y1,clamped:false}};
+}
+
+type Item={o:FreeFaceOpening;panel?:FreeOpeningPanel;role:'window'|'door';order:number;tile?:FreeRect;keep?:FreeRect;kind?:ModuleOpeningKind};
+/** Two items that cannot both stay: shaped openings too close, kit tiles overlapping, or a hole through a kit surround. */
+function clash(a:Item,b:Item,separate:boolean){
+ if(!a.tile&&!b.tile)return separate&&rectGap(a.panel!,b.panel!)<FREE_OPENING.minWall;
+ if(a.tile&&b.tile)return rectsOverlap(a.tile,b.tile);
+ const kit=a.tile?a:b,shaped=a.tile?b:a;return rectsOverlap(kit.keep!,rectOf(shaped.panel!),0);
+}
 /** Resolve the openings of one face rectangle: individual fit, merged groups, door role and outlines. */
 export function resolveFreeOpenings(face:FreeFaceSpec,openings:FreeFaceOpening[]):FreeFaceResolution{
  const limit=face.maxWidthAt;
- const inactive:FreeFaceResolution['inactive']=[],items:{o:FreeFaceOpening;panel:FreeOpeningPanel;role:'window'|'door';order:number}[]=[];
- openings.forEach((o,order)=>{const fit=panelFor(face,o);if(fit.reason)inactive.push({id:o.id,reason:fit.reason});else items.push({o,panel:fit.panel!,role:fit.role!,order});});
+ const inactive:FreeFaceResolution['inactive']=[],items:Item[]=[];
+ openings.forEach((o,order)=>{
+  if(o.module){const fit=moduleFor(face,o);if(fit.reason)inactive.push({id:o.id,reason:fit.reason});else items.push({o,panel:fit.panel,role:fit.role??'window',order,tile:fit.tile,keep:fit.keep,kind:fit.kind});return;}
+  const fit=panelFor(face,o);if(fit.reason)inactive.push({id:o.id,reason:fit.reason});else items.push({o,panel:fit.panel!,role:fit.role!,order});
+ });
  let parent:number[]=[];
  const find=(i:number):number=>parent[i]===i?i:(parent[i]=find(parent[i]));
+ // Kit pieces never merge: each keeps its own hole and piece.
+ const joinable=(i:number,j:number)=>!items[i].tile&&!items[j].tile&&items[i].role===items[j].role&&mergeable(items[i].panel!,items[j].panel!);
  for(;;){
   parent=items.map((_,i)=>i);
-  if(!limit){for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++)if(items[i].role===items[j].role&&mergeable(items[i].panel,items[j].panel))parent[find(j)]=find(i);}
+  if(!limit){for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++)if(joinable(i,j))parent[find(j)]=find(i);}
   else{
    // Curved faces: a merged group is one flat chord, so merging (left to right) stops before a group outgrows the curve.
-   const extent=items.map(it=>[it.panel.x0,it.panel.x1] as [number,number]),order=items.map((_,i)=>i).sort((a,b)=>items[a].panel.x0-items[b].panel.x0||a-b);
-   for(let p=0;p<order.length;p++)for(let q=p+1;q<order.length;q++){const i=order[p],j=order[q],a=find(i),b=find(j);if(a===b||items[i].role!==items[j].role||!mergeable(items[i].panel,items[j].panel))continue;
+   const span=(it:Item)=>it.panel?[it.panel.x0,it.panel.x1] as [number,number]:[it.tile![0],it.tile![1]] as [number,number];
+   const extent=items.map(span),order=items.map((_,i)=>i).sort((a,b)=>extent[a][0]-extent[b][0]||a-b);
+   for(let p=0;p<order.length;p++)for(let q=p+1;q<order.length;q++){const i=order[p],j=order[q],a=find(i),b=find(j);if(a===b||!joinable(i,j))continue;
     const x0=Math.min(extent[a][0],extent[b][0]),x1=Math.max(extent[a][1],extent[b][1]);if(x1-x0>limit((x0+x1)/2)+1e-9)continue;parent[b]=a;extent[a]=[x0,x1];}
   }
   let loser=-1;
-  for(let i=0;i<items.length&&loser<0;i++)for(let j=i+1;j<items.length;j++)if(find(i)!==find(j)&&rectGap(items[i].panel,items[j].panel)<FREE_OPENING.minWall){loser=items[i].order>items[j].order?i:j;break;}
+  for(let i=0;i<items.length&&loser<0;i++)for(let j=i+1;j<items.length;j++)if(clash(items[i],items[j],find(i)!==find(j))){loser=items[i].order>items[j].order?i:j;break;}
   if(loser<0)break;
-  inactive.push({id:items[loser].o.id,reason:'Too close to another opening.'});items.splice(loser,1);
+  inactive.push({id:items[loser].o.id,reason:items[loser].tile?'Too close to another opening or kit piece.':'Too close to another opening.'});items.splice(loser,1);
  }
- const components=new Map<number,typeof items>();items.forEach((item,i)=>{const k=find(i);components.set(k,[...(components.get(k)??[]),item]);});
- const groups=[...components.values()].map(members=>buildGroup(members.sort((a,b)=>a.panel.x0-b.panel.x0)));
- return {groups:groups.sort((a,b)=>a.x0-b.x0),inactive};
+ const components=new Map<number,Item[]>();items.forEach((item,i)=>{if(!item.panel)return;const k=find(i);components.set(k,[...(components.get(k)??[]),item]);});
+ const groups=[...components.values()].map(members=>buildGroup(members.sort((a,b)=>a.panel!.x0-b.panel!.x0) as {o:FreeFaceOpening;panel:FreeOpeningPanel;role:'window'|'door'}[]));
+ const modules:FreeModulePlacement[]=items.filter(it=>it.tile).map(it=>({id:it.o.id,module:it.o.module!,kind:it.kind!,x0:it.tile![0],x1:it.tile![1],y0:it.tile![2],y1:it.tile![3],...(it.panel?{group:it.o.id}:{})}));
+ return {groups:groups.sort((a,b)=>a.x0-b.x0),inactive,modules};
 }
 function buildGroup(members:{o:FreeFaceOpening;panel:FreeOpeningPanel;role:'window'|'door'}[]):FreeOpeningGroup{
  const panels=members.map(m=>m.panel),role=members[0].role,y0=Math.min(...panels.map(p=>p.y0)),first=members[0].o;
- const base={id:members.map(m=>m.o.id).join('+'),members:members.map(m=>m.o.id),panels,role,x0:Math.min(...panels.map(p=>p.x0)),x1:Math.max(...panels.map(p=>p.x1)),y0,y1:Math.max(...panels.map(p=>p.y1)),spring:Math.min(...panels.map(p=>p.spring)),style:first.style??(role==='door'?'timber':'painted'),glazing:first.glazing??role==='window',clamped:panels.some(p=>p.clamped)};
+ const base={id:members.map(m=>m.o.id).join('+'),members:members.map(m=>m.o.id),panels,role,x0:Math.min(...panels.map(p=>p.x0)),x1:Math.max(...panels.map(p=>p.x1)),y0,y1:Math.max(...panels.map(p=>p.y1)),spring:Math.min(...panels.map(p=>p.spring)),style:first.style??(role==='door'?'timber':'painted'),glazing:first.module?false:first.glazing??role==='window',clamped:panels.some(p=>p.clamped),...(first.module?{module:first.module}:{})};
  if(panels.length===1)return {...base,mullions:[],outline:freeOpeningOutline(panels[0])};
  const polys:Polygon[]=panels.map(p=>toPolygon(freeOpeningOutline({...p,y0})));const mullions:FreeOpeningGroup['mullions']=[];
  for(let i=0;i+1<panels.length;i++){
@@ -179,7 +241,8 @@ function buildGroup(members:{o:FreeFaceOpening;panel:FreeOpeningPanel;role:'wind
 
 /** Viewer-right face frame of a straight part side. `origin` is the left end at the part base. */
 export function studioFaceFrame(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,shapeId:string,side:SculptWallSide):StudioFaceFrame|{reason:string}{
- const v=r.volumes.find(v=>v.id===shapeId&&v.operation==='add');if(!v)return {reason:'This part no longer exists.'};
+ // Cut-out parts (courtyards, notches) own the walls they expose: straight ones face into the cut-out.
+ const v=r.volumes.find(v=>v.id===shapeId&&(v.operation==='add'||v.operation==='subtract'&&v.kind!=='ellipse'));if(!v)return {reason:'This part no longer exists.'};
  if(v.kind==='ellipse'||side==='curve'){
   if(v.kind!=='ellipse'||side!=='curve')return {reason:'This wall is no longer part of the outline.'};
   // The whole curved wall is one face in arc-length coordinates (see cityStudioFaceCurve).
@@ -196,6 +259,7 @@ export function studioFaceFrame(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'grou
   const l=v.x-v.width/2,rr=v.x+v.width/2,b=v.z-v.depth/2,f=v.z+v.depth/2;
   if(side==='north'){p0=[l,f];p1=[rr,f];normal=[0,1];}else if(side==='south'){p0=[l,b];p1=[rr,b];normal=[0,-1];}else if(side==='east'){p0=[rr,b];p1=[rr,f];normal=[1,0];}else if(side==='west'){p0=[l,b];p1=[l,f];normal=[-1,0];}else return {reason:'This wall is no longer part of the outline.'};
  }
+ if(v.operation==='subtract')normal=[-normal[0],-normal[1]];
  const tangent:[number,number]=[normal[1],-normal[0]],flip=(p1[0]-p0[0])*tangent[0]+(p1[1]-p0[1])*tangent[1]<0,base=sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight);
  return {shapeId,side,origin:flip?p1:p0,tangent,normal,rotation:Math.atan2(normal[0],normal[1]),length:Math.hypot(p1[0]-p0[0],p1[1]-p0[1]),base,height:sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight)-base,ground:v.startFloor===0,flip};
 }
@@ -227,10 +291,42 @@ export const isFrame=(f:StudioFaceFrame|{reason:string}):f is StudioFaceFrame=>!
 export function studioFaceRegion(f:StudioFaceFrame,bays:StudioBay[]):FreeRect[]{
  return bays.filter(b=>b.anchor.shapeId===f.shapeId&&b.anchor.side===f.side).flatMap(b=>studioBayFaceSpans(f,b).map(([s0,s1])=>[s0,s1,b.y-f.base,b.y+b.height-f.base] as FreeRect));
 }
+/**
+ * Kit tile intents that render as kit-piece openings on generated walls: bays whose module comes from an explicit
+ * opening (manual tiles, storefront stamps; `StudioBay.source`), or a merged wide span. Variation-generated tiles
+ * (`generated/`) are not included: on a generated wall the facade rhythm (or nothing) replaces them. Ids are
+ * `kit/<intent id>`; plain wall tiles become blind reservations.
+ */
+/** The explicit intent behind a bay's module: `source`, or the intent of a merged wide span (`opening/<intent id>`). */
+export function studioBaySource(openings:readonly {id:string}[],b:Pick<StudioBay,'id'|'source'>):string|undefined{
+ if(b.id.startsWith('opening/')){const rest=b.id.slice(8);if(openings.some(o=>o.id===rest))return rest;}return b.source;
+}
+export function studioKitModuleOpenings(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,bays:readonly StudioBay[],face?:{shapeId:string;side:SculptWallSide}):StudioFreeOpening[]{
+ const frames=new Map<string,StudioFaceFrame|null>(),out:StudioFreeOpening[]=[],seen=new Set<string>();
+ for(const b of bays){
+  if(face&&(b.anchor.shapeId!==face.shapeId||b.anchor.side!==face.side))continue;
+  const source=studioBaySource(r.studio.openings,b);if(!source||source.startsWith('generated/'))continue;
+  const spec=moduleOpeningSpec(b.module);if(!spec)continue;
+  const key=`${b.anchor.shapeId}/${b.anchor.side}`;let f=frames.get(key);
+  if(f===undefined){const fr=studioFaceFrame(r,d,b.anchor.shapeId,b.anchor.side);f=isFrame(fr)?fr:null;frames.set(key,f);}if(!f)continue;
+  const id=`kit/${source}`;if(seen.has(id))continue;seen.add(id);
+  out.push({id,shapeId:b.anchor.shapeId,side:b.anchor.side,u:faceU(f,faceS(f,b.x,b.z)),bottom:Math.max(0,b.y-f.base),width:spec.width,height:spec.height,shape:'rect',module:b.module});
+ }
+ return out;
+}
+/** Storey floors of a part in face coordinates (metres above its base), bottom to top. */
+export function faceStoreyBottoms(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,shapeId:string):number[]{
+ const v=r.volumes.find(v=>v.id===shapeId);if(!v)return [0];const base=sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight);
+ return Array.from({length:v.spanFloors},(_,i)=>sculptFloorBottom(v.startFloor+i,d.groundHeight,d.upperHeight)-base);
+}
+/** The storey floor under a height on the face (kit pieces stand on floors). */
+export const storeyAt=(bottoms:readonly number[],height:number)=>bottoms.reduce((best,b)=>b<=height+1e-6?b:best,bottoms[0]??0);
 export function resolveStudioFreeFace(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,shapeId:string,side:SculptWallSide,bays?:StudioBay[]):{frame:StudioFaceFrame;region?:FreeRect[];resolution:FreeFaceResolution}|{reason:string}{
  const frame=studioFaceFrame(r,d,shapeId,side);if(!isFrame(frame))return frame;
  const region=bays?studioFaceRegion(frame,bays):undefined;if(region&&!region.length)return {reason:'This wall is hidden by another part.'};
- const openings=(r.studio.freeOpenings??[]).filter(o=>o.shapeId===shapeId&&o.side===side).map(o=>({...o,x:faceX(frame,o.u)}));
+ // Kit tile intents come first: they reserve their span, and later free openings over them go inactive.
+ const kit=bays?studioKitModuleOpenings(r,d,bays,{shapeId,side}):[];
+ const openings=[...kit,...(r.studio.freeOpenings??[]).filter(o=>o.shapeId===shapeId&&o.side===side)].map(o=>({...o,x:faceX(frame,o.u)}));
  const curve=frame.curve;
  return {frame,region,resolution:resolveFreeOpenings({length:frame.length,height:frame.height,ground:frame.ground,region,...(curve?{maxWidthAt:(x:number)=>curveMaxOpening(curve,x)}:{})},openings)};
 }
@@ -241,20 +337,39 @@ export function freeOpeningHitFromBay(r:StudioRecipe,d:Pick<CityBuildingDesignV3
 }
 type Placed={recipe:StudioRecipe;opening:StudioFreeOpening;role:'window'|'door';merged:boolean};
 function commitFree(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,f:StudioFaceFrame,o:StudioFreeOpening,list:StudioFreeOpening[],bays?:StudioBay[]):Placed|{reason:string}{
- if(list.length>FREE_OPENING.limit)return {reason:'This building has reached its free opening limit.'};
+ if(overLimit(list))return {reason:'This building has reached its free opening limit.'};
  const next:StudioRecipe={...r,studio:{...r.studio,freeOpenings:list}},error=validateFreeOpenings(list);if(error)return {reason:error};
  const face=resolveStudioFreeFace(next,d,f.shapeId,f.side,bays);if('reason' in face)return face;
  const miss=face.resolution.inactive.find(i=>i.id===o.id);if(miss)return {reason:miss.reason};
- const group=face.resolution.groups.find(g=>g.members.includes(o.id))!;
- return {recipe:next,opening:o,role:group.role,merged:group.members.length>1};
+ const group=face.resolution.groups.find(g=>g.members.includes(o.id));
+ return {recipe:next,opening:o,role:group?.role??'window',merged:(group?.members.length??1)>1};
 }
 function fitOnFace(f:StudioFaceFrame,x:number,bottom:number,w:number,h:number):{x:number;bottom:number}|{reason:string}{
  if(w>f.length-2*FREE_OPENING.edge)return {reason:'This wall is too narrow for that opening.'};
  if(h>f.height-FREE_OPENING.top)return {reason:'This wall is too low for that opening.'};
  return {x:Math.max(FREE_OPENING.edge+w/2,Math.min(f.length-FREE_OPENING.edge-w/2,x)),bottom:Math.max(0,Math.min(f.height-FREE_OPENING.top-h,bottom))};
 }
+/**
+ * Kit pieces stand on a storey floor at their native size and may run to the face ends (like bays). Near a
+ * bay centre of that storey they snap onto it, so tiles line up with the old kit grid.
+ */
+export function fitModuleOnFace(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,f:StudioFaceFrame,module:string,x:number,height:number,bays?:readonly StudioBay[]):{x:number;bottom:number}|{reason:string}{
+ const spec=moduleOpeningSpec(module);if(!spec)return {reason:'This kit piece is unavailable.'};
+ if(spec.width>f.length+FREE_OPENING.moduleTol)return {reason:'This wall is too narrow for that piece.'};
+ const floors=faceStoreyBottoms(r,d,f.shapeId).filter(b=>b+spec.height<=f.height+FREE_OPENING.moduleTol);if(!floors.length)return {reason:'This wall is too low for that piece.'};
+ const bottom=storeyAt(floors,height);let cx=Math.max(spec.width/2,Math.min(f.length-spec.width/2,x));
+ const centres=(bays??[]).filter(b=>b.anchor.shapeId===f.shapeId&&b.anchor.side===f.side&&Math.abs(b.y-f.base-bottom)<.05).map(b=>faceS(f,b.x,b.z));
+ const near=centres.sort((a,b)=>Math.abs(a-cx)-Math.abs(b-cx))[0];if(near!==undefined&&Math.abs(near-cx)<FREE_OPENING.moduleSnap&&near>=spec.width/2-FREE_OPENING.moduleTol&&near<=f.length-spec.width/2+FREE_OPENING.moduleTol)cx=near;
+ return {x:cx,bottom};
+}
 export function placeFreeOpening(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,hit:FreeOpeningHit,preset:FreeOpeningPreset,bays?:StudioBay[]):(Placed&{id:string})|{reason:string}{
  const f=studioFaceFrame(r,d,hit.shapeId,hit.side);if(!isFrame(f))return f;
+ if(preset.module){
+  const spec=moduleOpeningSpec(preset.module);if(!spec)return {reason:'This kit piece is unavailable.'};
+  const fit=fitModuleOnFace(r,d,f,preset.module,faceX(f,hit.u),hit.heightAboveBase,bays);if('reason' in fit)return fit;
+  const o:StudioFreeOpening={id:preset.id??globalThis.crypto.randomUUID(),shapeId:f.shapeId,side:f.side,u:faceU(f,fit.x),bottom:fit.bottom,width:spec.width,height:spec.height,shape:'rect',module:preset.module};
+  const out=commitFree(r,d,f,o,[...(r.studio.freeOpenings??[]),o],bays);return 'reason' in out?out:{...out,id:o.id};
+ }
  let bottom=hit.heightAboveBase-preset.height/2;
  // Dropping close to the base of a ground-level part makes a door.
  if(f.ground&&preset.shape!=='round'&&bottom<FREE_OPENING.doorSnap)bottom=0;
@@ -262,9 +377,17 @@ export function placeFreeOpening(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'gro
  const o:StudioFreeOpening={id:preset.id??globalThis.crypto.randomUUID(),shapeId:f.shapeId,side:f.side,u:faceU(f,fit.x),bottom:fit.bottom,width:preset.width,height:preset.height,shape:preset.shape,...(preset.style?{style:preset.style}:{}),...(preset.glazing!==undefined?{glazing:preset.glazing}:{})};
  const out=commitFree(r,d,f,o,[...(r.studio.freeOpenings??[]),o],bays);return 'reason' in out?out:{...out,id:o.id};
 }
+/** Move or reshape a free opening. Kit pieces keep their size and shape; they move along the face and between storeys. */
 export function nudgeFreeOpening(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,id:string,change:{dx?:number;dy?:number;u?:number;bottom?:number;width?:number;height?:number;shape?:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean},bays?:StudioBay[]):Placed|{reason:string}{
  const list=r.studio.freeOpenings??[],old=list.find(o=>o.id===id);if(!old)return {reason:'This opening no longer exists.'};
  const f=studioFaceFrame(r,d,old.shapeId,old.side);if(!isFrame(f))return f;
+ if(old.module){
+  // Storey snap: the nearest floor to the dragged bottom (half a storey either way).
+  const x=change.u!==undefined?faceX(f,change.u):faceX(f,old.u)+(change.dx??0),y=(change.bottom??old.bottom+(change.dy??0))+Math.min(old.height,d.upperHeight??3)/2;
+  const fit=fitModuleOnFace(r,d,f,old.module,x,Math.max(0,y),bays);if('reason' in fit)return fit;
+  const o:StudioFreeOpening={...old,u:faceU(f,fit.x),bottom:fit.bottom};
+  return commitFree(r,d,f,o,list.map(p=>p.id===id?o:p),bays);
+ }
  const w=change.width??old.width,h=change.height??old.height,fit=fitOnFace(f,change.u!==undefined?faceX(f,change.u):faceX(f,old.u)+(change.dx??0),change.bottom??old.bottom+(change.dy??0),w,h);if('reason' in fit)return fit;
  const o:StudioFreeOpening={...old,u:faceU(f,fit.x),bottom:fit.bottom,width:w,height:h,shape:change.shape??old.shape};
  if(change.style!==undefined)o.style=change.style;if(change.glazing!==undefined)o.glazing=change.glazing;

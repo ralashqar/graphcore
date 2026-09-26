@@ -11,6 +11,8 @@ import type {SculptWallSide} from '../../domain/citySculpt';
 import type {StudioBay,StudioRecipe} from '../../domain/cityStudioTypes';
 import type {CityBuildingDesignV3} from '../../domain/cityBuildingV3';
 import {freeOpeningOutline} from './studioFreeOpeningTool';
+import {studioKitVersion,studioModules} from '../../domain/cityStudioCatalog';
+import {MODULE_POOL_PREFIX,moduleOpeningSpec} from '../../domain/cityStudioModuleSpec';
 
 export type RhythmScopeKind='building'|'parts'|'walls'|'floors'|'region';
 export type RhythmWallAction='pick'|'unpack'|'off'|'manual';
@@ -93,7 +95,7 @@ function StyleIcon({id}:{id:RhythmStyle}){
 const ruleSummary=(r:FacadeRhythmRule)=>[r.style&&RHYTHM_SPECS[r.style].label,r.off&&'plain',r.manual==='own'&&'manual',r.manual==='fill'&&'fills',r.layers&&Object.keys(r.layers).map(l=>LAYER_TABS.find(t=>t[0]===l)?.[1].toLowerCase()).join('/')+' rules',r.bay&&`${r.bay} m bays`,r.variety!==undefined&&'variety',r.trims&&`${r.trims} trims`,r.layerSeeds&&'rerolled'].filter(Boolean).join(', ');
 
 /** Chip for one pool entry: tap includes, double-tap or + favours, long-press or − avoids. */
-function PoolChip({id,label,entry,share,icon,set}:{id:string;label:string;entry?:RhythmPoolEntry;share:number;icon:boolean;set:(weight:number|null)=>void}){
+function PoolChip({id,label,entry,share,icon,set,thumb}:{id:string;label:string;entry?:RhythmPoolEntry;share:number;icon:boolean;set:(weight:number|null)=>void;thumb?:string}){
  const press=useRef<number|null>(null),long=useRef(false),w=entry?.weight??0;
  const favour=()=>set(w>=1?Math.min(64,w*2):1),avoid=()=>set(w>1?w/2:null);
  return <div className={`rhythm-chip${entry?w>1?' is-favoured':'':' is-avoided'}`}>
@@ -101,9 +103,25 @@ function PoolChip({id,label,entry,share,icon,set}:{id:string;label:string;entry?
    onPointerDown={()=>{long.current=false;press.current=window.setTimeout(()=>{long.current=true;set(null);},550);}}
    onPointerUp={()=>{if(press.current)clearTimeout(press.current);}} onPointerLeave={()=>{if(press.current)clearTimeout(press.current);}}
    onClick={()=>{if(long.current){long.current=false;return;}if(!entry)set(1);}} onDoubleClick={favour} onContextMenu={e=>{e.preventDefault();set(null);}}>
-   {icon&&<OpeningIcon id={id}/>}<span>{label}</span>{entry&&<small>{Math.round(share*100)}%{w>1?` · ×${+w.toFixed(2)}`:''}</small>}
+   {thumb?<img className="rhythm-kit-thumb" src={thumb} alt=""/>:icon&&<OpeningIcon id={id}/>}<span>{label}</span>{entry&&<small>{Math.round(share*100)}%{w>1?` · ×${+w.toFixed(2)}`:''}</small>}
   </button>
   <span className="rhythm-chip-weights"><button aria-label={`Avoid ${label}`} disabled={!entry} onClick={avoid}><Minus size={11}/></button><button aria-label={`Favour ${label}`} onClick={favour}><Plus size={11}/></button></span>
+ </div>;
+}
+
+/**
+ * Kit pieces in the pool (`module:<id>`): Blender windows, doors and wall panels at their native size, with the
+ * tray thumbnails. Pieces already in the pool are listed first; the rest open under "More kit pieces".
+ */
+function KitPoolChips({recipe,layer,pool,total,setWeight}:{recipe:StudioRecipe;layer:RhythmPoolLayer;pool:RhythmPoolEntry[];total:number;setWeight:(id:string,w:number|null)=>void}){
+ const version=studioKitVersion(recipe.studio.catalogue);
+ const kit=useMemo(()=>studioModules(version).filter(p=>{const spec=moduleOpeningSpec(p.id);return !!spec&&spec.kind!=='blind'&&(layer==='ground'||spec.category!=='door');}),[version,layer]);
+ const chip=(p:typeof kit[number])=>{const id=MODULE_POOL_PREFIX+p.id,entry=pool.find(e=>e.id===id);return <PoolChip key={id} id={id} label={p.label} icon={false} thumb={`/city/synarc-kit/v${version}/thumbnails/${p.id}.png`} entry={entry} share={total?(entry?.weight??0)/total:0} set={w=>setWeight(id,w)}/>;};
+ const used=kit.filter(p=>pool.some(e=>e.id===MODULE_POOL_PREFIX+p.id)),rest=kit.filter(p=>!used.includes(p));
+ return <div className="rhythm-kit" aria-label={`${layer} kit pieces`}>
+  <span className="studio-caption">Kit pieces{used.length?` · ${used.length} in the pool`:''}</span>
+  {!!used.length&&<div className="rhythm-pool">{used.map(chip)}</div>}
+  <details><summary>{used.length?'More kit pieces':'Add kit pieces'}</summary><div className="rhythm-pool rhythm-kit-pool">{rest.map(chip)}</div></details>
  </div>;
 }
 
@@ -146,6 +164,7 @@ export function CityRhythmPanel({recipe,commit,panel,partName,shuffle,onClose}:{
    {!ready?<p className="rhythm-empty">{panel.hint}</p>:<>
     <div className="rhythm-pool" aria-label={`${layer} pool`}>{layer==='trims'?FREE_TRIM_KINDS.map(k=><PoolChip key={k} id={k} label={TRIM_LABELS[k]} icon={false} entry={L.pool.find(p=>p.id===k)} share={total?(L.pool.find(p=>p.id===k)?.weight??0)/total:0} set={w=>setWeight(k,w)}/>)
      :RHYTHM_OPENINGS.filter(o=>layer==='ground'||!['shop'].includes(o.id)).map(o=><PoolChip key={o.id} id={o.id} label={o.label} icon entry={L.pool.find(p=>p.id===o.id)} share={total?(L.pool.find(p=>p.id===o.id)?.weight??0)/total:0} set={w=>setWeight(o.id,w)}/>)}</div>
+    {layer!=='trims'&&<KitPoolChips recipe={recipe} layer={layer} pool={L.pool} total={total} setWeight={setWeight}/>}
     <div className="rhythm-sliders">
      <label title="Share of bays that get an opening; the rest stay blind wall">{layer==='trims'?'Trimmed':'Coverage'} <input type="range" min={0} max={1} step={.05} value={L.coverage} aria-label={`${layer} coverage`} onChange={e=>setLayerRule({coverage:Number(e.target.value)})}/><output>{Math.round(L.coverage*100)}%</output></label>
      <label title="How often a bay takes the building-wide favourite instead of its own pick">Uniformity <input type="range" min={0} max={1} step={.05} value={L.uniformity} aria-label={`${layer} uniformity`} onChange={e=>setLayerRule({uniformity:Number(e.target.value)})}/><output>{Math.round(L.uniformity*100)}%</output></label>

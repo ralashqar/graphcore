@@ -132,6 +132,8 @@ function buildFace(face:{length:number;height:number;region?:FreeRect[];thicknes
  // Curved faces: hole outlines gain vertices at every facet break (the wall, reveals and surrounds follow the arc).
  const outlines=new Map(groups.map(g=>[g,face.breaks?.length?refineOutline(g.outline,face.breaks):g.outline]));
  const t=(face.thickness??FREE_FACE.thickness)/2,zg=t-FREE_FACE.inset,L=face.length,H=face.height;
+ // Wear (stone through plaster) frames shaped openings only: kit pieces bring their own finished surround.
+ const wearGroups=groups.filter(g=>!g.module);
  // Region paint: the outer skin is split per finish run; caps and reveals follow the topmost region at their midpoint.
  const partition=paint?.wall.length?paintPartition(L,H,paint.wall,paint.base):null,paintBufs=partition?partition.slots.map(()=>buf(true)):[],skinAt=(x:number,y:number)=>{const s=paintSlotAt(partition,x,y);return s<0?wall:paintBufs[s];};
  const wall=buf(true),trim=buf(false,true),frame=buf(false,true),glass=buf(),door=buf(false,true),doorGlass=buf(),aperture=buf(),rear:number[]=[];
@@ -157,7 +159,7 @@ function buildFace(face:{length:number;height:number;region?:FreeRect[];thicknes
  // Skins: each polygon is triangulated once; the outer skin is split per paint run when painted.
  const skin=(target:Buf,points:P2[],triangles:number[],d:number[],outer:boolean)=>{const z=outer?t:-t,ids=points.map((p,k)=>vert(target,[p[0],p[1],z],[0,0,outer?1:-1],d[k]));
   for(let i=0;i<triangles.length;i+=3)if(outer)target.i.push(ids[triangles[i]],ids[triangles[i+1]],ids[triangles[i+2]]);else rear.push(ids[triangles[i]],ids[triangles[i+2]],ids[triangles[i+1]]);};
- for(const poly of [...far,...near]){let {points,triangles}=triangulateFreePolygon(poly);if(!triangles.length)continue;let d=points.map(p=>freeOpeningDistance(p[0],p[1],groups));
+ for(const poly of [...far,...near]){let {points,triangles}=triangulateFreePolygon(poly);if(!triangles.length)continue;let d=points.map(p=>freeOpeningDistance(p[0],p[1],wearGroups));
   if(face.breaks?.length)({points,triangles,distance:d}=splitTrianglesAtX(points,triangles,d,face.breaks));
   if(!partition)skin(wall,points,triangles,d,true);else for(const [slot,piece] of splitPaintedTriangles(points,triangles,d,partition))skin(slot<0?wall:paintBufs[slot],piece.points,piece.triangles,piece.distance,true);
   skin(wall,points,triangles,d,false);}
@@ -167,14 +169,16 @@ function buildFace(face:{length:number;height:number;region?:FreeRect[];thicknes
    if(face.seam&&Math.abs(a0[0]-b0[0])<1e-6&&(a0[0]<1e-4||a0[0]>L-1e-4))return;
    // Painted faces split each cap where it crosses a region edge, so corners follow the paint.
    const ts=[0,...paintSegmentBreaks(partition,a0,b0),...facetBreaks(face.breaks,a0,b0),1].sort((x,y)=>x-y).filter((t,k,all)=>!k||t-all[k-1]>1e-5);
-   for(let s=0;s+1<ts.length;s++){const a:P2=[a0[0]+(b0[0]-a0[0])*ts[s],a0[1]+(b0[1]-a0[1])*ts[s]],b:P2=[a0[0]+(b0[0]-a0[0])*ts[s+1],a0[1]+(b0[1]-a0[1])*ts[s+1]],da=freeOpeningDistance(a[0],a[1],groups),db=freeOpeningDistance(b[0],b[1],groups);
+   for(let s=0;s+1<ts.length;s++){const a:P2=[a0[0]+(b0[0]-a0[0])*ts[s],a0[1]+(b0[1]-a0[1])*ts[s]],b:P2=[a0[0]+(b0[0]-a0[0])*ts[s+1],a0[1]+(b0[1]-a0[1])*ts[s+1]],da=freeOpeningDistance(a[0],a[1],wearGroups),db=freeOpeningDistance(b[0],b[1],wearGroups);
     quad(skinAt((a[0]+b[0])/2-n[i][0]*.01,(a[1]+b[1])/2-n[i][1]*.01),[[a[0],a[1],-t],[b[0],b[1],-t],[b[0],b[1],t],[a[0],a[1],t]],[n[i][0],n[i][1],0],undefined,undefined,[da,db,db,da]);}});});
  groups.forEach((g,gi)=>{
   plane=-1;
   const style=palette[g.style],dims0=STYLE_DIMS[g.style].surround+.12,trimTone=rgb(trimPaintColor(paint?.trim,[g.x0-dims0,g.x1+dims0,g.y0-dims0,g.y1+dims0],g.style==='painted')??style.trim),frameTone=rgb(style.frame),dims=STYLE_DIMS[g.style],o=outlines.get(g)!,path=openingPath(g,o),normals=segNormals(o,true);
   // Reveal: the real hole sides, facing into the opening (wall material, distance 0 = full wear).
   for(let i=0;i<o.length;i++){const a=o[i],b=o[(i+1)%o.length];if(bottomEdge(g,a,b))continue;const [na,nb]=endNormals(normals,true,i),n=normals[i];
-   quad(skinAt((a[0]+b[0])/2+n[0]*.01,(a[1]+b[1])/2+n[1]*.01),[[a[0],a[1],t],[b[0],b[1],t],[b[0],b[1],-t],[a[0],a[1],-t]],[-n[0],-n[1],0],undefined,[[-na[0],-na[1],0],[-nb[0],-nb[1],0],[-nb[0],-nb[1],0],[-na[0],-na[1],0]]);}
+   quad(skinAt((a[0]+b[0])/2+n[0]*.01,(a[1]+b[1])/2+n[1]*.01),[[a[0],a[1],t],[b[0],b[1],t],[b[0],b[1],-t],[a[0],a[1],-t]],[-n[0],-n[1],0],undefined,[[-na[0],-na[1],0],[-nb[0],-nb[1],0],[-nb[0],-nb[1],0],[-na[0],-na[1],0]],g.module?[FREE_FACE.maxDistance,FREE_FACE.maxDistance,FREE_FACE.maxDistance,FREE_FACE.maxDistance]:undefined);}
+  // Kit pieces bring their own surround, frame, glass and leaf (cityStudioModuleSpec): the wall keeps only the reveal.
+  if(g.module)return;
   // Surround on the facade and a slim frame at the glazing line, both following the outline.
   sweepBand(trim,path.points,path.closed,dims.surround,1,t,t+dims.proud,trimTone,{inner:true,outer:true,ends:true});
   // Everything below sits on the opening's flat plane on curved faces (frames, sill, mullions, glass, leaves).

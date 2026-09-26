@@ -12,8 +12,10 @@ import {addStudioSoffits} from './cityStudioSoffits.ts';
 import {validateVariation} from './cityBuildingVariation.ts';
 import {STAMP_MAP} from './cityStorefrontStamps.ts';
 import {resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
-import {validateFreeOpenings} from './cityStudioFreeOpenings.ts';
+import {faceS,faceX,isFrame,studioFaceFrame,validateFreeOpenings,type StudioFaceFrame} from './cityStudioFreeOpenings.ts';
+import {poolModule} from './cityStudioModuleSpec.ts';
 import {validatePaintRegions} from './cityStudioPaintRegions.ts';
+import {validatePaintRules} from './cityStudioPaintRules.ts';
 import {validateRoofOpenings} from './cityStudioRoofOpenings.ts';
 import {applyStudioRoofOpenings} from './cityStudioRoofOpeningGeometry.ts';
 import {validateFreeTrims} from './cityStudioTrimParts.ts';
@@ -63,13 +65,17 @@ export function validateStudio(r:StudioRecipe):string|null {
  {const error=validateRoofOpenings(r.studio?.roofOpenings);if(error)return error;}
  {const error=validateFreeTrims(r.studio?.freeTrims);if(error)return error;}
  {const error=validateFacadeRhythm(r.studio?.facadeRhythm);if(error)return error;}
- {const error=validatePaintRegions(r.studio?.paintRegions);if(error)return error;}
+ {const error=validatePaintRegions(r.studio?.paintRegions)??validatePaintRules(r.studio?.paintRules);if(error)return error;}
  if(!['synarc-kit-2','synarc-kit-3','synarc-kit-4','synarc-kit-5'].includes(r.studio?.catalogue)||!r.studio.defaults||!r.studio.parts||!Array.isArray(r.studio.openings)||!Array.isArray(r.studio.surfaces)||!Array.isArray(r.studio.assemblies))return 'This building uses an unavailable catalogue.';
  if(r.studio.roofDetails!==undefined&&(!Array.isArray(r.studio.roofDetails)||!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||r.studio.roofDetails.length>16||r.studio.roofDetails.some(p=>!p.id||typeof p.partId!=='string'||!studioModuleAvailable(r.studio.catalogue,p.module)||STUDIO_MODULE_MAP.get(p.module)?.category!=='roof'||![p.u,p.v].every(n=>Number.isFinite(n)&&Math.abs(n)<=.5)||!Number.isInteger(p.rotation)||p.rotation<0||p.rotation>3)||new Set(r.studio.roofDetails.map(p=>p.id)).size!==r.studio.roofDetails.length))return 'A roof detail is invalid.';
  if(r.studio.assemblies.some(a=>a.module&&(!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||!studioModuleAvailable(r.studio.catalogue,a.module)||!['trim','ornament'].includes(STUDIO_MODULE_MAP.get(a.module)?.category??''))))return 'This facade detail is unavailable.';
  if(r.studio.assemblies.some(a=>a.variant!==undefined&&(a.variant!=='nyc'||!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue))))return 'This detail needs the New York kit.';
  if([r.studio.defaults,...Object.values(r.studio.parts)].some(s=>s.window&&!studioModuleAvailable(r.studio.catalogue,s.window)))return 'This window is not in the selected kit.';
  if(r.studio.openings.length>128||r.studio.surfaces.length>256||r.studio.assemblies.length>64)return 'This building has reached its detail limit.';
+ // Unified facades (local plots only; business/profile validators reject the field) and kit pieces in free openings.
+ if(r.studio.facade!==undefined&&r.studio.facade!=='unified')return 'This facade model is unavailable.';
+ if(r.studio.freeOpenings?.some(o=>o.module&&!studioModuleAvailable(r.studio.catalogue,o.module)))return 'This kit piece is not in the selected kit.';
+ {const v=r.studio.facadeRhythm,pools=v?[v.layers,...(v.rules??[]).map(x=>x.layers)].flatMap(l=>Object.values(l??{}).flatMap(x=>x?.pool??[])):[];if(pools.some(p=>{const m=poolModule(p.id);return !!m&&!studioModuleAvailable(r.studio.catalogue,m);}))return 'This kit piece is not in the selected kit.';}
  if(r.studio.roofRevision!==undefined&&r.studio.roofRevision!=='roof-envelope-2')return 'This roof version is unavailable.';
  if(r.studio.assemblyRevision!==undefined&&r.studio.assemblyRevision!=='connected-access-1')return 'This assembly version is unavailable.';
  const validFinish=(f:StudioFinish)=>!!f&&(!f.color||/^#[0-9a-f]{6}$/i.test(f.color))&&(!f.texture||TEXTURE_IDS.some(t=>t===f.texture));
@@ -91,7 +97,14 @@ const coordinate=(v:SculptVolume,side:StudioAnchor['side'],x:number,z:number)=>v
 
 /** Split union edges at source boundaries before assigning stable face ownership. */
 export function studioBays(r:StudioRecipe,d:CityBuildingDesignV3,inactive:StudioResolved['inactive']=[]):StudioBay[]{
- const result:StudioBay[]=[],boundaries=new Map(r.volumes.map(v=>[v.id,sculptPrimitiveBoundary(v)]));
+ const result:StudioBay[]=[],boundaries=new Map(r.volumes.map(v=>[v.id,sculptPrimitiveBoundary(v)])),unified=r.studio.facade==='unified';
+ // Unified facades: a bay reports the kit piece standing on it (free openings), so assemblies see what is drawn.
+ const frames=new Map<string,StudioFaceFrame|null>(),frameOf=(shapeId:string,side:StudioAnchor['side'])=>{const key=`${shapeId}/${side}`;let f=frames.get(key);if(f===undefined){const fr=studioFaceFrame(r,d,shapeId,side);f=isFrame(fr)?fr:null;frames.set(key,f);}return f;};
+ const unifiedModule=(shapeId:string,side:StudioAnchor['side'],x:number,z:number,bottom:number,height:number,fallback:string)=>{
+  const f=frameOf(shapeId,side);if(!f)return 'wall-full';const s=faceS(f,x,z),rel=bottom-f.base,list=(r.studio.freeOpenings??[]).filter(o=>o.shapeId===shapeId&&o.side===side);
+  const kit=list.find(o=>o.module&&Math.abs(o.bottom-rel)<.05&&Math.abs(faceX(f,o.u)-s)<o.width/2-.01);if(kit)return kit.module!;
+  return list.some(o=>!o.module&&Math.abs(faceX(f,o.u)-s)<o.width/2+.3&&o.bottom<rel+height&&o.bottom+o.height>rel)?fallback:'wall-full';
+ };
  for(const w of sculptWalls(r,d)){
   const dx=(w.b[0]-w.a[0])/w.length,dz=(w.b[1]-w.a[1])/w.length;
   const active=r.volumes.filter(v=>v.startFloor<=w.floor&&w.floor<v.startFloor+v.spanFloors);
@@ -107,19 +120,29 @@ export function studioBays(r:StudioRecipe,d:CityBuildingDesignV3,inactive:Studio
    const count=Math.max(1,Math.floor(length/2)),width=length/count;
    for(let i=0;i<count;i++){
     const x=w.a[0]+dx*(lo+(i+.5)*width),z=w.a[1]+dz*(lo+(i+.5)*width),anchor={shapeId:owner.id,side,u:Math.max(0,Math.min(1,coordinate(owner,side,x,z))),floor:w.floor};
-    const style=studioStyle(r,owner.id);let module=width<1.5?'wall-full':style.rhythm==='sparse'&&i%2?'wall-full':style.rhythm==='glazing'?'window-shop':style.window??'window-sash';
-    if(['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)){const spec=STUDIO_MODULE_MAP.get(module);if(spec&&(spec.size[0]>width+.01||spec.size[1]>w.top-w.bottom+.01))module='wall-nyc-brick';}
+    const style=studioStyle(r,owner.id);let module=width<1.5?'wall-full':style.rhythm==='sparse'&&i%2?'wall-full':style.rhythm==='glazing'?'window-shop':style.window??'window-sash',source:string|undefined;
+    if(unified)module=unifiedModule(owner.id,side,x,z,w.bottom,w.top-w.bottom,style.window??'window-sash');
+    else if(['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)){const spec=STUDIO_MODULE_MAP.get(module);if(spec&&(spec.size[0]>width+.01||spec.size[1]>w.top-w.bottom+.01))module='wall-nyc-brick';}
     const sideLength=sculptSideLength(owner,side),explicit=r.studio.openings.filter(o=>(o.span??STUDIO_MODULE_MAP.get(o.module)?.baySpan??1)===1&&sameFace(o.anchor,anchor)&&(['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)?o.anchor.u>=anchor.u-width/(sideLength||1)/2-.00001&&o.anchor.u<anchor.u+width/(sideLength||1)/2-.00001:Math.abs(o.anchor.u-anchor.u)<=width/(sideLength||1)/2+.001)).at(-1);
-    if(explicit&&width>=1.5){const spec=STUDIO_MODULE_MAP.get(explicit.module);if(['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)&&spec&&(width<spec.size[0]-.01||w.top-w.bottom<spec.size[1]-.01)){inactive.push({id:explicit.id,reason:'This opening needs more wall width or storey height.'});}else module=explicit.module;}
+    if(explicit&&width>=1.5){const spec=STUDIO_MODULE_MAP.get(explicit.module);if(['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)&&spec&&(width<spec.size[0]-.01||w.top-w.bottom<spec.size[1]-.01)){inactive.push({id:explicit.id,reason:'This opening needs more wall width or storey height.'});}else {module=explicit.module;source=explicit.id;}}
     const finishes=Object.fromEntries((['wall','trim','frame','door'] as const).map(channel=>[channel,studioFinish(r,anchor,channel,width/(sideLength||1))]));
-    result.push({id:`${owner.id}/${side}/${w.floor}/${Math.round(anchor.u*10000)}`,anchorSpan:width/(sideLength||1),anchor,x,z,y:w.bottom,width,height:w.top-w.bottom,rotation:Math.atan2(w.nx,w.nz),module,family:style.family??'pastel-stucco',finishes,entrance:false});
+    result.push({...(source?{source}:{}),id:`${owner.id}/${side}/${w.floor}/${Math.round(anchor.u*10000)}`,anchorSpan:width/(sideLength||1),anchor,x,z,y:w.bottom,width,height:w.top-w.bottom,rotation:Math.atan2(w.nx,w.nz),module,family:style.family??'pastel-stucco',finishes,entrance:false});
    }
   }
+ }
+ // Unified facades: a kit piece wider than one bay spans its contiguous bays as one merged bay (like a wide kit opening).
+ if(unified)for(const o of r.studio.freeOpenings??[]){
+  const f=o.module?frameOf(o.shapeId,o.side):null;if(!f)continue;const cx=faceX(f,o.u),at=(b:StudioBay)=>faceS(f,b.x,b.z);
+  const run=result.filter(b=>b.anchor.shapeId===o.shapeId&&b.anchor.side===o.side&&Math.abs(b.y-f.base-o.bottom)<.05&&Math.abs(at(b)-cx)<o.width/2-.01).sort((a,b)=>at(a)-at(b));
+  if(run.length<2||run.some((b,i)=>i>0&&(Math.abs(b.rotation-run[0].rotation)>.01||Math.hypot(b.x-run[i-1].x,b.z-run[i-1].z)>(b.width+run[i-1].width)/2+.02)))continue;
+  const width=run.reduce((n,b)=>n+b.width,0),first=run[0],index=result.indexOf(first),ids=new Set(run.map(b=>b.id));
+  const combined:StudioBay={...first,id:`opening/${o.id}`,anchor:{...first.anchor,u:run.reduce((n,b)=>n+b.anchor.u*b.width,0)/width},anchorSpan:run.reduce((n,b)=>n+b.anchorSpan,0),x:run.reduce((n,b)=>n+b.x*b.width,0)/width,z:run.reduce((n,b)=>n+b.z*b.width,0)/width,width,module:o.module!};
+  for(let i=result.length-1;i>=0;i--)if(ids.has(result[i].id))result.splice(i,1);result.splice(Math.min(index,result.length),0,combined);
  }
  const doors=result.filter(b=>b.anchor.floor===0&&b.module.startsWith('door-'));
  const primary=r.studio.openings.find(o=>o.id==='generated/primary-entrance');
  const entry=(primary?doors.find(b=>sameSpot(b.anchor,primary.anchor)):undefined)??doors[0]??result.filter(b=>b.anchor.floor===0&&Math.cos(b.rotation)>.7&&b.width>=1.5).sort((a,b)=>b.z-a.z||Math.abs(a.x)-Math.abs(b.x))[0];
- if(entry){entry.module=entry.module.startsWith('door-')?entry.module:'door-panelled';entry.entrance=true;}
+ if(entry){if(!unified)entry.module=entry.module.startsWith('door-')?entry.module:'door-panelled';entry.entrance=true;}
  mergeStudioOpeningSpans(r,result,inactive);
  return result;
 }
@@ -143,6 +166,8 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  // Generated facade rhythm openings join the manual ones for this resolve only (never saved).
  const rhythm=r.studio.facadeRhythm?expandFacadeRhythm(r,d,bays):null,freeRecipe:StudioRecipe=rhythm?{...r,studio:{...r.studio,freeOpenings:[...(r.studio.freeOpenings??[]),...rhythm.freeOpenings],freeTrims:[...(r.studio.freeTrims??[]),...rhythm.freeTrims]}}:r;if(rhythm)inactive.push(...rhythm.inactive);
  const freeFaces=resolveStudioFreeFaces(freeRecipe,d,bays,pieces,blockers,inactive,id=>studioStyle(r,id).family??family);
+ // Walls drawn by generated faces: their bay tiles are gone, so tile-level fix-ups below skip them.
+ const generatedWall=new Set(freeFaces.map(f=>f.id)),onGenerated=(b:StudioBay)=>generatedWall.has(`${b.anchor.shapeId}/${b.anchor.side}`);
  // Flat roof decks retain the exact polygon, including courtyard holes.
  for(const floor of base.floors)for(const [i,polygon] of floor.polygons.entries())decks.push({id:`roof/${floor.floor}/${i}`,x:0,z:0,y:floor.top+.02,width:0,depth:0,rotation:0,polygon});
  for(const b of bays){const owner=r.volumes.find(v=>v.id===b.anchor.shapeId);const choice=owner?roofChoice(r,owner.id):null;const boundary=choice?.settings.boundary??'rail';if(!owner||owner.startFloor+owner.spanFloors-1!==b.anchor.floor||!['flat','terrace'].includes(choice!.type)||boundary==='none')continue;
@@ -261,7 +286,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
    if(connectedExit&&!connectedExit.module.startsWith('door-')){
     connectedExit.module='door-balcony';const tile=pieces.find(p=>p.id===connectedExit!.id);
     if(tile){tile.module='door-balcony';tile.scale[0]=Math.min(1,connectedExit.width/2);}
-    if(connectedExit.width>2)for(const side of [-1,1]){const p=pos(connectedExit,side*(1+(connectedExit.width-2)/4),0);pieces.push({id:connectedExit.id+`/access-filler${side}`,module:'wall-full',...p,y:connectedExit.y,rotation:connectedExit.rotation,scale:[(connectedExit.width-2)/4,connectedExit.height/3,1],family:connectedExit.family,finishes:connectedExit.finishes});}
+    if(connectedExit.width>2&&!onGenerated(connectedExit))for(const side of [-1,1]){const p=pos(connectedExit,side*(1+(connectedExit.width-2)/4),0);pieces.push({id:connectedExit.id+`/access-filler${side}`,module:'wall-full',...p,y:connectedExit.y,rotation:connectedExit.rotation,scale:[(connectedExit.width-2)/4,connectedExit.height/3,1],family:connectedExit.family,finishes:connectedExit.finishes});}
    }
    if(terraceGap){const id=`terrace/${terraceGap.id}`;for(let i=pieces.length-1;i>=0;i--)if(pieces[i].id===id)pieces.splice(i,1);for(let i=blockers.length-1;i>=0;i--)if(blockers[i].id===id)blockers.splice(i,1);}
    if(routeLayout&&(connectedExit||terraceGap))accessRoutes.push({id:assembly.id,exit:(connectedExit??terraceGap)!.anchor,layout:routeLayout,kind:terraceGap?'terrace':assembly.exitKind==='balcony'?'balcony':'door'});
@@ -280,7 +305,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  for(const v of r.volumes.filter(v=>v.operation==='add'&&!r.studio.roofRevision)){const roof=studioStyle(r,v.id).roof;if((roof==='pitched'||roof==='mansard')&&v.kind==='ellipse')roofNotes.push('Round parts use a flat roof; the chosen roof is kept for rectangular shapes.');}
  const roof=studioRoofGeometry(r,d,base),roofOpenings=applyStudioRoofOpenings(r,roof,inactive,blockers);
  if(roof.faces){for(let i=decks.length-1;i>=0;i--)if(decks[i].id.startsWith('roof/'))decks.splice(i,1);roof.faces.forEach((f,i)=>decks.push({id:`roof/${i}`,x:0,z:0,y:f.base,width:0,depth:0,rotation:0,polygon:f.polygon,plane:f.plane,underside:f.underside??f.base-.12}));}
- if(r.version===6){const ids=new Set(bays.filter(b=>b.module.startsWith('door-')).map(b=>b.id));for(let i=pieces.length-1;i>=0;i--)if(ids.has(pieces[i].id)||[...ids].some(id=>pieces[i].id.startsWith(id+'/header')||pieces[i].id.startsWith(id+'/filler')||pieces[i].id.startsWith(id+'/access-filler')))pieces.splice(i,1);for(let i=blockers.length-1;i>=0;i--)if(ids.has(blockers[i].id))blockers.splice(i,1);}
+ if(r.version===6){const ids=new Set(bays.filter(b=>b.module.startsWith('door-')&&!onGenerated(b)).map(b=>b.id));for(let i=pieces.length-1;i>=0;i--)if(ids.has(pieces[i].id)||[...ids].some(id=>pieces[i].id.startsWith(id+'/header')||pieces[i].id.startsWith(id+'/filler')||pieces[i].id.startsWith(id+'/access-filler')))pieces.splice(i,1);for(let i=blockers.length-1;i>=0;i--)if(ids.has(blockers[i].id))blockers.splice(i,1);}
  const resolved:StudioResolved={bays,pieces,blockers,decks,inactive,accessRoutes,roof:roof.vertices,roofFaces:roof.faces,roofEdges:roof.edges,roofPatches:roof.patches,roofNotes:[...new Set([...roofNotes,...roof.notes])],...(freeFaces.length?{freeFaces}:{}),...(rhythm?{freeTrims:freeRecipe.studio.freeTrims??[]}:{}),...(roofOpenings?{roofOpenings}:{})};
  resolveStudioRoofDetails(r,resolved);
  addStudioSoffits(r,base,resolved);

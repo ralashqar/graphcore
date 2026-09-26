@@ -22,7 +22,8 @@ export type PaintRect=[x0:number,x1:number,y0:number,y1:number];
 export type StudioPaintRegion={id:string;shapeId:string;side:string;channel:'wall'|'trim';rects:PaintRect[];band?:boolean;finish:StudioFinish};
 export const PAINT_REGIONS={limit:160,rects:96,maxBrush:4,minBrush:.2} as const;
 
-const validFinish=(f:StudioFinish|undefined)=>!!f&&(!f.color||/^#[0-9a-f]{6}$/i.test(f.color))&&(!f.texture||TEXTURE_IDS.some(t=>t===f.texture))&&!!(f.color||f.texture);
+/** Shared with paint rules: hex colour and/or curated texture. */
+export const validPaintFinish=(f:StudioFinish|undefined)=>!!f&&(!f.color||/^#[0-9a-f]{6}$/i.test(f.color))&&(!f.texture||TEXTURE_IDS.some(t=>t===f.texture))&&!!(f.color||f.texture);
 const finite=(n:unknown)=>typeof n==='number'&&Number.isFinite(n);
 
 export function validatePaintRegions(list:unknown):string|null{
@@ -30,7 +31,7 @@ export function validatePaintRegions(list:unknown):string|null{
  if(!Array.isArray(list)||list.length>PAINT_REGIONS.limit)return 'Too many painted regions.';
  const ids=new Set<string>();
  for(const r of list as StudioPaintRegion[]){
-  if(!r||typeof r!=='object'||typeof r.id!=='string'||!r.id||r.id.length>100||ids.has(r.id)||typeof r.shapeId!=='string'||!r.shapeId||r.shapeId.length>100||!validSculptSide(r.side)||!['wall','trim'].includes(r.channel)||!validFinish(r.finish))return 'A painted region is invalid.';
+  if(!r||typeof r!=='object'||typeof r.id!=='string'||!r.id||r.id.length>100||ids.has(r.id)||typeof r.shapeId!=='string'||!r.shapeId||r.shapeId.length>100||!validSculptSide(r.side)||!['wall','trim'].includes(r.channel)||!validPaintFinish(r.finish))return 'A painted region is invalid.';
   if(!Array.isArray(r.rects)||!r.rects.length||r.rects.length>PAINT_REGIONS.rects||r.rects.some(q=>!Array.isArray(q)||q.length!==4||!q.every(finite)||q[1]<=q[0]||q[3]<=q[2]||q[2]<0||q[3]>100||Math.abs(q[0])>1e4||Math.abs(q[1])>1e4))return 'A painted region has an invalid shape.';
   if(r.band!==undefined&&typeof r.band!=='boolean')return 'A painted region is invalid.';
   if(Object.keys(r).some(k=>!['id','shapeId','side','channel','rects','band','finish'].includes(k)))return 'A painted region is invalid.';

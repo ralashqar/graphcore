@@ -212,11 +212,20 @@ Details: `docs/city-free-doors-glass.md`.
   - Manual free openings now **fill**: they reserve their span plus a margin and the rhythm stays around them. "Keep wall manual" gives a wall back to the user, and unpacking a wall does this automatically.
   - UI: `CityRhythmPanel.tsx`, with pool chips (tap to include, + to favour, long-press to avoid, − to halve), sliders, scope picking in 3D with Shift for multi-select, and a list of scoped rules.
   - Details: `docs/city-rhythm-rules.md`.
-- **Next:** kit pieces as opening types in generated walls, with automatic conversion of old buildings (this retires whole-wall ownership by kit tiles); paint rules; then city-scale rendering.
+- **Kit pieces as openings, and conversion (done):**
+  - Any kit window, door or wall module can be a free opening (`module`). Windows and doors cut their measured rectangular aperture and draw without the kit wall channel; panels draw relief only; plain walls just reserve their span.
+  - Pieces keep native size, snap to bay centres and storey floors, and sit flat on curved chords (or are refused on tight curves).
+  - Explicit kit tiles and storefront stamps on generated walls become derived manual spans that the rhythm fills around. Whole-wall ownership by kit tiles is retired; only "Keep wall manual" makes a wall fully manual (version-1 rhythms keep the old behaviour so their hashes are unchanged).
+  - Rhythm pools accept `module:<id>` entries (a "Kit pieces" chip grid).
+  - `studio.facade: 'unified'` makes every exposed face a generated wall. **Convert to editable facade** (Openings) turns a kit building into one: tiles become kit-piece openings at the same positions, and a variation is materialised then dropped. It is one undo step.
+  - Parity: all six NYC presets and every studio example keep identical kit tiles except one tile across the round tower's seam. In the browser, 0.7–0.8% of pixels differ. Triangles fall about 20%, draw groups fall by 3–4, and worker resolve time rises 4–6× (about 21–26 ms).
+  - Details: `docs/city-unified-facades.md`.
+- **Paint rules (done):** floor bands, ground band, quoins and alternating floors resolve into face paint before regions. Details: `docs/city-paint-rules.md`.
+- **Next:** city-scale rendering of generated walls (cross-building batching and a 400-property benchmark) before business buildings adopt them.
 
 ## Known issue
 
-After some paint commits, one wrong frame showing the interior at eye level has been seen, identical in WebGPU and WebGL. It clears on the next camera change and is likely the walk-around camera rendering a frame. Not yet investigated.
+After a large commit (for example conversion to a unified facade, or some paint commits), the studio canvas sometimes keeps showing an eye-level close-up of a wall. It happens in about half of such runs, in both WebGPU and WebGL. The orbit camera's reported position is unchanged, and Top/Front view changes and hovering do not clear it; reopening the plot does. The drive or obstruction camera rig is the suspect. Not yet fixed.
 
 ## Skylights and dormers (local)
 

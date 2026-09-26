@@ -1,6 +1,7 @@
 // Studio tool helpers for free openings: shape presets, picking an existing opening under the
 // pointer, and the ghost that shows where a click will cut (snapping to a door near the ground).
-import {FREE_OPENING,faceMaxOpeningWidth,facePose,faceU,faceX,isFrame,resolveStudioFreeFace,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFaceFrame,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
+import {FREE_OPENING,faceMaxOpeningWidth,facePose,faceU,faceX,fitModuleOnFace,isFrame,resolveStudioFreeFace,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFaceFrame,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
+import {MODULE_POOL_PREFIX,moduleOpeningSpec,poolModule} from '../../domain/cityStudioModuleSpec.ts';
 import {curveSag} from '../../domain/cityStudioFaceCurve.ts';
 import type {StudioBay,StudioRecipe} from '../../domain/cityStudioTypes.ts';
 import {applicableTrimKinds,type TrimKind} from '../../domain/cityStudioTrimParts.ts';
@@ -17,6 +18,17 @@ export const FREE_PRESETS:readonly {id:string;label:string;preset:FreeOpeningPre
  {id:'arcade',label:'Arcade',preset:{width:1.5,height:2.7,shape:'arch',style:'stone'}},
 ];
 
+/**
+ * Preset of a Freeform tray id: a shaped preset, or a kit piece (`module:<id>`, the Windows/Doors/Walls trays of a
+ * unified-facade building) at its native tile size.
+ */
+export function freePresetFor(id:string):FreeOpeningPreset{
+ const kit=poolModule(id),spec=moduleOpeningSpec(kit??undefined);
+ if(kit&&spec)return {width:spec.width,height:spec.height,shape:'rect',module:kit};
+ return (FREE_PRESETS.find(p=>p.id===id)??FREE_PRESETS[0]).preset;
+}
+export const freeModuleTrayId=(module:string)=>MODULE_POOL_PREFIX+module;
+
 /** The free opening under a wall hit, if any (with a small grab margin). */
 export function freeOpeningAtHit(r:StudioRecipe,d:Heights,hit:FreeOpeningHit):StudioFreeOpening|null{
  const f=studioFaceFrame(r,d,hit.shapeId,hit.side);if(!isFrame(f))return null;const x=faceX(f,hit.u),y=hit.heightAboveBase;
@@ -30,8 +42,10 @@ function ghostAt(f:StudioFaceFrame,s:number,y:number,out:number,width:number,hei
  return {x:p.x,y,z:p.z,rotation:p.rotation,width:w,height,shape,door};
 }
 /** Where a click would place `preset`, mirroring placeFreeOpening's centring and door snap. */
-export function freeOpeningGhost(r:StudioRecipe,d:Heights,hit:FreeOpeningHit,preset:FreeOpeningPreset):FreeOpeningGhost|null{
+export function freeOpeningGhost(r:StudioRecipe,d:Heights,hit:FreeOpeningHit,preset:FreeOpeningPreset,bays?:readonly StudioBay[]):FreeOpeningGhost|null{
  const f=studioFaceFrame(r,d,hit.shapeId,hit.side);if(!isFrame(f))return null;
+ // Kit pieces: the whole tile on its storey floor (snapped to a nearby bay centre, as placement does).
+ if(preset.module){const fit=fitModuleOnFace(r,d,f,preset.module,faceX(f,hit.u),hit.heightAboveBase,bays);if('reason' in fit)return null;return ghostAt(f,fit.x,f.base+fit.bottom+preset.height/2,.06,preset.width,preset.height,'rect',moduleOpeningSpec(preset.module)?.category==='door');}
  let bottom=hit.heightAboveBase-preset.height/2;const door=f.ground&&preset.shape!=='round'&&bottom<FREE_OPENING.doorSnap;if(door)bottom=0;
  const s=Math.max(FREE_OPENING.edge+preset.width/2,Math.min(f.length-FREE_OPENING.edge-preset.width/2,faceX(f,hit.u)));bottom=Math.max(0,Math.min(f.height-FREE_OPENING.top-preset.height,bottom));
  return ghostAt(f,s,f.base+bottom+preset.height/2,.06,preset.width,preset.height,preset.shape,door);
@@ -77,7 +91,9 @@ export function planArcade(r:StudioRecipe,d:Heights,start:FreeOpeningHit,end:Fre
 export function freeOpeningTrimChoices(r:StudioRecipe,d:Heights,id:string,bays?:StudioBay[]):{kinds:TrimKind[];role:'window'|'door';ghost:FreeOpeningGhost}|null{
  const o=r.studio.freeOpenings?.find(item=>item.id===id);if(!o)return null;
  const face=resolveStudioFreeFace(r,d,o.shapeId,o.side,bays);if('reason' in face)return null;
- const group=face.resolution.groups.find(g=>g.members.includes(id));if(!group)return null;
  const f=face.frame,s=faceX(f,o.u);
+ // Kit pieces bring their own trims (and wall panels have no group).
+ if(o.module)return face.resolution.modules.some(m=>m.id===id)?{kinds:[],role:face.resolution.groups.find(g=>g.members.includes(id))?.role??'window',ghost:ghostAt(f,s,f.base+o.bottom+o.height/2,.08,o.width,o.height,'rect',false)}:null;
+ const group=face.resolution.groups.find(g=>g.members.includes(id));if(!group)return null;
  return {kinds:applicableTrimKinds({groundTop:Math.max(0,d.groundHeight-f.base)},group),role:group.role,ghost:ghostAt(f,s,f.base+o.bottom+o.height/2,.08,o.width,o.height,o.shape,group.role==='door')};
 }

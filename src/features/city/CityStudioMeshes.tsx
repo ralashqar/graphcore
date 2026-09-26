@@ -45,6 +45,8 @@ export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];versio
  const groups=useMemo(()=>{const out=new Map<string,{piece:Piece;placements:StudioPiece[];texture?:string}>();
   if(!pack)return out;
   for(const p of pieces.filter(p=>p.propertyId||near||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near'))for(const [i,piece] of (pack.get(p.module)??[]).entries()){
+   // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
+   if(p.omit?.includes(piece.channel))continue;
    const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,key=`${p.module}/${i}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture};group.placements.push(p);out.set(key,group);
   }return out;
  },[pieces,pack,near]);
@@ -53,6 +55,7 @@ export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];versio
  const fallback=useMemo(()=>{
   if(pack||proxyOnly)return [];
   return pieces.flatMap(p=>{const part=STUDIO_MODULE_MAP.get(p.module);if(!part)return [];const [w,h,d]=part.size,o=part.collision==='solid'?null:part.opening;
+   if(p.omit?.includes('wall'))return [];
    const boxes=o?[[-w/2+(w-o.width)/4,h/2,(w-o.width)/2,h],[w/2-(w-o.width)/4,h/2,(w-o.width)/2,h],[0,o.bottom/2,o.width,o.bottom],[0,(h+o.top)/2,o.width,h-o.top]]:[[0,h/2,w,h]];
    return boxes.filter(b=>b[2]>.001&&b[3]>.001).map(([x,y,width,height],i):StudioPiece=>({...p,id:p.id+'/fallback'+i,x:p.x+Math.cos(p.rotation)*x*p.scale[0],y:p.y+y*p.scale[1],z:p.z-Math.sin(p.rotation)*x*p.scale[0],scale:[width*p.scale[0],height*p.scale[1],d*p.scale[2]]}));
   });
@@ -60,10 +63,10 @@ export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];versio
 
  const proxies=useMemo(()=>{const groups=new Map<string,{geometry:BufferGeometry;channel:string;placements:StudioPiece[];texture?:string}>();
   const add=(key:string,channel:string,p:StudioPiece,boxes:number[][],texture?:string)=>{let group=groups.get(key);if(!group){const parts=boxes.filter(b=>b[3]>.001&&b[4]>.001).map(([x,y,z,w,h,d])=>new BoxGeometry(w,h,d).translate(x,y,z));if(!parts.length)return;const geometry=parts.length===1?parts[0]:mergeGeometries(parts)!;if(parts.length>1)parts.forEach(g=>g.dispose());group={geometry,channel,placements:[],texture};groups.set(key,group);}group.placements.push(p);};
-  for(const p of pieces){if(!p.propertyId)continue;const part=STUDIO_MODULE_MAP.get(p.module);if(!part||part.minDetail==='near')continue;const [w,h,d]=part.size,o=part.collision==='solid'?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=p.finishes?.[channel]?.texture;
+  for(const p of pieces){if(!p.propertyId)continue;const part=STUDIO_MODULE_MAP.get(p.module);if(!part||part.minDetail==='near')continue;const [w,h,d]=part.size,o=part.collision==='solid'&&!p.omit?.includes('wall')?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=p.finishes?.[channel]?.texture;
    const boxes=o?[[-w/2+(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[w/2-(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[0,o.bottom/2,0,o.width,o.bottom,d],[0,(h+o.top)/2,0,o.width,h-o.top,d]]:[[0,h/2,0,w,h,d]];
-   add(JSON.stringify([boxes,channel,texture]),channel,p,boxes,texture);
-   if(o)add(JSON.stringify(['glass',o.width,o.bottom,o.top]),'glass',p,[[0,(o.bottom+o.top)/2,-.1,o.width,o.top-o.bottom,.04]]);
+   if(!p.omit?.includes('wall'))add(JSON.stringify([boxes,channel,texture]),channel,p,boxes,texture);
+   if(o&&!p.omit?.includes('glass'))add(JSON.stringify(['glass',o.width,o.bottom,o.top]),'glass',p,[[0,(o.bottom+o.top)/2,-.1,o.width,o.top-o.bottom,.04]]);
   }return [...groups.values()];
  },[pieces]);
  useEffect(()=>()=>proxies.forEach(g=>g.geometry.dispose()),[proxies]);

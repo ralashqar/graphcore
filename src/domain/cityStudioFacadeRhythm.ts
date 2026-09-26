@@ -12,12 +12,15 @@
  *   trims      none | simple | rich (default simple): generated trim parts per opening
  *   manual     fill (version 2 default): manual free openings reserve their span (+ margin) and generated
  *              openings stay on the column grid around them; own (version 1 default): a wall with a manual
- *              free opening is left entirely to the user. Kit openings always own their wall.
+ *              free opening is left entirely to the user. Version 2: explicit kit tiles and storefront stamps are
+ *              manual spans too (they reserve their tile; docs/city-unified-facades.md); version 1: a kit opening
+ *              still owns its whole wall.
  *   bay        v2: column pitch in metres (1.2..8), overriding the density-derived pitch
  *   locks      layers kept on shuffle: ground | upper | attic | trims
  *   layerSeeds per-layer shuffle counters (shuffle bumps unlocked ones)
  *   layers     v2: per pool layer (ground | upper | attic | corners | trims) {pool?, coverage?, spacing?, pattern?, uniformity?}
- *              pool        up to 24 {id,weight}; ids are RHYTHM_OPENING_TYPES (trims layer: trim kinds)
+ *              pool        up to 24 {id,weight}; ids are RHYTHM_OPENING_TYPES or `module:<kit module id>` (a kit window,
+ *                          door or wall piece at its native size, standing on the storey floor; trims layer: trim kinds)
  *              coverage    0..1 share of cells that get an opening (the rest are blind wall)
  *              spacing     0..8: only every (spacing+1)-th column opens
  *              pattern     aligned (per column) | groups (2x2 blocks) | alternating (per column, odd/even storeys)
@@ -57,7 +60,8 @@
  *     converts generated openings (+ trims) of one face (or all, which also removes the rhythm) into
  *     manual free openings so they can be edited one by one.
  */
-import {FREE_OPENING,faceMaxOpeningWidth,faceU,isFrame,studioBayFaceSpans,studioFaceFrame,validateFreeOpenings,type FreeOpeningShape,type FreeOpeningStyle,type StudioFaceFrame,type StudioFreeOpening} from './cityStudioFreeOpenings.ts';
+import {FREE_OPENING,faceMaxOpeningWidth,faceU,freeOpeningIsDoor,isFrame,studioBayFaceSpans,studioFaceFrame,studioKitModuleOpenings,validateFreeOpenings,type FreeOpeningShape,type FreeOpeningStyle,type StudioFaceFrame,type StudioFreeOpening} from './cityStudioFreeOpenings.ts';
+import {moduleOpeningSpec,poolModule} from './cityStudioModuleSpec.ts';
 import {FREE_TRIM_KINDS,validateFreeTrims,type StudioFreeTrim,type TrimKind} from './cityStudioTrimParts.ts';
 import {sculptFloorBottom,validSculptSide,type SculptWallSide} from './citySculpt.ts';
 import {studioBays} from './cityStudio.ts';
@@ -146,11 +150,13 @@ const TRIM_LEVELS=['none','simple','rich'];
 const V1_KEYS=['version','seed','style','density','variety','trims','manual','locks','layerSeeds','rules'],V2_KEYS=[...V1_KEYS,'bay','layers'];
 const RULE_V1=['partId','side','style','seed','density','variety','trims','off','layerSeeds'],RULE_V2=[...RULE_V1,'fromFloor','toFloor','x0','x1','manual','bay','layers'];
 const poolIds=(layer:RhythmPoolLayer):readonly string[]=>layer==='trims'?FREE_TRIM_KINDS:RHYTHM_OPENING_TYPES;
+/** Pool id check: the layer's opening types or trim kinds, and on opening layers any kit piece (`module:<id>`). */
+const poolIdOk=(layer:RhythmPoolLayer,id:string)=>poolIds(layer).includes(id)||layer!=='trims'&&!!moduleOpeningSpec(poolModule(id)??undefined);
 function layersOk(v:unknown){
  if(v===undefined)return true;if(!object(v)||Object.keys(v).some(k=>!(RHYTHM_POOL_LAYERS as readonly string[]).includes(k)))return false;
  return Object.entries(v).every(([layer,x])=>{
   if(!object(x)||Object.keys(x).some(k=>!['pool','coverage','spacing','pattern','uniformity'].includes(k)))return false;
-  if(x.pool!==undefined&&(!Array.isArray(x.pool)||x.pool.length>RHYTHM.pool||x.pool.some(p=>!object(p)||Object.keys(p).some(k=>k!=='id'&&k!=='weight')||!poolIds(layer as RhythmPoolLayer).includes(String(p.id))||!finite(p.weight,.01,100))||new Set(x.pool.map(p=>(p as RhythmPoolEntry).id)).size!==x.pool.length))return false;
+  if(x.pool!==undefined&&(!Array.isArray(x.pool)||x.pool.length>RHYTHM.pool||x.pool.some(p=>!object(p)||Object.keys(p).some(k=>k!=='id'&&k!=='weight')||!poolIdOk(layer as RhythmPoolLayer,String(p.id))||!finite(p.weight,.01,100))||new Set(x.pool.map(p=>(p as RhythmPoolEntry).id)).size!==x.pool.length))return false;
   return (x.coverage===undefined||finite(x.coverage,0,1))&&(x.uniformity===undefined||finite(x.uniformity,0,1))&&(x.spacing===undefined||intIn(x.spacing,0,8))&&(x.pattern===undefined||(RHYTHM_PATTERNS as readonly string[]).includes(String(x.pattern)));
  });
 }
@@ -325,7 +331,18 @@ function layout([x0,x1]:Interval,spec:Spec,density:number,odd:boolean,bayWidth?:
  while(n>1&&usable/n-Math.max(spec.pier,RHYTHM.minPier)<RHYTHM.minPanel)n-=odd?2:1;
  const pitch=usable/n;return {n,pitch,room:n===1?usable:pitch-Math.max(spec.pier,RHYTHM.minPier),corner,centres:Array.from({length:n},(_,i)=>x0+corner+(i+.5)*pitch)};
 }
-type Placed={col:number;floor:number;x:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style:FreeOpeningStyle;glazing?:boolean;role:Role;panels:number;panelWidth:number;trimRole?:Role;trimStyle?:RhythmStyle;trimSet?:Settings;trimKey?:string};
+type Placed={col:number;floor:number;x:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style:FreeOpeningStyle;glazing?:boolean;role:Role;panels:number;panelWidth:number;trimRole?:Role;trimStyle?:RhythmStyle;trimSet?:Settings;trimKey?:string;module?:string};
+/**
+ * A kit piece as a pool pick: native size, standing on the storey floor, centred on the column. Its tile must fit the
+ * column pitch (or the whole usable face for a lone column) and its aperture the column's opening room; doors only on
+ * the ground storey.
+ */
+function placeModule(id:string,col:number,floor:number,x:number,lay:Layout,room:number,floorY:number,floorH:number,faceTop:number):Placed|null{
+ const spec=moduleOpeningSpec(id);if(!spec||spec.category==='door'&&floor!==0)return null;
+ const tol=FREE_OPENING.moduleTol,aperture=spec.aperture?spec.aperture.x1-spec.aperture.x0:0;
+ if(spec.width>(lay.n===1?lay.room+2*lay.corner:lay.pitch)+tol||aperture>room+tol||spec.height>floorH+tol||floorY+spec.height>faceTop+tol)return null;
+ return {col,floor,x,bottom:floorY,width:spec.width,height:spec.height,shape:'rect',style:'painted',role:spec.category==='door'&&floor===0?'door':floor===0?'ground':'upper',panels:1,panelWidth:spec.width,module:id};
+}
 const pickShape=(slot:Slot,variety:number,faceRoll:number,colRoll:number,altRoll:number):FreeOpeningShape=>{
  const alt=slot.alt?.filter(a=>a!==slot.shape)??[];if(!alt.length)return slot.shape;
  // A face-wide switch at moderate variety, then individual columns stray at high variety.
@@ -386,8 +403,10 @@ function typeSlot(type:string,role:Role,spec:Spec):{slot:Slot;shape:FreeOpeningS
 export function expandFacadeRhythm(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,bays?:StudioBay[]):RhythmExpansion{
  const v=r.studio.facadeRhythm,out:RhythmExpansion={freeOpenings:[],freeTrims:[],inactive:[],faces:[]};if(!v)return out;
  const legacy=v.version!==2,allBays=bays??studioBays(r,d as CityBuildingDesignV3),gh=d.groundHeight,uh=d.upperHeight??3,used=new Set<number>();
- const manualFree=r.studio.freeOpenings??[],entry=allBays.find(b=>b.entrance),cellRules=orderedRules(v).filter(({r})=>ruleClass(r)>3);
- const kitFace=(shapeId:string,side:SculptWallSide)=>r.studio.openings.some(o=>!o.id.startsWith('generated/')&&o.anchor.shapeId===shapeId&&o.anchor.side===side);
+ // Version 2: explicit kit tiles and storefront stamps are manual spans too (they reserve their tile, see
+ // studioKitModuleOpenings); version 1 keeps its rule that a kit opening owns its whole wall.
+ const kitFree=legacy?[]:studioKitModuleOpenings(r,d,allBays),manualFree=[...kitFree,...(r.studio.freeOpenings??[])],entry=allBays.find(b=>b.entrance),cellRules=orderedRules(v).filter(({r})=>ruleClass(r)>3);
+ const kitFace=(shapeId:string,side:SculptWallSide)=>legacy&&r.studio.openings.some(o=>!o.id.startsWith('generated/')&&o.anchor.shapeId===shapeId&&o.anchor.side===side);
  const manualFace=(shapeId:string,side:SculptWallSide,set:Settings)=>kitFace(shapeId,side)||set.manual==='own'&&manualFree.some(o=>o.shapeId===shapeId&&o.side===side);
  for(const vol of [...r.volumes].filter(x=>x.operation==='add').sort((a,b)=>a.id.localeCompare(b.id))){
   // Faces of this part with their frames, exposure and settings. Columns span the exposed extent of the face
@@ -406,7 +425,7 @@ export function expandFacadeRhythm(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'g
   // The door goes on the entrance face, else the most street-facing face that can take one.
   const open=(x:typeof faces[number])=>!x.set.off&&x.exp.size>0&&!manualFace(vol.id,x.side,x.set),plans=new Map<SculptWallSide,ReturnType<typeof plan>>();
   // A part that already has a manual door (free or kit) gets no generated one.
-  const manualDoor=vol.startFloor===0&&(manualFree.some(o=>o.shapeId===vol.id&&o.shape!=='round'&&o.bottom<=FREE_OPENING.doorSill)||r.studio.openings.some(o=>!o.id.startsWith('generated/')&&o.anchor.shapeId===vol.id&&o.anchor.floor===0&&o.module.startsWith('door-')));
+  const manualDoor=vol.startFloor===0&&(manualFree.some(o=>o.shapeId===vol.id&&(legacy?o.shape!=='round'&&o.bottom<=FREE_OPENING.doorSill:freeOpeningIsDoor(o)))||r.studio.openings.some(o=>!o.id.startsWith('generated/')&&o.anchor.shapeId===vol.id&&o.anchor.floor===0&&o.module.startsWith('door-')));
   if(vol.startFloor===0&&!manualDoor)for(const x of faces.filter(x=>open(x)&&x.exp.get(0)?.some(([a,b])=>b-a>=1.6)).sort((a,b)=>(entry?.anchor.shapeId===vol.id?Number(b.side===entry.anchor.side)-Number(a.side===entry.anchor.side):0)||b.f.normal[1]-a.f.normal[1]||b.f.length-a.f.length)){const p=plan(x,true);if(p?.doors.size){plans.set(x.side,p);break;}}
   for(const {side,f,exp,set,...x} of faces){
    set.matched.forEach(i=>used.add(i));
@@ -457,7 +476,10 @@ export function expandFacadeRhythm(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'g
       let L=layerRule(cf,poolLayer);if(floor>0&&lay.n>=3&&(i===0||i===lay.n-1)&&cf.layers.corners)L={...L,...cf.layers.corners};
       const CR=(...parts:(string|number)[])=>hash([cs.seeds[seedLayer],key,...parts].join('/')),CB=(...parts:(string|number)[])=>hash([cs.seeds[seedLayer],cs.style,...parts].join('/'));
       const pk=L.pattern==='aligned'?`c${c}`:L.pattern==='groups'?`g${Math.floor(c/2)}/${Math.floor(floor/2)}`:L.pattern==='alternating'?`c${c}/${floor%2}`:`c${c}/${floor}`;
-      const spaced=c%(L.spacing+1)===0,cov=CR('coverage',pk),pick=()=>{const type=CR('uniform',pk)<L.uniformity?favourite(L.pool,CB('dominant')):choose(L.pool,CR('pick',pk));const t=type&&typeSlot(type.id,role,cspec);if(!t)return null;
+      const spaced=c%(L.spacing+1)===0,cov=CR('coverage',pk),pick=()=>{const type=CR('uniform',pk)<L.uniformity?favourite(L.pool,CB('dominant')):choose(L.pool,CR('pick',pk));
+       // Kit pieces from the pool: the tile stands on the storey floor, centred on its column.
+       const kit=type&&poolModule(type.id);if(kit){const p=placeModule(kit,i,floor,x,lay,Math.min(lay.room,faceMaxOpeningWidth(f,x)),floorY,floorH,f.height);return p&&inside(list,x-p.width/2+RHYTHM.pad,x+p.width/2-RHYTHM.pad)?{...p,trimKey:`${c}/${floor}`} as Placed:null;}
+       const t=type&&typeSlot(type.id,role,cspec);if(!t)return null;
        const p=place(t.slot,t.role,cspec,t.shape,i,floor,x,Math.min(lay.room,faceMaxOpeningWidth(f,x)),floorY,floorH,f.height);if(!p||!inside(list,x-p.width/2,x+p.width/2))return null;
        return {...p,trimRole:t.role==='door'?'door':role==='attic'&&!cspec.attic?'upper':role,trimStyle:cs.style,trimSet:cs,trimKey:`${c}/${floor}`} as Placed;};
       if(!spaced)return;
@@ -475,14 +497,15 @@ export function expandFacadeRhythm(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'g
     const k0=p.panels,ids:string[]=[],cells:StudioFreeOpening[]=[];
     for(let j=0;j<k0;j++){
      const cx=p.x-p.width/2+p.panelWidth/2+j*(p.panelWidth+RHYTHM.panelGap),id=`generated/rhythm/${key}/${p.floor}/c${p.col}/${j}`;
-     cells.push({id,shapeId:vol.id,side,u:faceU(f,cx),bottom:p.bottom,width:p.panelWidth,height:p.height,shape:p.shape,style:p.style,...(p.glazing!==undefined?{glazing:p.glazing}:{})});
+     cells.push(p.module?{id,shapeId:vol.id,side,u:faceU(f,cx),bottom:p.bottom,width:p.width,height:p.height,shape:'rect',module:p.module}:{id,shapeId:vol.id,side,u:faceU(f,cx),bottom:p.bottom,width:p.panelWidth,height:p.height,shape:p.shape,style:p.style,...(p.glazing!==undefined?{glazing:p.glazing}:{})});
     }
     const clash=(o:StudioFreeOpening)=>manualFree.some(m=>m.shapeId===vol.id&&m.side===side&&Math.abs(m.u*f.length-o.u*f.length)<(m.width+o.width)/2+RHYTHM.fillGap&&m.bottom<o.bottom+o.height+RHYTHM.fillRise&&o.bottom<m.bottom+m.height+RHYTHM.fillRise);
     // Fill: manual openings reserve their span plus a margin. Version 2 drops the whole cell (a pair never loses one panel).
     const fill=set.manual==='fill';
     if(fill&&!legacy&&cells.some(clash))continue;
     for(const o of cells){if(fill&&legacy&&clash(o))continue;out.freeOpenings.push(o);ids.push(o.id);count++;}
-    const ts=p.trimSet??set,level=ts.trims;if(level==='none'||!ids.length)continue;
+    // Kit pieces bring their own trims.
+    const ts=p.trimSet??set,level=ts.trims;if(level==='none'||!ids.length||p.module)continue;
     const trimRule=legacy?undefined:ts.fold.layers.trims,role=p.trimRole??p.role;
     if(trimRule?.pool||trimRule?.coverage!==undefined){
      // Trim pool: coverage per opening, then one weighted kind per slot (head, crown, side, sill, door, lamps).
