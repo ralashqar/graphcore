@@ -1,6 +1,7 @@
 import {useEffect,useLayoutEffect,useMemo,useRef} from 'react';
 import {useFrame} from '@react-three/fiber';
-import {Matrix4,Quaternion,Vector3,type InstancedMesh,type Mesh,type MeshBasicMaterial} from 'three';
+import {BufferGeometry,Float32BufferAttribute,Matrix4,Quaternion,Vector3,type InstancedMesh,type LineBasicMaterial,type Mesh,type MeshBasicMaterial} from 'three';
+import {dashedBoxSegments} from './studioFrame';
 import type {JuiceBurst} from './studioJuice';
 
 const LIFE=.62;
@@ -9,7 +10,8 @@ const PARTICLES:Record<JuiceBurst['kind'],number>={build:18,grow:10,place:10,pai
 
 /** One burst: a pop shell that swells and fades, plus a puff of dust or paint flecks. */
 function Burst({burst,done}:{burst:JuiceBurst;done:(id:string)=>void}){
- const shell=useRef<Mesh>(null),shellMaterial=useRef<MeshBasicMaterial>(null),dust=useRef<InstancedMesh>(null),dustMaterial=useRef<MeshBasicMaterial>(null),age=useRef(0);
+ const shell=useRef<Mesh>(null),shellMaterial=useRef<MeshBasicMaterial>(null),dust=useRef<InstancedMesh>(null),dustMaterial=useRef<MeshBasicMaterial>(null),frameMaterial=useRef<LineBasicMaterial>(null),age=useRef(0);
+ const frame=useMemo(()=>{if(burst.kind!=='build')return null;const g=new BufferGeometry();g.setAttribute('position',new Float32BufferAttribute(dashedBoxSegments(burst.width,burst.height,burst.depth),3));return g;},[burst]);
  const count=PARTICLES[burst.kind],color=burst.color??COLORS[burst.kind];
  const seeds=useMemo(()=>Array.from({length:count},(_,i)=>{const a=i/count*Math.PI*2+Math.random()*.4,speed=.9+Math.random()*1.3;return {a,speed,lift:1.1+Math.random()*1.6,size:.08+Math.random()*.12,edge:Math.random()};}),[count]);
  const m=useMemo(()=>new Matrix4(),[]),q=useMemo(()=>new Quaternion(),[]),p=useMemo(()=>new Vector3(),[]),s=useMemo(()=>new Vector3(),[]);
@@ -17,7 +19,8 @@ function Burst({burst,done}:{burst:JuiceBurst;done:(id:string)=>void}){
  const face=burst.kind==='paint'||burst.depth<=.25&&burst.kind==='place';
  useFrame((state,delta)=>{
   age.current+=Math.min(delta,.05);const t=Math.min(1,age.current/LIFE),ease=1-Math.pow(1-t,3);
-  if(shell.current&&shellMaterial.current){const swell=burst.kind==='remove'?1-.15*ease:1+.08*Math.sin(Math.min(1,t*1.6)*Math.PI);shell.current.scale.set(swell,burst.kind==='grow'?1:swell,swell);shellMaterial.current.opacity=.42*(1-ease);}
+  if(shell.current&&shellMaterial.current){const swell=burst.kind==='remove'?1-.15*ease:1+.08*Math.sin(Math.min(1,t*1.6)*Math.PI);if(burst.kind==='build'){const rise=Math.min(1,t*1.8),h=Math.max(.001,rise);shell.current.scale.set(swell,h,swell);shell.current.position.y=(burst.height+.2)*h/2;shellMaterial.current.opacity=.5*(1-ease);}else{shell.current.scale.set(swell,burst.kind==='grow'?1:swell,swell);shellMaterial.current.opacity=.42*(1-ease);}}
+  if(frameMaterial.current)frameMaterial.current.opacity=.9*(1-ease);
   if(dust.current&&dustMaterial.current){
    for(let i=0;i<count;i++){const seed=seeds[i];
     if(face){p.set((seed.edge-.5)*burst.width*.8,(Math.sin(seed.a)*.4)*burst.height*.6-1.2*t*t,.15+seed.speed*.45*ease);}
@@ -30,6 +33,7 @@ function Burst({burst,done}:{burst:JuiceBurst;done:(id:string)=>void}){
  const showShell=burst.kind!=='paint';
  return <group position={[burst.x,burst.y,burst.z]} rotation={[0,burst.rotation,0]}>
   {showShell&&<mesh ref={shell} position={[0,burst.kind==='build'?burst.height/2:0,0]} raycast={()=>null} renderOrder={3}><boxGeometry args={[burst.width+.3,Math.max(.12,burst.height)+.2,burst.depth+.3]}/><meshBasicMaterial ref={shellMaterial} color={burst.kind==='remove'?'#d9cfbd':'#fff2cc'} transparent opacity={.42} depthWrite={false}/></mesh>}
+  {frame&&<lineSegments geometry={frame} raycast={()=>null} renderOrder={5}><lineBasicMaterial ref={frameMaterial} color="#fff4d6" transparent opacity={.9} depthTest={false} depthWrite={false}/></lineSegments>}
   <instancedMesh ref={dust} args={[undefined,undefined,count]} raycast={()=>null} renderOrder={4}><boxGeometry args={[1,1,1]}/><meshBasicMaterial ref={dustMaterial} color={color} transparent opacity={.85} depthWrite={false}/></instancedMesh>
  </group>;
 }

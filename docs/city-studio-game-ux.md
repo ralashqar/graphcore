@@ -24,6 +24,32 @@ The construction studio (`/city?demo=1`, opt out with `cityStudio=0`) should fee
 
 Building stays a pure sandbox: no costs or budgets.
 
+## Tiny Glade direction: quick wins (implemented)
+
+Research notes:
+- Tiny Glade builds everything from rules, not tiles.
+- A window becomes a door, a merged multi-panel window or a trapdoor depending on where it lands.
+- Roofs fit the footprint.
+- Walls store their distance to windows so the shader can blend plaster around them.
+
+The quick wins below bring the studio's handles and feedback closer to that. Free openings, which bring the rules themselves, are a separate proof of concept.
+
+- **Part gizmo:**
+  - The selected part shows a dashed construction frame (`studioFrame.ts`, `CityStudioPartFrame`) instead of a solid wireframe.
+  - Handles are round white chips: Move, Height, Lift, and a new Turn handle at the base corner.
+- **Free rotation** (`cityStudioRotate.ts`):
+  - Turn sweeps the part around its centre, snapping to 15° (Shift turns freely).
+  - Rectangles and polygons become polygons that keep their wall ids, so anchored paint, openings and details stay on their walls.
+  - Circles ignore rotation; ovals report that they cannot turn yet.
+- **Place where you click:** drawing a block over an existing part starts on the storey above it (roof stacking). Elsewhere the storey rail decides.
+- **Frame first:**
+  - While drawing, the ghost shows a dashed frame including a gable, hip or mansard roof silhouette from the style that will apply.
+  - After commit, a warm shell sweeps up from the foundation while the frame fades.
+- **Quick paint ring** (`CityStudioPaintRing`):
+  - In Paint, pressing C over a tile opens a ring around the cursor: colours outside, materials inside.
+  - Hovering previews the stroke live through the existing sculpt preview. Clicking applies it as one undo step and makes it the current brush. Escape, C or an outside click cancels.
+  - The interaction hook ignores keys while the ring is open.
+
 ## Phase 4 (implemented so far)
 
 - **Sounds** (`studioAudio.ts`):

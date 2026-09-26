@@ -160,3 +160,18 @@
 /* Narrow docks (furniture panel, phones) keep every tool reachable as icons with hotkey hints. */
 .studio-dock{container-type:inline-size;container-name:studio-dock}
 @container studio-dock (max-width:640px){.studio-belt{gap:2px}.studio-belt button{min-width:38px;padding:8px 4px}.studio-belt button>span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.studio-belt kbd{top:2px;right:3px}.studio-belt-divider{margin:4px 1px}}
+/* Tiny Glade-style gizmo chips: bright glyphs with a soft dark halo that read on any facade. */
+.studio-handle{position:relative;border-radius:999px;background:#fffdf6f2;color:#2f4636;width:30px;height:30px;padding:0;box-shadow:0 0 0 2px #2f463622,0 3px 10px #1b2a2040}
+.studio-handle svg{width:17px;height:17px}
+.studio-handle small{left:50%;transform:translateX(-50%);white-space:nowrap;background:#2f4636d9;color:#fffdf6;font-weight:600;letter-spacing:.02em}
+/* Radial quick-paint ring around the cursor. */
+.studio-ring-backdrop{position:absolute;inset:0;pointer-events:auto;z-index:6}
+.studio-ring{position:absolute;width:224px;height:224px;transform:translate(-50%,-50%)}
+.studio-ring::before{content:'';position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle,#faf7ed00 22%,#faf7edcc 23%,#faf7edcc 64%,#faf7ed00 65%);box-shadow:0 10px 30px #1f302522;pointer-events:none;animation:studio-ring-in .16s ease-out}
+.city-studio .studio-ring-swatch,.city-studio .studio-ring-material{position:absolute;width:34px;height:34px;min-height:0;padding:0;margin:-17px 0 0 -17px;border-radius:50%;box-shadow:0 0 0 2px #fffdf6,0 3px 8px #1f302533;transition:transform .12s}
+.city-studio .studio-ring-material{background:#fffdf6}
+.studio-ring-material i{width:24px;height:24px;border-radius:50%}
+.city-studio .studio-ring-swatch:hover,.city-studio .studio-ring-material:hover,.city-studio .studio-ring-swatch:focus-visible{transform:scale(1.22);z-index:1}
+.city-studio .studio-ring-swatch[aria-pressed=true],.city-studio .studio-ring-material[aria-pressed=true]{box-shadow:0 0 0 3px #2f4636,0 3px 8px #1f302533}
+.city-studio .studio-ring-close{position:absolute;left:112px;top:112px;width:26px;height:26px;min-height:0;padding:0;margin:-13px 0 0 -13px;border-radius:50%;background:#2f4636;color:#fffdf6}
+@keyframes studio-ring-in{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}

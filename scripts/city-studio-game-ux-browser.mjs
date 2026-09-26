@@ -48,6 +48,22 @@ try{
  await page.mouse.up();await page.waitForFunction(b=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.find(v=>v.id==='main').spanFloors>b;},before,{timeout:15000});
  const after=await spans();assert.ok(after>before,`height grew from ${before} to ${after}`);
  await page.getByRole('button',{name:'Undo',exact:true}).click();await page.locator('.studio-toast').waitFor({timeout:5000});await page.waitForFunction(b=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.find(v=>v.id==='main').spanFloors===b;},before,{timeout:15000});
+ const saved=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt;});
+ // Free rotation: the Turn handle sweeps the part around its centre and keeps its walls.
+ await page.waitForFunction(()=>!!JSON.parse(document.querySelector('canvas').dataset.cityStudio).handles?.rotate,null,{timeout:10000});
+ const turn=(await state()).handles.rotate,move=(await state()).handles.move;
+ await page.mouse.move(turn.x,turn.y);await page.mouse.down();for(let i=1;i<=10;i++){await page.mouse.move(turn.x-i*9,turn.y+i*7);await page.waitForTimeout(30);}await page.mouse.up();
+ await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.find(v=>v.id==='main').kind==='polygon';},null,{timeout:15000});
+ const turned=(await saved()).volumes.find(v=>v.id==='main');assert.deepEqual(turned.edgeIds,['south','east','north','west'],'walls keep their names');
+ await page.screenshot({path:'output/city-studio-rotate.png'});
+ // Place where you click: drawing a block over the roof starts on the storey above.
+ await page.waitForFunction(()=>{const d=JSON.parse(document.querySelector('canvas').dataset.cityStudio);return !d.busy&&!document.querySelector('.studio-preparing');},null,{timeout:30000});
+ await page.getByRole('button',{name:'Block',exact:true}).click();await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).tool==='block',null,{timeout:5000});
+ await page.mouse.move(move.x,move.y+30);await page.mouse.down();for(let i=1;i<=8;i++){await page.mouse.move(move.x+i*6,move.y+30+i*5);await page.waitForTimeout(30);}await page.mouse.up();
+ await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.length===2;},null,{timeout:15000});
+ const stacked=(await saved()).volumes.find(v=>v.id!=='main');assert.equal(stacked.startFloor,3,`new block sits on the roof (storey ${stacked.startFloor+1})`);
+ await page.screenshot({path:'output/city-studio-stacked.png'});
+ await page.keyboard.press('Control+z');await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.length===1;},null,{timeout:15000});
  // Paint answers back: one click on a tile spawns a paint splash burst.
  await page.keyboard.press('3');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Surfaces');
  await page.getByRole('button',{name:'Brick',exact:true}).click();await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(500);
@@ -56,10 +72,19 @@ try{
  await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).bursts>0,null,{timeout:10000});
  await page.screenshot({path:'output/city-studio-paint-burst.png'});
  await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).bursts===0,null,{timeout:10000});
+ // Quick paint ring: C opens colours around the cursor; hovering previews, clicking applies.
+ const painted=(await saved()).studio.surfaces.length;
+ await page.mouse.move(tile.x+2,tile.y);await page.waitForTimeout(250);await page.keyboard.press('c');
+ await page.getByRole('dialog',{name:'Quick paint'}).waitFor({timeout:5000});
+ const swatch=page.locator('.studio-ring-swatch').nth(3);await swatch.hover();await page.waitForTimeout(300);
+ await page.screenshot({path:'output/city-studio-paint-ring.png'});
+ await swatch.click();await page.getByRole('dialog',{name:'Quick paint'}).waitFor({state:'detached',timeout:5000});
+ await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.surfaces.length>=n;},painted,{timeout:15000});
+ await page.keyboard.press('c');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({timeout:5000});await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({state:'detached',timeout:5000});
  // Mute is remembered on this device.
  await page.getByRole('button',{name:'Mute sound'}).click();assert.equal(await page.evaluate(()=>localStorage.getItem('city-studio-muted')),'1');
  await page.getByRole('button',{name:'Turn sound on'}).click();
  await page.screenshot({path:'output/city-studio-game-ux.png'});
  assert.deepEqual(errors,[]);
- console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst and remembered mute passed.');
+ console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring and remembered mute passed.');
 }finally{await browser.close();}

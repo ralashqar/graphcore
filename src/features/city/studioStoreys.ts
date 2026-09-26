@@ -28,3 +28,6 @@ export function verticalPlaneHeight(origin:[number,number,number],direction:[num
 }
 
 export const formatStoreys=(span:number,height:number)=>`${span} ${span===1?'storey':'storeys'} · ${height.toFixed(1)} m`;
+
+/** Even-odd point-in-polygon test in plot x/z. */
+export function pointInLoop(x:number,z:number,loop:[number,number][]){let yes=false;for(let i=0,j=loop.length-1;i<loop.length;j=i++){const a=loop[i],b=loop[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])yes=!yes;}return yes;}
