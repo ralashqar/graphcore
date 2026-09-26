@@ -7,6 +7,9 @@
  * clamped) interpolates smoothly for the wall wear shader. Frames are swept around
  * the actual outlines, so arches and pointed heads get fitted surrounds.
  * Output is plain typed arrays so the whole build can run in the sculpt worker.
+ * Distance LOD packaging: the wall's inner skin is indexed last (`rearStart`), so a far
+ * representation can draw only the leading outer skin, caps and reveals; `aperture` holds
+ * far-only inset fills for unglazed openings (see cityStudioDetailBatches).
  */
 import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon,Polygon} from 'polygon-clipping';
@@ -14,9 +17,9 @@ import type {MultiPolygon,Polygon} from 'polygon-clipping';
 import {Color,ShapeUtils,Vector2} from 'three';
 import {freeOpeningOutline,freeRegion,type FreeOpeningGroup,type FreeOpeningStyle,type FreeRect} from './cityStudioFreeOpenings.ts';
 
-export type FreeFaceBuffers={positions:Float32Array;normals:Float32Array;uvs:Float32Array;indices:Uint32Array;distance?:Float32Array;colors?:Float32Array};
+export type FreeFaceBuffers={positions:Float32Array;normals:Float32Array;uvs:Float32Array;indices:Uint32Array;distance?:Float32Array;colors?:Float32Array;rearStart?:number};
 export type FreeFaceChannel='wall'|'trim'|'frame'|'glass'|'door';
-export type FreeFaceGeometry=Record<FreeFaceChannel,FreeFaceBuffers>&{triangles:number};
+export type FreeFaceGeometry=Record<FreeFaceChannel,FreeFaceBuffers>&{triangles:number;aperture?:FreeFaceBuffers};
 export type FreeFacePalette=Record<FreeOpeningStyle,{trim:string;frame:string}>&{door:string};
 export const FREE_FACE={thickness:.3,inset:.2,band:.45,maxDistance:1.5} as const;
 export const STYLE_DIMS:Record<FreeOpeningStyle,{surround:number;proud:number}>={stone:{surround:.2,proud:.05},timber:{surround:.13,proud:.04},painted:{surround:.11,proud:.03}};
@@ -99,11 +102,11 @@ function fill(b:Buf,poly:Polygon,z:number,c?:Rgb,back=true){const {points,triang
 }
 const clipAbove=(ring:P2[],y:number,above:boolean):MultiPolygon=>{const xs=ring.map(p=>p[0]),ys=ring.map(p=>p[1]),x0=Math.min(...xs)-1,x1=Math.max(...xs)+1,lo=above?y:Math.min(...ys)-1,hi=above?Math.max(...ys)+1:y;try{return polygonClipping.intersection(toPolygon(ring),toPolygon([[x0,lo],[x1,lo],[x1,hi],[x0,hi]]));}catch{return [];}};
 const rgb=(hex:string):Rgb=>{const c=new Color(hex);return [c.r,c.g,c.b];};
-const pack=(b:Buf):FreeFaceBuffers=>({positions:new Float32Array(b.p),normals:new Float32Array(b.n),uvs:new Float32Array(b.uv),indices:new Uint32Array(b.i),...(b.d?{distance:new Float32Array(b.d)}:{}),...(b.c?{colors:new Float32Array(b.c)}:{})});
+const pack=(b:Buf,rearStart?:number):FreeFaceBuffers=>({positions:new Float32Array(b.p),normals:new Float32Array(b.n),uvs:new Float32Array(b.uv),indices:new Uint32Array(b.i),...(b.d?{distance:new Float32Array(b.d)}:{}),...(b.c?{colors:new Float32Array(b.c)}:{}),...(rearStart!==undefined?{rearStart}:{})});
 
 export function buildFreeOpeningFaceGeometry(face:{length:number;height:number;region?:FreeRect[];thickness?:number},groups:FreeOpeningGroup[],palette:FreeFacePalette=DEFAULT_FREE_PALETTE):FreeFaceGeometry{
  const t=(face.thickness??FREE_FACE.thickness)/2,zg=t-FREE_FACE.inset,L=face.length,H=face.height;
- const wall=buf(true),trim=buf(false,true),frame=buf(false,true),glass=buf(),door=buf(false,true);
+ const wall=buf(true),trim=buf(false,true),frame=buf(false,true),glass=buf(),door=buf(false,true),aperture=buf(),rear:number[]=[];
  const region:MultiPolygon=face.region?.length?freeRegion(face.region):[toPolygon([[0,0],[L,0],[L,H],[0,H]])];
  let far:MultiPolygon=region,near:MultiPolygon=[];
  if(groups.length){
@@ -113,8 +116,8 @@ export function buildFreeOpeningFaceGeometry(face:{length:number;height:number;r
  }
  // Wall skins: outer at +t, inner at -t (interiors see a finished wall), distance per vertex.
  for(const poly of [...far,...near]){const {points,triangles}=triangulateFreePolygon(poly);if(!triangles.length)continue;
-  const d=points.map(p=>freeOpeningDistance(p[0],p[1],groups)),front=points.map((p,k)=>vert(wall,[p[0],p[1],t],[0,0,1],d[k])),rear=points.map((p,k)=>vert(wall,[p[0],p[1],-t],[0,0,-1],d[k]));
-  for(let i=0;i<triangles.length;i+=3){wall.i.push(front[triangles[i]],front[triangles[i+1]],front[triangles[i+2]],rear[triangles[i]],rear[triangles[i+2]],rear[triangles[i+1]]);}
+  const d=points.map(p=>freeOpeningDistance(p[0],p[1],groups)),front=points.map((p,k)=>vert(wall,[p[0],p[1],t],[0,0,1],d[k])),back=points.map((p,k)=>vert(wall,[p[0],p[1],-t],[0,0,-1],d[k]));
+  for(let i=0;i<triangles.length;i+=3){wall.i.push(front[triangles[i]],front[triangles[i+1]],front[triangles[i+2]]);rear.push(back[triangles[i]],back[triangles[i+2]],back[triangles[i+1]]);}
  }
  // Caps close the slab on the exposed perimeter (not the base line).
  for(const poly of region)poly.forEach((raw,k)=>{let ring=openRing(raw as P2[]);if((ringArea(ring)>0)!==(k===0))ring=ring.reverse();const n=segNormals(ring,true);
@@ -130,7 +133,7 @@ export function buildFreeOpeningFaceGeometry(face:{length:number;height:number;r
   for(const m of g.mullions)box(trim,m.x-.07,m.x+.07,m.y0,m.y1,zg-.05,t+Math.min(.02,dims.proud),trimTone);
   if(g.role==='window'&&!(g.panels.length===1&&g.panels[0].shape==='round'))box(trim,g.x0-.12,g.x1+.12,g.y0-.08,g.y0,zg,t+.09,trimTone);
   if(g.role==='window'){
-   if(g.glazing)fill(glass,toPolygon(o),zg);
+   if(g.glazing)fill(glass,toPolygon(o),zg);else fill(aperture,toPolygon(o),zg,undefined,false);
    if(g.glazing)for(const p of g.panels){const y0=g.y0,w=.045,cx=(p.x0+p.x1)/2,cy=(p.y0+p.y1)/2,r=Math.min(p.x1-p.x0,p.y1-p.y0)/2;
     if(p.shape==='round'){box(frame,cx-w/2,cx+w/2,cy-r,cy+r,zg-.025,zg+.025,frameTone);box(frame,cx-r,cx+r,cy-w/2,cy+w/2,zg-.025,zg+.025,frameTone);continue;}
     if(p.x1-p.x0>.85)box(frame,cx-w/2,cx+w/2,y0,p.y1,zg-.025,zg+.025,frameTone);
@@ -144,6 +147,8 @@ export function buildFreeOpeningFaceGeometry(face:{length:number;height:number;r
     const hx=g.x1-g.x0>1.5?(g.x0+g.x1)/2+.14:g.x1-.2;box(frame,hx-.03,hx+.03,.98,1.1,zg,zg+.07,rgb('#c9b27a'));}
   }
  }
- const out={wall:pack(wall),trim:pack(trim),frame:pack(frame),glass:pack(glass),door:pack(door)};
- return {...out,triangles:Object.values(out).reduce((s,b)=>s+b.indices.length/3,0)};
+ // Inner skin last: everything before rearStart is visible from outside.
+ const rearStart=wall.i.length;for(const i of rear)wall.i.push(i);
+ const out={wall:pack(wall,rearStart),trim:pack(trim),frame:pack(frame),glass:pack(glass),door:pack(door)};
+ return {...out,triangles:Object.values(out).reduce((s,b)=>s+b.indices.length/3,0),...(aperture.i.length?{aperture:pack(aperture)}:{})};
 }

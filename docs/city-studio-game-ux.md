@@ -91,6 +91,67 @@ Openings no longer have to be bay tiles. The optional, local-only `studio.freeOp
   - `src/features/city/studioFreeOpeningTool.test.ts`: outlines, door snap, picking.
   - `scripts/city-studio-free-openings-browser.mjs`: rendering on WebGPU and WebGL2, then the Freeform ghost, cut, drag, undo and remove.
 
+## Generated-wall performance (step 1)
+
+Details and commands: `docs/city-free-faces-performance.md`.
+
+- **Merged in the worker:** each building's generated walls and roof openings are baked in the worker into about five merged batches (wall, painted parts, glass, roof), sent as transferable typed arrays with precomputed normals (`cityStudioDetailBatches.ts`, `CityStudioDetailBatches.tsx`).
+- **Trims:** each building's trims merge into at most four geometries (`cityStudioTrimMerge.ts`).
+- **Distance detail:** buildings not being edited switch to a far index range beyond 65 m (back to near inside 55 m). The far version keeps real holes, glass and doors, drops frames, sills, mullions and trims, and fills unglazed openings dark. The benchmark building drops from 6,388 to 1,812 triangles.
+- **Shader warm-up** (`cityStudioWarmup.ts`) keeps first-approach spikes near 100 ms.
+
+With 12 heavy plots in view (72 properties):
+
+| Measure | Before | After |
+|---|---|---|
+| Draw calls | 433 | 212 |
+| Frame p95 | 83 ms | 50 ms |
+| Frame p95 during a free-opening drag | 1.4 s | 50–67 ms |
+
+- **Still limiting a city-wide switch:**
+  - about 90 ms to rebuild a heavy building after each edit;
+  - about 5 draw calls per building, with no sharing between buildings;
+  - the sculpt envelope still posts `number[]` arrays;
+  - physical mobile and a 400-property run with generated buildings in view are still unmeasured.
+
+## Facade rhythm: generated openings instead of tiles (local)
+
+`studio.facadeRhythm` (`cityStudioFacadeRhythm.ts`) lays out free openings and trims on every straight wall from a seed and a style. The generated items (`generated/rhythm/...`) exist only in the resolved result, like tile variations.
+
+- **Styles:**
+
+  | Style | Rhythm |
+  |---|---|
+  | Townhouse | symmetric bays, centred arched door, piano-nobile windows, attic lights |
+  | Shopfront | glazed ground floor, seeded doors, paired sashes |
+  | Civic | stone arcade, centre door, arched hall windows, oculi |
+  | Cottage | off-centre door, small windows, blind bays |
+  | Warehouse | carriage doors, broad arched windows |
+  | Loft | glazed ground floor, Chicago triples |
+
+- **Controls:** density (Airy, Balanced, Dense), variety (Calm, Mixed, Lively), trims (none, simple, rich), and locks per layer (ground, upper, top floor, trims).
+- **Layout:**
+  - Columns come from each wall's exposed length and storey heights, so resizing re-lays the facade: a wider wall gains bays.
+  - Window columns line up across storeys, and each storey shares one sill line.
+  - Symmetric styles keep the door centred.
+  - Every ground-level part gets a street door.
+- **Manual work always wins:** a wall with manual or kit openings belongs to the user. `manual:'fill'` keeps generated openings clear of manual ones.
+- **Studio** (Openings → **Rhythm**):
+  - Style tiles and chips for density, variety and trims.
+  - **Keep** toggles lock layers.
+  - **Shuffle**, the Space key and the belt's **New look** reroll unlocked layers.
+  - **Unpack a wall**: click a wall to turn its generated openings into editable free openings, including trims.
+  - **Plain wall**: click a wall to switch the rhythm off there.
+  - Remove deletes the rhythm.
+- **Performance:**
+  - Expansion takes 1.6–2.8 ms for a 4-part, 6-storey building.
+  - The cost is building the resulting generated walls; see the performance notes.
+- **Validation:** business validators reject `facadeRhythm`.
+
+## Region painting (in progress)
+
+`studio.paintRegions` (`cityStudioPaintRegions.ts`) stores paint strokes and full-width bands as rectangles in wall metres, so paint survives openings moving and re-laying. It has helpers for brush dabs, strokes, bands, erasing and lookups, with unit tests. Wall-builder colouring and Paint tool wiring follow the performance work.
+
 ## Skylights and dormers (local)
 
 `studio.roofOpenings` (`cityStudioRoofOpenings.ts`, geometry in `cityStudioRoofOpeningGeometry.ts`) places openings anywhere on a pitched roof slope.

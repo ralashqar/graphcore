@@ -2,16 +2,20 @@
  * Parametric trim parts on free-opening faces (shutters, window boxes, keystones, hoods, lintels,
  * brackets, canopies, lanterns). The Blender kit (/city/trims/v1/trims.glb) loads lazily once; each
  * placement from fitFreeTrims is nine-slice deformed on the CPU per unique (part, size, mirror) and
- * cached for this building, then drawn with one InstancedMesh per deformed geometry and material
- * class. Trim-class instances are tinted per instance (vertex colour x instanceColor), which works on
- * WebGPU and on the WebGL2 node backend without custom vertex shaders.
+ * cached (module-wide, shared by every building), then all placements of one building are merged into
+ * one non-indexed geometry per material class (trim, planting, metal, light): at most four draw calls
+ * per building instead of one instanced batch per unique deformed size. Trim-class pieces bake their
+ * tint into vertex colours (vertex colour x tint, as the instanced tint did), which works on WebGPU and
+ * on the WebGL2 node backend alike.
  */
-import {useEffect,useLayoutEffect,useMemo,useRef,useSyncExternalStore} from 'react';
+import {useEffect,useMemo,useRef,useSyncExternalStore} from 'react';
 import {useThree} from '@react-three/fiber';
-import {BufferGeometry,Color,Float32BufferAttribute,InstancedMesh,Matrix4,Mesh,MeshStandardMaterial,Object3D,type Material} from 'three';
+import {warmHiddenMaterials} from './cityStudioWarmup';
+import {BufferGeometry,Color,Float32BufferAttribute,Group,Matrix4,Mesh,MeshStandardMaterial,Object3D,type Material} from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
+import {mergeTrimItems,type TrimMergeItem} from './cityStudioTrimMerge';
 import {STUDIO_FAMILIES} from '../../domain/cityStudioCatalog';
 import {DEFAULT_FREE_PALETTE} from '../../domain/cityStudioFreeOpeningGeometry';
 import {TRIM_PARTS,deformTrimPositions,fitFreeTrims,groupTrimKinds,trimFactors,trimPart,type StudioFreeTrim,type TrimPartId,type TrimPlacement} from '../../domain/cityStudioTrimParts';
@@ -65,13 +69,13 @@ function deformPiece(piece:Piece,part:TrimPartId,stretch:TrimPlacement['stretch'
  g.computeVertexNormals();return g;
 }
 const q=(n:number|undefined)=>n===undefined?'-':(Math.round(n*200)/200).toFixed(3);
-
-function TrimBatch({geometry,material,matrices,colors}:{geometry:BufferGeometry;material:Material;matrices:Matrix4[];colors:Color[]|null}){
- const ref=useRef<InstancedMesh>(null),invalidate=useThree(s=>s.invalidate);
- useLayoutEffect(()=>{const mesh=ref.current;if(!mesh)return;matrices.forEach((m,i)=>{mesh.setMatrixAt(i,m);if(colors)mesh.setColorAt(i,colors[i]);});mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;mesh.computeBoundingSphere();invalidate();},[matrices,colors,invalidate]);
- return <instancedMesh dispose={null} ref={ref} args={[geometry,material,matrices.length]} raycast={()=>null}/>;
+// Deformed pieces are pure functions of (part, piece, stretch, mirror): cache them for every building.
+const deformed=new Map<string,BufferGeometry>();
+function cachedPiece(piece:Piece,part:TrimPartId,index:number,stretch:TrimPlacement['stretch'],mirror:boolean){
+ const key=`${part}/${index}/${q(stretch.x)}/${q(stretch.y)}/${mirror?1:0}`;let g=deformed.get(key);
+ if(g){deformed.delete(key);deformed.set(key,g);return g;}
+ g=deformPiece(piece,part,stretch,mirror);deformed.set(key,g);if(deformed.size>600){const oldest=deformed.keys().next().value!;deformed.get(oldest)?.dispose();deformed.delete(oldest);}return g;
 }
-
 /** Trims for all free-opening faces of one building (building-local, inside the sculpt group). */
 export function CityStudioTrimParts({faces,trims,groundHeight=3.2,visible=true}:{faces?:StudioFreeFace[];trims?:StudioFreeTrim[];groundHeight?:number;visible?:boolean}){
  const kit=useTrimKit();
@@ -87,23 +91,22 @@ export function CityStudioTrimParts({faces,trims,groundHeight=3.2,visible=true}:
  },[faces,trims,groundHeight]);
  const batches=useMemo(()=>{
   if(!kit.pack)return [];
-  const materials=trimMaterials(),geometries=new Map<string,BufferGeometry>(),buckets=new Map<string,{geometry:BufferGeometry;material:Material;matrices:Matrix4[];colors:Color[]|null}>(),obj=new Object3D(),white=new Color(1,1,1);
+  const materials=trimMaterials(),lists=new Map<TrimClass,TrimMergeItem[]>(),obj=new Object3D(),white=new Color(1,1,1);
   for(const f of fitted)for(const p of f.placements){
    obj.position.set(p.x,p.y,p.z);obj.rotation.set(0,p.turn,0);obj.scale.setScalar(p.scale);obj.updateMatrix();const matrix=new Matrix4().multiplyMatrices(f.frame,obj.matrix);
    const tint=p.tint==='accent'?f.accent:p.tint==='trim'?f.tints.get(p.groupId)??white:white;
-   (kit.pack.get(p.part)??[]).forEach((piece,i)=>{
-    const key=`${p.part}/${i}/${q(p.stretch.x)}/${q(p.stretch.y)}/${p.mirror?1:0}`;let geometry=geometries.get(key);if(!geometry){geometry=deformPiece(piece,p.part,p.stretch,p.mirror);geometries.set(key,geometry);}
-    let bucket=buckets.get(key);if(!bucket){bucket={geometry,material:materials[piece.cls],matrices:[],colors:piece.cls==='trim'?[]:null};buckets.set(key,bucket);}
-    bucket.matrices.push(matrix);bucket.colors?.push(tint);
-   });
+   (kit.pack.get(p.part)??[]).forEach((piece,i)=>{const list=lists.get(piece.cls)??[];list.push({geometry:cachedPiece(piece,p.part,i,p.stretch,p.mirror),matrix,tint:piece.cls==='trim'?tint:null});lists.set(piece.cls,list);});
   }
-  return [...buckets.entries()];
+  return [...lists].map(([cls,items])=>({cls,material:materials[cls],geometry:mergeTrimItems(items),instances:items.length}));
  },[kit.pack,fitted]);
- useEffect(()=>()=>{new Set(batches.map(([,b])=>b.geometry)).forEach(g=>g.dispose());},[batches]);
+ useEffect(()=>()=>batches.forEach(b=>b.geometry.dispose()),[batches]);
+ // Hidden while the building is far (distance LOD): compile the trim materials before they are needed.
+ const group=useRef<Group>(null),{gl,camera,scene}=useThree();
+ useEffect(()=>{warmHiddenMaterials(gl,group.current,camera,scene);},[batches,gl,camera,scene]);
  useEffect(()=>{
   if(typeof window==='undefined'||!new URLSearchParams(window.location.search).has('cityStudioTest'))return;
-  (window as unknown as {__cityStudioTrims?:unknown}).__cityStudioTrims={status:kit.status,faces:fitted.map(f=>({id:f.face.id,length:f.face.length,height:f.face.height,base:f.face.base})),placements:fitted.reduce((n,f)=>n+f.placements.length,0),skipped:fitted.flatMap(f=>f.skipped),batches:batches.length,instances:batches.reduce((n,[,b])=>n+b.matrices.length,0),triangles:batches.reduce((n,[,b])=>n+b.matrices.length*b.geometry.getAttribute('position').count/3,0)};
+  (window as unknown as {__cityStudioTrims?:unknown}).__cityStudioTrims={status:kit.status,faces:fitted.map(f=>({id:f.face.id,length:f.face.length,height:f.face.height,base:f.face.base})),placements:fitted.reduce((n,f)=>n+f.placements.length,0),skipped:fitted.flatMap(f=>f.skipped),batches:batches.length,instances:batches.reduce((n,b)=>n+b.instances,0),triangles:batches.reduce((n,b)=>n+b.geometry.getAttribute('position').count/3,0)};
  },[kit.status,fitted,batches]);
  if(!fitted.length)return null;
- return <group name={`studio-trims-${kit.status}`} visible={visible}>{batches.map(([key,b])=><TrimBatch key={`${key}/${b.matrices.length}`} geometry={b.geometry} material={b.material} matrices={b.matrices} colors={b.colors}/>)}</group>;
+ return <group ref={group} name={`studio-trims-${kit.status}`} visible={visible}>{batches.map(b=><mesh key={b.cls} name={`studio-trims-${b.cls}`} dispose={null} geometry={b.geometry} material={b.material} raycast={()=>null}/>)}</group>;
 }

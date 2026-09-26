@@ -95,10 +95,39 @@ try{
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.waitForTimeout(600);
  await page.screenshot({path:'output/city-studio-arcade.png'});
  await page.keyboard.press('Control+z');await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return !(JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.freeOpenings??[]).length;},null,{timeout:15000});
+ // Facade rhythm: pick a style, shuffle it, keep one wall plain, unpack another for editing.
+ const sculpt=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt;});
+ const until=(fn,arg)=>page.waitForFunction(fn,arg,{timeout:15000});
+ await page.getByRole('button',{name:'Rhythm',exact:true}).click();
+ await page.getByRole('group',{name:'Facade rhythm'}).getByRole('button',{name:'Townhouse'}).click();
+ await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm?.style==='townhouse';});
+ await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);
+ await page.screenshot({path:'output/city-studio-rhythm.png'});
+ const seeds=JSON.stringify((await sculpt()).studio.facadeRhythm.layerSeeds??{});
+ await page.getByRole('button',{name:'Shuffle',exact:true}).click();
+ await until(s=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.stringify(JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.layerSeeds??{})!==s;},seeds);
+ await page.getByRole('button',{name:'Lock ground',exact:true}).click();
+ await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.locks??[]).includes('ground');});
+ const freeCount=async()=>((await sculpt()).studio.freeOpenings??[]).length;
+ const sides=async()=>{const seen=new Map();for(const b of (await state()).bays.filter(b=>b.part==='main'&&b.x>80&&b.x<1520&&b.y>80&&b.y<600)){if(seen.has(b.side))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover?.startsWith(`main/${b.side}/`))seen.set(b.side,b);}return [...seen.values()];};
+ await page.getByRole('button',{name:'Unpack a wall',exact:true}).click();await page.waitForTimeout(300);
+ let unpacked=null;
+ for(let turn=0;turn<4&&!unpacked;turn++){
+  if(turn){const v=await page.locator('canvas').boundingBox(),cx=v.x+v.width/2,cy=v.y+v.height*.3;await page.mouse.move(cx+150,cy);await page.mouse.down({button:'right'});for(let i=1;i<=10;i++){await page.mouse.move(cx+150-i*30,cy);await page.waitForTimeout(25);}await page.mouse.up({button:'right'});await page.waitForTimeout(500);}
+  for(const b of await sides()){const before=await freeCount();await page.mouse.click(b.x,b.y);await page.waitForTimeout(1500);if(await freeCount()>before){unpacked=b;break;}}
+ }
+ assert.ok(unpacked,'a generated wall was unpacked into editable free openings');
+ await page.getByRole('button',{name:'Plain wall',exact:true}).click();await page.waitForTimeout(300);
+ const plain=(await sides())[0];assert.ok(plain,'a wall to keep plain');await page.mouse.click(plain.x,plain.y);
+ await until(side=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.rules??[]).some(r=>r.partId==='main'&&r.side===side&&r.off);},plain.side);
+ await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.waitForTimeout(600);
+ await page.screenshot({path:'output/city-studio-rhythm-edited.png'});
+ await page.getByRole('button',{name:'Remove rhythm',exact:true}).click();
+ await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return !JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm;});
  // Mute is remembered on this device.
  await page.getByRole('button',{name:'Mute sound'}).click();assert.equal(await page.evaluate(()=>localStorage.getItem('city-studio-muted')),'1');
  await page.getByRole('button',{name:'Turn sound on'}).click();
  await page.screenshot({path:'output/city-studio-game-ux.png'});
  assert.deepEqual(errors,[]);
- console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring, one-step arcade and remembered mute passed.');
+ console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring, one-step arcade, facade rhythm style/shuffle/lock/plain/unpack and remembered mute passed.');
 }finally{await browser.close();}
