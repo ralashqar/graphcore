@@ -23,7 +23,7 @@ try{
  await open();
  await page.getByRole('button',{name:'Paint',exact:true}).click();
  await page.getByRole('button',{name:'Brick',exact:true}).click();
- assert.equal(await page.getByRole('button',{name:'Brick',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.waitForFunction(()=>[...document.querySelectorAll('.studio-materials button')].find(b=>b.textContent?.includes('Brick'))?.getAttribute('aria-pressed')==='true',null,{timeout:10000});
  await page.getByRole('button',{name:'Front view'}).click();
  await page.waitForTimeout(500);
  const bays=await page.locator('canvas').evaluate(canvas=>JSON.parse(canvas.dataset.cityStudio).bays.filter(b=>b.floor===0&&b.side==='north').sort((a,b)=>a.x-b.x));

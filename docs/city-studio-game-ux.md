@@ -50,6 +50,47 @@ The quick wins below bring the studio's handles and feedback closer to that. Fre
   - Hovering previews the stroke live through the existing sculpt preview. Clicking applies it as one undo step and makes it the current brush. Escape, C or an outside click cancels.
   - The interaction hook ignores keys while the ring is open.
 
+## Free openings (Tiny Glade-style, local proof of concept)
+
+Openings no longer have to be bay tiles. The optional, local-only `studio.freeOpenings` field stores openings anywhere on a straight part face:
+
+```
+{id, shapeId, side, u (continuous 0..1 like StudioAnchor.u), bottom (m above the part base), width, height, shape: rect|arch|round|pointed, style?: timber|stone|painted, glazing?}
+```
+
+- **Rules** (`cityStudioFreeOpenings.ts`):
+  - **Door:** an opening that touches the base of a ground-level part becomes a door (round openings never do). Placing within 0.45 m of the base snaps it down.
+  - **Merge:** neighbours on the same face with a gap under 0.25 m and more than 60% vertical overlap merge into one mullioned window.
+  - **Fitting:** openings are drawn within 0.3 m side and 0.2 m top margins. Stored positions are never moved.
+  - **Inactive with a reason:** openings that cannot fit, or sit on walls hidden by other parts, are listed rather than moved.
+- **Geometry** (`cityStudioFreeOpeningGeometry.ts`, typed arrays built inside the existing sculpt worker):
+  - A face that has any free opening owns its exposed wall: its kit tiles are suppressed, and kit openings on it are reported inactive ("Free openings own this wall").
+  - The face is rebuilt with real holes, 0.3 m reveals, surrounds and frames swept along arch and pointed curves, sills, stone mullions, recessed glazing and doors.
+  - A per-vertex distance-to-opening attribute drives a stone and plaster wear band in the TSL wall material (`CityStudioFreeOpeningFace`), Tiny Glade's blending technique.
+  - Ground-floor blockers are split around free doors so they can be walked through, and a kit entrance on an owned face moves to the free door.
+- **Studio tool:**
+  - Openings has a **Freeform** group with Window, Wide window, Tall window, Arch, Pointed arch, Round window, Arched door and Remove.
+  - A shaped ghost follows the pointer on the wall, warmer when it will become a door.
+  - Click cuts an opening. Dragging an existing one slides it along its face with a live preview, and the release is one undo step. Remove deletes the one clicked.
+  - Helpers live in `studioFreeOpeningTool.ts`.
+- **Hover highlight:** now a warm dashed frame instead of a tinted shell, so recessed glazing is not tinted.
+- **Validation:**
+  - `validateStudio` accepts free openings for local plots.
+  - `validateModularBuilding` and `validateVariationRecipe` keep rejecting them, so business profiles, the shared schema and the world worker are unchanged. Taking this to hosted saving would need the usual paired City endpoint/world-worker rollout.
+- **Limits:**
+  - Straight faces only.
+  - A face spans all its storeys, so floor slicing hides it whole, and a tall window can cross an interior slab.
+  - No interior portals for free doors yet.
+  - Per-tile paint on owned faces is ignored (the wall takes the part's floor-0 finish).
+  - Each owned face adds roughly 5 draw calls and a few thousand triangles; faces are not instanced.
+- **Measurements:**
+  - A face with 10 openings resolves and builds in about 15 ms warm in Node.
+  - The fixture's full `resolveSculpt` took 90–160 ms in the page thread. It normally runs in the worker.
+- **Tests:**
+  - `src/domain/cityStudioFreeOpenings.test.ts`: rules, geometry, validators and integration.
+  - `src/features/city/studioFreeOpeningTool.test.ts`: outlines, door snap, picking.
+  - `scripts/city-studio-free-openings-browser.mjs`: rendering on WebGPU and WebGL2, then the Freeform ghost, cut, drag, undo and remove.
+
 ## Phase 4 (implemented so far)
 
 - **Sounds** (`studioAudio.ts`):

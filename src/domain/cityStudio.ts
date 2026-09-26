@@ -12,6 +12,8 @@ import {addStudioSoffits} from './cityStudioSoffits.ts';
 import {validateVariation} from './cityBuildingVariation.ts';
 import {STAMP_MAP} from './cityStorefrontStamps.ts';
 import {resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
+import {validateFreeOpenings} from './cityStudioFreeOpenings.ts';
+import {resolveStudioFreeFaces} from './cityStudioFreeFaces.ts';
 import type {StudioRecipe, StudioIntent, StudioAnchor, StudioBay, StudioResolved, StudioPiece, StudioFamily, StudioPartStyle, StudioFinish, StudioChannel} from './cityStudioTypes.ts';
 
 export const freshStudio = (): StudioIntent => ({catalogue:'synarc-kit-3',roofRevision:'roof-envelope-2',assemblyRevision:'connected-access-1',defaults:{family:'pastel-stucco',rhythm:'regular',window:'window-sash',roof:'flat'},parts:{},surfaces:[],openings:[],assemblies:[]});
@@ -52,6 +54,7 @@ export function validateStudio(r:StudioRecipe):string|null {
  if(r.studio?.variation){if(r.studio.catalogue!=='synarc-kit-5')return 'Variation rules need the Blender catalog.';const error=validateVariation(r.studio.variation);if(error)return error;}
  if(r.studio?.stamps&&(r.studio.catalogue!=='synarc-kit-5'||!Array.isArray(r.studio.stamps)||r.studio.stamps.length>32||r.studio.stamps.some(s=>!s.id||!STAMP_MAP.has(s.stamp)||!s.anchor||typeof s.anchor.shapeId!=='string'||!validSculptSide(s.anchor.side)||!Number.isFinite(s.anchor.u)||s.anchor.u<0||s.anchor.u>1||!Number.isInteger(s.anchor.floor)||s.anchor.floor<0||s.anchor.floor>7)||new Set(r.studio.stamps.map(s=>s.id)).size!==r.studio.stamps.length))return 'A storefront stamp is invalid.';
  if(r.version===6){const error=validateStudioInterior(r);if(error)return error;}
+ {const error=validateFreeOpenings(r.studio?.freeOpenings);if(error)return error;}
  if(!['synarc-kit-2','synarc-kit-3','synarc-kit-4','synarc-kit-5'].includes(r.studio?.catalogue)||!r.studio.defaults||!r.studio.parts||!Array.isArray(r.studio.openings)||!Array.isArray(r.studio.surfaces)||!Array.isArray(r.studio.assemblies))return 'This building uses an unavailable catalogue.';
  if(r.studio.roofDetails!==undefined&&(!Array.isArray(r.studio.roofDetails)||!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||r.studio.roofDetails.length>16||r.studio.roofDetails.some(p=>!p.id||typeof p.partId!=='string'||!studioModuleAvailable(r.studio.catalogue,p.module)||STUDIO_MODULE_MAP.get(p.module)?.category!=='roof'||![p.u,p.v].every(n=>Number.isFinite(n)&&Math.abs(n)<=.5)||!Number.isInteger(p.rotation)||p.rotation<0||p.rotation>3)||new Set(r.studio.roofDetails.map(p=>p.id)).size!==r.studio.roofDetails.length))return 'A roof detail is invalid.';
  if(r.studio.assemblies.some(a=>a.module&&(!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||!studioModuleAvailable(r.studio.catalogue,a.module)||!['trim','ornament'].includes(STUDIO_MODULE_MAP.get(a.module)?.category??''))))return 'This facade detail is unavailable.';
@@ -128,6 +131,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
   if(opening&&b.width>mw)for(const side of [-1,1]){const p=pos(b,side*(mw/2+(b.width-mw)/4),0);pieces.push({id:b.id+`/filler${side}`,module:'wall-full',...p,y:b.y,rotation:b.rotation,scale:[(b.width-mw)/4,b.height/3,1],family:b.family,finishes:b.finishes});}
   blockers.push({id:b.id,x:b.x,y:b.y+b.height/2,z:b.z,width:b.width,height:b.height,depth:.28,rotation:b.rotation});
  }
+ const freeFaces=resolveStudioFreeFaces(r,d,bays,pieces,blockers,inactive,id=>studioStyle(r,id).family??family);
  // Flat roof decks retain the exact polygon, including courtyard holes.
  for(const floor of base.floors)for(const [i,polygon] of floor.polygons.entries())decks.push({id:`roof/${floor.floor}/${i}`,x:0,z:0,y:floor.top+.02,width:0,depth:0,rotation:0,polygon});
  for(const b of bays){const owner=r.volumes.find(v=>v.id===b.anchor.shapeId);const choice=owner?roofChoice(r,owner.id):null;const boundary=choice?.settings.boundary??'rail';if(!owner||owner.startFloor+owner.spanFloors-1!==b.anchor.floor||!['flat','terrace'].includes(choice!.type)||boundary==='none')continue;
@@ -266,7 +270,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  const roof=studioRoofGeometry(r,d,base);
  if(roof.faces){for(let i=decks.length-1;i>=0;i--)if(decks[i].id.startsWith('roof/'))decks.splice(i,1);roof.faces.forEach((f,i)=>decks.push({id:`roof/${i}`,x:0,z:0,y:f.base,width:0,depth:0,rotation:0,polygon:f.polygon,plane:f.plane,underside:f.underside??f.base-.12}));}
  if(r.version===6){const ids=new Set(bays.filter(b=>b.module.startsWith('door-')).map(b=>b.id));for(let i=pieces.length-1;i>=0;i--)if(ids.has(pieces[i].id)||[...ids].some(id=>pieces[i].id.startsWith(id+'/header')||pieces[i].id.startsWith(id+'/filler')||pieces[i].id.startsWith(id+'/access-filler')))pieces.splice(i,1);for(let i=blockers.length-1;i>=0;i--)if(ids.has(blockers[i].id))blockers.splice(i,1);}
- const resolved:StudioResolved={bays,pieces,blockers,decks,inactive,accessRoutes,roof:roof.vertices,roofFaces:roof.faces,roofEdges:roof.edges,roofPatches:roof.patches,roofNotes:[...new Set([...roofNotes,...roof.notes])]};
+ const resolved:StudioResolved={bays,pieces,blockers,decks,inactive,accessRoutes,roof:roof.vertices,roofFaces:roof.faces,roofEdges:roof.edges,roofPatches:roof.patches,roofNotes:[...new Set([...roofNotes,...roof.notes])],...(freeFaces.length?{freeFaces}:{})};
  resolveStudioRoofDetails(r,resolved);
  addStudioSoffits(r,base,resolved);
  return r.version===6?resolveStudioInteriors(r,d,base,resolved,bays):resolved;
