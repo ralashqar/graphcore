@@ -157,13 +157,15 @@ function NativeSculptPiece({pack,asset,position}:{pack:DecoratorPack;asset:strin
  return <group position={position}>{pack.get(asset)?.map((piece,i)=><mesh key={i} geometry={piece.geometry} material={piece.material}/>)}</group>;
 }
 
+/** The entrance sign's material (also the full-resolution sign of near city plots, CitySculptCity). */
+export function sculptSignMaterial(name:string,color:string){
+ const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;const ctx=canvas.getContext('2d')!;
+ ctx.fillStyle=color;ctx.fillRect(0,0,512,96);ctx.fillStyle='#fff8e9';ctx.textAlign='center';ctx.textBaseline='middle';
+ let font=52;do{ctx.font=`700 ${font--}px sans-serif`;}while(ctx.measureText(name).width>475&&font>18);
+ ctx.fillText(name,256,49);const map=new CanvasTexture(canvas);map.colorSpace=SRGBColorSpace;return new MeshBasicMaterial({map});
+}
 function SculptSign({name,color,x,y,z,angle,depth,maxWidth}:{name:string;color:string;x:number;y:number;z:number;angle:number;depth:number;maxWidth:number}){
- const material=useMemo(()=>{
-  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;const ctx=canvas.getContext('2d')!;
-  ctx.fillStyle=color;ctx.fillRect(0,0,512,96);ctx.fillStyle='#fff8e9';ctx.textAlign='center';ctx.textBaseline='middle';
-  let font=52;do{ctx.font=`700 ${font--}px sans-serif`;}while(ctx.measureText(name).width>475&&font>18);
-  ctx.fillText(name,256,49);const map=new CanvasTexture(canvas);map.colorSpace=SRGBColorSpace;return new MeshBasicMaterial({map});
- },[name,color]);
+ const material=useMemo(()=>sculptSignMaterial(name,color),[name,color]);
  useEffect(()=>()=>{material.map?.dispose();material.dispose();},[material]);
  return <mesh position={[x+Math.sin(angle)*depth,y,z+Math.cos(angle)*depth]} rotation={[0,angle,0]} material={material}><planeGeometry args={[Math.min(maxWidth,Math.max(1.8,name.length*.17)),.52]}/></mesh>;
 }

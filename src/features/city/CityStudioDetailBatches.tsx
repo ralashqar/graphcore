@@ -54,7 +54,7 @@ function subsetGeometry(b:DetailBatch,hidden:ReadonlySet<string>){
  return batchGeometry(b,out);
 }
 /** Horizontal camera distance, or its orthographic equivalent from the plot's on-screen size. */
-function viewDistance(camera:Camera,height:number,x:number,z:number){
+export function viewDistance(camera:Camera,height:number,x:number,z:number){
  const o=camera as OrthographicCamera;
  if(o.isOrthographicCamera){const pixels=STUDIO_DETAIL_LOD.plot*o.zoom*height/Math.max(1e-6,o.top-o.bottom);return STUDIO_DETAIL_LOD.plot*height/(2*Math.tan(25*Math.PI/180)*Math.max(1,pixels));}
  const p=camera as PerspectiveCamera;return Math.hypot(p.position.x-x,p.position.z-z);
@@ -63,7 +63,7 @@ function viewDistance(camera:Camera,height:number,x:number,z:number){
 /** Test hook (?cityStudioTest): window.__cityStudioDetailForce = 'near' | 'far' pins every unedited building. */
 const testForce=()=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('cityStudioTest')?(window as unknown as {__cityStudioDetailForce?:'near'|'far'}).__cityStudioDetailForce:undefined;
 /** `seeThrough`: near glazing may be transparent (something is behind it: interiors in view or window shells). */
-export function CityStudioDetailBatches({details,center,full,hidden,seeThrough=true,children}:{details:StudioDetailBatches;center:{x:number;z:number};full:boolean;hidden?:ReadonlySet<string>|null;seeThrough?:boolean;children?:ReactNode}){
+export function CityStudioDetailBatches({details,center,full,pinNear=false,hidden,seeThrough=true,children}:{details:StudioDetailBatches;center:{x:number;z:number};full:boolean;/** Near detail without being the edited plot (CitySculptCity near overlays). */pinNear?:boolean;hidden?:ReadonlySet<string>|null;seeThrough?:boolean;children?:ReactNode}){
  const {camera,size,invalidate,gl,scene}=useThree();
  const geometries=useMemo(()=>details.batches.map(b=>batchGeometry(b)),[details]);
  useEffect(()=>()=>geometries.forEach(g=>g.dispose()),[geometries]);
@@ -86,7 +86,7 @@ export function CityStudioDetailBatches({details,center,full,hidden,seeThrough=t
   details.batches.forEach((b,i)=>{const mesh=meshes.current[i],far=opaque.get(b.key);if(mesh&&far)mesh.material=next==='near'&&clear.current?materials.get(b.key)!:far;});
   if(nearGroup.current)nearGroup.current.visible=next==='near';
  };
- const decide=()=>{if(full||subsets)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
+ const decide=()=>{if(full||pinNear||subsets)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
  useLayoutEffect(()=>{apply(decide());});
  useEffect(()=>{warmHiddenMaterials(gl,root.current,camera,scene);},[geometries,materials,gl,camera,scene]);
  useFrame((state)=>{if(state.clock.elapsedTime-check.current<.2)return;check.current=state.clock.elapsedTime;const next=decide();if(next!==lod.current){apply(next);invalidate();}});

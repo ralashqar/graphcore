@@ -221,7 +221,8 @@ Details: `docs/city-free-doors-glass.md`.
   - Parity: all six NYC presets and every studio example keep identical kit tiles except one tile across the round tower's seam. In the browser, 0.7–0.8% of pixels differ. Triangles fall about 20%, draw groups fall by 3–4, and worker resolve time rises 4–6× (about 21–26 ms).
   - Details: `docs/city-unified-facades.md`.
 - **Paint rules (done):** floor bands, ground band, quoins and alternating floors resolve into face paint before regions. Details: `docs/city-paint-rules.md`.
-- **Next:** city-scale rendering of generated walls (cross-building batching and a 400-property benchmark) before business buildings adopt them.
+- **City-scale rendering (done):** finished studio plots that are not being edited draw through shared city batches. A worker pool bakes each plot's static geometry into world space, chunks of 2×2 plots merge it per material, kit pieces share one instanced mesh per module across the city, and plots within 55 m mount their full per-building detail. With 396 unified buildings, draw calls fall from about 1,560–2,620 to 177–258, loading from about 150 s to 12.5 s and JS heap by half; map and driving views stay pixel-identical on WebGPU. `?cityGwBatch=0` restores the per-building path. Details: `docs/city-generated-walls-at-scale.md`.
+- **Next:** a cheaper far kit that keeps window frames (the zoomed-out map is bound by about 3M kit window triangles), then business buildings adopting generated walls.
 
 ## Camera clearance (fixed known issue)
 

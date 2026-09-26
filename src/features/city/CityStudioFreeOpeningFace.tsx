@@ -11,9 +11,11 @@ const lin=(hex:string)=>{const c=new Color(hex);return vec3(c.r,c.g,c.b);};
  * `openingDistance` (metres to the nearest opening edge) reveals coursed stone
  * through the plaster within a noisy ~0.35 m band. Node material, so it runs on
  * WebGPU and on the WebGL2 node backend alike.
+ * `vertexColor`: the colour comes from the geometry's `color` attribute (tinting the plaster and texture, not
+ * the stone), so buildings with different finishes share one material (city batches, CitySculptCity).
  */
-export function freeWallMaterial(color:string,texture:CityTextureId){
- const m=citySurfaceMaterial(false,texture);m.color.set(color);
+export function freeWallMaterial(color:string,texture:CityTextureId,vertexColor=false){
+ const m=citySurfaceMaterial(false,texture);m.color.set(vertexColor?'#ffffff':color);
  const base=(m.colorNode??materialColor) as unknown as ReturnType<typeof vec3>,rough=(m.roughnessNode??float(m.roughness)) as unknown as ReturnType<typeof float>,d=attribute('openingDistance','float'),p=positionWorld;
  const n=mx_noise_float(p.mul(1.6)).mul(.6).add(mx_noise_float(p.mul(5.1)).mul(.25));
  const reach=float(.4).add(n.mul(.22)),wear=float(1).sub(smoothstep(reach.sub(.07),reach,d));
@@ -21,7 +23,7 @@ export function freeWallMaterial(color:string,texture:CityTextureId){
  const joint=max(step(fract(p.y.div(.26)),.07),step(fract(along),.05));
  const stone=mix(lin('#c9bda5').mul(tone),lin('#7c7468'),joint);
  // Mottled plaster away from openings, a thin grime line right at the edge.
- const mottled=base.mul(float(.95).add(n.mul(.05)));
+ const mottled=(vertexColor?base.mul(attribute('color','vec3')):base).mul(float(.95).add(n.mul(.05)));
  m.colorNode=mix(mottled,stone,wear).mul(float(.82).add(smoothstep(0,.06,d).mul(.18)));
  m.roughnessNode=mix(rough,float(.94),wear);
  return m;
