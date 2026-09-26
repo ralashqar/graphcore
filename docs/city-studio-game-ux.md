@@ -91,6 +91,95 @@ Openings no longer have to be bay tiles. The optional, local-only `studio.freeOp
   - `src/features/city/studioFreeOpeningTool.test.ts`: outlines, door snap, picking.
   - `scripts/city-studio-free-openings-browser.mjs`: rendering on WebGPU and WebGL2, then the Freeform ghost, cut, drag, undo and remove.
 
+## Skylights and dormers (local)
+
+`studio.roofOpenings` (`cityStudioRoofOpenings.ts`, geometry in `cityStudioRoofOpeningGeometry.ts`) places openings anywhere on a pitched roof slope.
+
+- **Kinds:**
+  - **Skylights:** a real hole through the roof, a slim frame, glazing just above the plane and a flashing collar.
+  - **Dormers:** the roof is cut inside the dormer. The front wall reuses the free-openings wall builder with a rect or arch window. The cheeks meet the slope, and the roof is a gable (ridge perpendicular to the main ridge) or shed/flat, with valleys, verges and flashing.
+- **Stored slope reference:** part, `facing` (plan direction the slope drains to), a gambrel `tier`, and `u`/`v` on the slope's plan extent. It survives rise, overhang, connection and gable/hip changes.
+- **Inactive reasons:**
+  - too close to another opening;
+  - too narrow or short;
+  - slope too shallow for a dormer;
+  - flat roof;
+  - missing slope or part;
+  - legacy roofs without connected roof editing.
+- **Worker and rendering:** the published `roofFaces` stay uncut, so picking and decks are stable; only the rendered roof is cut. Materials follow the part's roof finish and wall family.
+- **Studio:**
+  - Roof tray → **Skylights & dormers**: Skylight, Gable dormer, Wide shed dormer, Arched dormer and Remove.
+  - A ghost shell follows the slope and turns red with a reason when an opening does not fit.
+  - Click places and selects the new opening. Dragging moves it with live preview. Clicking one opens a panel for dormer roof (gable, shed, flat), window shape (square, arch) and removal.
+- **Measurements:**
+  - Six openings added about 12 ms to a warm resolve in Node.
+  - Seven openings on two parts took 52–58 ms on the page thread, against 32–38 ms without.
+- **Limits:**
+  - No clash checks with roof details or upper walls.
+  - Skylights are walkable.
+  - Glass is opaque.
+  - Dormers are not instanced.
+  - Turning the ridge deactivates openings rather than rotating them.
+
+## Trim parts: stretchable Blender decoration (local)
+
+Self-authored, low-poly parts (`public/city/trims/v1/trims.glb`, 1,562 triangles in total):
+
+| Part | Behaviour |
+|---|---|
+| shutter | stretches in x and y |
+| window-box | two plant clumps repeated along it |
+| keystone | fixed |
+| hood-mould | stretches in width |
+| lintel-stone | stretches in width |
+| sill-bracket | fixed |
+| door-canopy | stretches in width |
+| wall-lamp | fixed |
+
+- **Rebuild and validate:**
+  - `"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe" --background --factory-startup --python scripts/build-city-trim-parts.py`, which is byte-deterministic.
+  - `node scripts/validate-city-trim-parts.mjs`: hashes, nodes, bounds, origins, stretch bands, budgets.
+- **Catalogue:** `catalogue.json` gives each part an anchor (opening-top, bottom, side, apex, wall point), bounds, and stretch bands.
+- **Stretching:** stretch bands generalise nine-slice. Vertices inside a band scale and caps only translate, so rails, keys and returns stay crisp.
+- **Fitting** (`cityStudioTrimParts.ts`):
+  - Places trims per resolved free-opening group, inside the face and without overlapping other openings or trims.
+  - Wall shared between two windows is split so both can carry shutters.
+- **Rules:**
+  - shutters on rect or arch windows;
+  - window boxes on windows at least 0.9 m wide above the ground storey;
+  - keystones on arches;
+  - hoods and lintels on rect heads;
+  - canopy and lamps on doors;
+  - sill brackets unless a box brings its own.
+- **Storage:** `studio.freeTrims: {openingId, kinds}[]`, local-only. Business validators reject it.
+- **Rendering** (`CityStudioTrimParts.tsx`): stretching runs on the CPU per unique size and is cached, with instanced batches and shared `citySurfaceMaterial` node materials. It works on WebGPU and WebGL2, and trims hide in cutaway and floor views.
+- **Studio:**
+  - In Openings → Freeform, clicking an opening without dragging selects it, and a new opening is selected as soon as it is placed. A dashed outline marks it.
+  - A **Dress this opening** row toggles the trims that suit it. Each toggle is one undo step.
+  - Removing an opening prunes its trims.
+- **Limits:**
+  - The fitter ignores wall regions hidden by abutting parts.
+  - No distant-detail variant.
+  - Plants squash at extreme sizes.
+
+## Arcades and click-to-place roof details
+
+- **Arcade** (Openings → Freeform → Arcade):
+  - Drag along a ground-floor wall to lay out a row of arches. The count follows the dragged length: 1.5 m arches with 0.5 m piers, spread evenly between the two ends (`arcadeCentres` / `planArcade` in `studioFreeOpeningTool.ts`).
+  - Scrolling while dragging changes the arch height, capped to the ground storey.
+  - Ghosts preview every arch, and the status line shows the count and height.
+  - Release places them as free openings in one undo step ("Add arcade of N"). Arches that would collide with existing openings are skipped with a reason.
+  - Piers stay wider than the merge gap, so the arches read as a colonnade.
+  - Arches are stored as ordinary free openings with continuous `u`. Resizing a wall spreads them proportionally but does not change their count.
+- **Roof details:**
+  - Choosing a detail in the Roof tray enters a `roof-detail` tool: a ghost box follows the pointer on flat roofs, R turns it, and each click places one after the same worker validation as before. Escape finishes.
+  - The five quick-spot buttons remain for touch and accessibility.
+- **Status notes:** informational status text (arcade count and height) uses a separate `note` channel, so it doesn't play the invalid-placement sound.
+- **Tests:**
+  - `scripts/city-studio-roof-details-browser.mjs`.
+  - The arcade flow in `scripts/city-studio-free-openings-browser.mjs`.
+  - Arcade layout unit tests in `studioFreeOpeningTool.test.ts`.
+
 ## Phase 4 (implemented so far)
 
 - **Sounds** (`studioAudio.ts`):

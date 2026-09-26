@@ -4,6 +4,7 @@ import polygonClipping,{type MultiPolygon} from 'polygon-clipping';
 import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,sculptFloorTop,sculptPrimitiveBoundary,sculptFootprint,type SculptResolved,type SculptVolume} from './citySculpt.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
+import {studioRoofOpeningPass} from './cityStudioRoofOpeningGeometry.ts';
 import type {StudioRecipe,StudioRoof,StudioRoofSettings,StudioRoofFace,StudioRoofEdge,StudioRoofPatch} from './cityStudioTypes.ts';
 type Point=[number,number];type Plane=[number,number,number];
 const EPS=1e-6;
@@ -163,8 +164,10 @@ export function connectedStudioRoofs(r:StudioRecipe,d:CityBuildingDesignV3,floor
   }
   faces.push(...fragments(face,visible));
  }
+ // Roof openings cut the rendered solid only; `faces` (picking, decks, details) stay whole.
+ const openings=studioRoofOpeningPass(r,faces),solid=openings.faces;
  const patches=new Map<string,StudioRoofPatch>(),edges:StudioRoofEdge[]=[];
- for(const face of faces){
+ for(const face of solid){
   let patch=patches.get(face.partId);
   if(!patch){const s=roofChoice(r,face.partId).settings,style={...r.studio.defaults,...r.studio.parts[face.partId]},finish=r.studio.parts[face.partId]?.finishes?.wall??r.studio.defaults.finishes?.wall;
    patch={partId:face.partId,vertices:[],wallVertices:[],finish:s.finish,color:s.color,wallColor:finish?.color??STUDIO_FAMILIES[style.family??'pastel-stucco'].wall,wallTexture:finish?.texture};patches.set(face.partId,patch);
@@ -176,17 +179,17 @@ export function connectedStudioRoofs(r:StudioRecipe,d:CityBuildingDesignV3,floor
    patch.vertices.push(...a,...(up?b:c),...(up?c:b));
    const bottom=t.map(i=>[points[i][0],lower(face),points[i][1]]);patch.vertices.push(...bottom[0],...(up?bottom[2]:bottom[1]),...(up?bottom[1]:bottom[2]));
   }
-  for(const [a,b] of splitRoofEdges(rings,faces)){
+  for(const [a,b] of splitRoofEdges(rings,solid)){
    const dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);if(length<EPS)continue;
    const mid:Point=[(a[0]+b[0])/2,(a[1]+b[1])/2],outward:Point=[dz/length,-dx/length],probe:Point=[mid[0]+outward[0]*.0001,mid[1]+outward[1]*.0001];
-   const neighbours=faces.filter(f=>f!==face&&contains(probe,f.polygon));
+   const neighbours=solid.filter(f=>f!==face&&contains(probe,f.polygon));
    const height=at(face.plane,mid),adjacent=neighbours.find(f=>Math.abs(at(f.plane,mid)-height)<.0001&&lower(f)<height-EPS);
    const wall=layers.some(l=>l.bottom<height+.001&&l.top>height+.001&&l.wallEnvelope.some(p=>contains(probe,p)));
    const covered=neighbours.some(f=>lower(f)<height-EPS&&at(f.plane,mid)>height+.0001);
    let kind:StudioRoofEdge['kind']|null=wall?'abutment':covered?null:adjacent?face.plane.every((n,k)=>Math.abs(n-adjacent.plane[k])<EPS)?null:bendKind(face,adjacent,outward):neighbours.some(f=>at(f.plane,mid)<height&&at(f.plane,mid)>lower(face))?'step':Math.abs(at(face.plane,a)-at(face.plane,b))>.001?'rake':'eave';
    // A top surface flush against a bridge underside has no exposed roof trim.
    if(layers.some(l=>Math.abs(l.bottom-height)<.001&&l.wallEnvelope.some(p=>contains(mid,p))))kind=null;
-   if(kind)edges.push({partId:face.partId,kind,a:xyz(a),b:xyz(b)});
+   if(kind&&openings.keepEdge({partId:face.partId,kind,a:xyz(a),b:xyz(b)}))edges.push({partId:face.partId,kind,a:xyz(a),b:xyz(b)});
 
    // Close only exposed vertical intervals. Neighbouring roof cells and the
    // finished building union remove internal fascias and buried gable walls.
@@ -206,5 +209,5 @@ export function connectedStudioRoofs(r:StudioRecipe,d:CityBuildingDesignV3,floor
  // Faceted curves can leave collinear triangulation ears at shared boundaries.
  const nondegenerate=(vertices:number[])=>{const result:number[]=[];for(let i=0;i<vertices.length;i+=9){const a=vertices.slice(i,i+3),u=vertices.slice(i+3,i+6).map((v,k)=>v-a[k]),v=vertices.slice(i+6,i+9).map((n,k)=>n-a[k]);if(Math.hypot(u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0])>1e-10)result.push(...vertices.slice(i,i+9));}return result;};
  for(const patch of patches.values()){patch.vertices=nondegenerate(patch.vertices);patch.wallVertices=nondegenerate(patch.wallVertices!);}
- return {vertices:[...patches.values()].flatMap(p=>[...p.vertices,...p.wallVertices!]),notes:[...new Set(notes)],faces,edges:[...new Map(edges.map(e=>[[e.a,e.b].map(p=>p.map(v=>v.toFixed(5)).join(',')).sort().join('|'),e])).values()],patches:[...patches.values()]};
+ return {vertices:[...patches.values()].flatMap(p=>[...p.vertices,...p.wallVertices!]),notes:[...new Set(notes)],faces,edges:[...new Map(edges.map(e=>[[e.a,e.b].map(p=>p.map(v=>v.toFixed(5)).join(',')).sort().join('|'),e])).values()],patches:[...patches.values()],openings};
 }

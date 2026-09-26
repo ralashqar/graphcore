@@ -81,10 +81,24 @@ try{
  await swatch.click();await page.getByRole('dialog',{name:'Quick paint'}).waitFor({state:'detached',timeout:5000});
  await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.surfaces.length>=n;},painted,{timeout:15000});
  await page.keyboard.press('c');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({timeout:5000});await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({state:'detached',timeout:5000});
+ // Arcade: Front view shows the clean north wall straight on; drag along its ground floor.
+ await page.keyboard.press('4');await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Arcade',exact:true}).click();
+ await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(500);
+ const north=(await state()).bays.filter(b=>b.part==='main'&&b.side==='north'&&b.floor===0&&b.x>60&&b.x<1540&&b.y>80&&b.y<660).sort((p,q)=>p.x-q.x);
+ assert.ok(north.length>=2,'ground-floor bays of the front wall are on screen');
+ const from=north[0],to=north.at(-1),free=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.freeOpenings??[];});
+ await page.mouse.move(from.x,from.y);await page.mouse.down();for(let i=1;i<=12;i++){await page.mouse.move(from.x+(to.x-from.x)*i/12,from.y);await page.waitForTimeout(40);}
+ await page.mouse.wheel(0,-200);await page.waitForTimeout(250);assert.match(await page.locator('.studio-feedback').textContent(),/arches ·/);
+ await page.screenshot({path:'output/city-studio-arcade-drag.png'});await page.mouse.up();
+ await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.freeOpenings??[]).length>=2;},null,{timeout:15000});
+ assert.ok((await free()).every(o=>o.shape==='arch'&&o.bottom===0&&o.side==='north'),'arcade arches stand on the ground of the front wall');
+ await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.waitForTimeout(600);
+ await page.screenshot({path:'output/city-studio-arcade.png'});
+ await page.keyboard.press('Control+z');await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return !(JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.freeOpenings??[]).length;},null,{timeout:15000});
  // Mute is remembered on this device.
  await page.getByRole('button',{name:'Mute sound'}).click();assert.equal(await page.evaluate(()=>localStorage.getItem('city-studio-muted')),'1');
  await page.getByRole('button',{name:'Turn sound on'}).click();
  await page.screenshot({path:'output/city-studio-game-ux.png'});
  assert.deepEqual(errors,[]);
- console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring and remembered mute passed.');
+ console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring, one-step arcade and remembered mute passed.');
 }finally{await browser.close();}

@@ -19,7 +19,7 @@ export type FreeFaceChannel='wall'|'trim'|'frame'|'glass'|'door';
 export type FreeFaceGeometry=Record<FreeFaceChannel,FreeFaceBuffers>&{triangles:number};
 export type FreeFacePalette=Record<FreeOpeningStyle,{trim:string;frame:string}>&{door:string};
 export const FREE_FACE={thickness:.3,inset:.2,band:.45,maxDistance:1.5} as const;
-const STYLE_DIMS:Record<FreeOpeningStyle,{surround:number;proud:number}>={stone:{surround:.2,proud:.05},timber:{surround:.13,proud:.04},painted:{surround:.11,proud:.03}};
+export const STYLE_DIMS:Record<FreeOpeningStyle,{surround:number;proud:number}>={stone:{surround:.2,proud:.05},timber:{surround:.13,proud:.04},painted:{surround:.11,proud:.03}};
 export const DEFAULT_FREE_PALETTE:FreeFacePalette={stone:{trim:'#d8cdb7',frame:'#4f5552'},timber:{trim:'#6f5039',frame:'#5a3f2c'},painted:{trim:'#efe8da',frame:'#f3efe6'},door:'#4c6456'};
 
 type P2=[number,number];type V3=[number,number,number];type Rgb=[number,number,number];

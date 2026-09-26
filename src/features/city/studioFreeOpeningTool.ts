@@ -1,7 +1,8 @@
 // Studio tool helpers for free openings: shape presets, picking an existing opening under the
 // pointer, and the ghost that shows where a click will cut (snapping to a door near the ground).
-import {FREE_OPENING,faceX,isFrame,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
-import type {StudioRecipe} from '../../domain/cityStudioTypes.ts';
+import {FREE_OPENING,faceU,faceX,isFrame,resolveStudioFreeFace,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
+import type {StudioBay,StudioRecipe} from '../../domain/cityStudioTypes.ts';
+import {applicableTrimKinds,type TrimKind} from '../../domain/cityStudioTrimParts.ts';
 
 type Heights={groundHeight:number;upperHeight?:number};
 export const FREE_PRESETS:readonly {id:string;label:string;preset:FreeOpeningPreset}[]=[
@@ -12,6 +13,7 @@ export const FREE_PRESETS:readonly {id:string;label:string;preset:FreeOpeningPre
  {id:'pointed',label:'Pointed arch',preset:{width:1.1,height:2.2,shape:'pointed'}},
  {id:'round',label:'Round window',preset:{width:.9,height:.9,shape:'round'}},
  {id:'door',label:'Arched door',preset:{width:1.4,height:2.4,shape:'arch',style:'timber'}},
+ {id:'arcade',label:'Arcade',preset:{width:1.5,height:2.7,shape:'arch',style:'stone'}},
 ];
 
 /** The free opening under a wall hit, if any (with a small grab margin). */
@@ -42,3 +44,34 @@ export function freeOpeningOutline(shape:FreeOpeningShape,width:number,height:nu
  return [[-w,-h],[w,-h],...top];
 }
 
+
+/** Tiny Glade-style arcade: arches spread evenly between two points dragged along a ground-floor
+ * face. The count follows the dragged length; piers stay wider than the merge gap so the arches
+ * read as a colonnade rather than one merged opening. */
+export const ARCADE={width:1.5,pier:.5,minHeight:1.8,defaultHeight:2.7} as const;
+export function arcadeCentres(from:number,to:number,width:number=ARCADE.width,pier:number=ARCADE.pier):number[]{
+ const a=Math.min(from,to),b=Math.max(from,to),span=b-a,count=Math.max(1,Math.floor((span+pier)/(width+pier)));
+ if(count===1)return [(a+b)/2];
+ const step=(span-width)/(count-1);return Array.from({length:count},(_,i)=>a+width/2+i*step);
+}
+/** Lays out an arcade on the face of `start`, clamped to the face and to the ground storey. */
+export function planArcade(r:StudioRecipe,d:Heights,start:FreeOpeningHit,end:FreeOpeningHit,height:number):{centres:number[];height:number;ghosts:FreeOpeningGhost[]}|{reason:string}{
+ const f=studioFaceFrame(r,d,start.shapeId,start.side);if(!isFrame(f))return f;
+ if(!f.ground)return {reason:'Arcades run along the ground floor.'};
+ const top=Math.min(d.groundHeight-.35,f.height-FREE_OPENING.top),h=Math.max(ARCADE.minHeight,Math.min(top,height));
+ if(top<ARCADE.minHeight)return {reason:'The ground floor is too low for an arcade.'};
+ const lo=FREE_OPENING.edge,hi=f.length-FREE_OPENING.edge,clamp=(x:number)=>Math.max(lo,Math.min(hi,x));
+ const endX=end.shapeId===start.shapeId&&end.side===start.side?faceX(f,end.u):faceX(f,start.u);
+ const a=clamp(faceX(f,start.u)),b=clamp(endX);if(Math.abs(b-a)<ARCADE.width)return {reason:'Drag further along the wall to lay out the arcade.'};
+ const centres=arcadeCentres(a,b),ghosts=centres.map(s=>({x:f.origin[0]+f.tangent[0]*s+f.normal[0]*.06,y:f.base+h/2,z:f.origin[1]+f.tangent[1]*s+f.normal[1]*.06,rotation:f.rotation,width:ARCADE.width,height:h,shape:'arch' as FreeOpeningShape,door:true}));
+ return {centres:centres.map(s=>faceU(f,s)),height:h,ghosts};
+}
+
+/** Trims that suit a placed opening (by its resolved group) and an outline to highlight it. */
+export function freeOpeningTrimChoices(r:StudioRecipe,d:Heights,id:string,bays?:StudioBay[]):{kinds:TrimKind[];role:'window'|'door';ghost:FreeOpeningGhost}|null{
+ const o=r.studio.freeOpenings?.find(item=>item.id===id);if(!o)return null;
+ const face=resolveStudioFreeFace(r,d,o.shapeId,o.side,bays);if('reason' in face)return null;
+ const group=face.resolution.groups.find(g=>g.members.includes(id));if(!group)return null;
+ const f=face.frame,s=faceX(f,o.u);
+ return {kinds:applicableTrimKinds({groundTop:Math.max(0,d.groundHeight-f.base)},group),role:group.role,ghost:{x:f.origin[0]+f.tangent[0]*s+f.normal[0]*.08,y:f.base+o.bottom+o.height/2,z:f.origin[1]+f.tangent[1]*s+f.normal[1]*.08,rotation:f.rotation,width:o.width,height:o.height,shape:o.shape,door:group.role==='door'}};
+}
