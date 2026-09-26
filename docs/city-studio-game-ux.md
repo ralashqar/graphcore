@@ -148,9 +148,49 @@ With 12 heavy plots in view (72 properties):
   - The cost is building the resulting generated walls; see the performance notes.
 - **Validation:** business validators reject `facadeRhythm`.
 
-## Region painting (in progress)
+## Region painting on generated walls (step 3)
 
-`studio.paintRegions` (`cityStudioPaintRegions.ts`) stores paint strokes and full-width bands as rectangles in wall metres, so paint survives openings moving and re-laying. It has helpers for brush dabs, strokes, bands, erasing and lookups, with unit tests. Wall-builder colouring and Paint tool wiring follow the performance work.
+Details: `docs/city-paint-regions.md`.
+
+- **Storage:** `studio.paintRegions` holds strokes, bands and fills as rectangles in wall metres, so paint survives openings moving and facades re-laying.
+- **Old tile paint:** tile paint (`studio.surfaces`) on a wall that becomes generated is converted into equivalent regions, so it isn't lost.
+- **Geometry:**
+  - The worker sweeps paint layers into horizontal strips of single-finish runs and clips each outer-wall triangle to them (`cityStudioPaintGeometry.ts`). Edges stay crisp and the stone wear around openings is kept.
+  - Pieces join the wall batch for their finish, so each distinct finish adds one draw call per building.
+  - Trim regions tint the surrounds, sills and mullions they touch.
+- **Paint tool on generated walls** (`studioPaintRegionTool.ts`):
+  - A brush cursor with Small, Medium and Large sizes. Drag to paint; each stroke is one undo step, with a live preview.
+  - **Fill wall** covers the whole face; **Band** paints a full-width strip between two heights you drag.
+  - Sample reads the topmost finish, Restore erases the topmost region, and the C ring recolours the region under the pointer.
+  - Kit-tile walls keep tile painting.
+- **Cost:**
+  - Heavy paint (24 regions on 4 faces) takes a resolve from about 168 ms to 192–215 ms and grows far-distance triangles by up to 2.4×.
+  - The worker merge step is unchanged.
+
+## See-through windows and openable free doors (step 4)
+
+Details: `docs/city-free-doors-glass.md`.
+
+- **Glass:**
+  - Glass in generated walls is transparent with the city's reflection environment.
+  - Buildings with interiors show their rooms, floors and furniture through it. Buildings without interiors get a cheap warm room box behind each window.
+  - Far away, the glass switches back to the opaque reflective material without extra draw calls.
+  - Dormer and skylight glass stays opaque.
+- **Doors on buildings with interiors:**
+  - Free doors become portals (`exterior/free/<group>`, `cityStudioFreeDoors.ts`) with animated leaves, E to open or close in walk-around mode, and a doorstep landing so the prompt works on 48 m plots.
+  - Wide doors open as a hinged pair, glazed doors get glazed leaves, and stone doorways (arcades) stay open passages.
+  - The baked static leaf only draws far away, so there is no double door.
+- **Doors on buildings without interiors:** a closed leaf with a blocker stops walking through. Adding interiors makes the door openable.
+- **Interiors:** partitions or stairs in the 1.6 m doorway zone report "Leave the doorway clear."
+- **Cost:** about 16 more draw calls in the 72-property benchmark from room boxes and roof glass, on nearby buildings only.
+- **Known limits:**
+  - Transparency is sorted per building, not per window.
+  - Leaves are rectangular under arches, and a low arch's fixed transom can clip the character's head.
+  - Kit exterior doors on 48 m plots may still miss the E prompt.
+
+## Known issue
+
+After some paint commits, one wrong frame showing the interior at eye level has been seen, identical in WebGPU and WebGL. It clears on the next camera change and is likely the walk-around camera rendering a frame. Not yet investigated.
 
 ## Skylights and dormers (local)
 

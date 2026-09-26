@@ -22,7 +22,7 @@ function fixture(){
  return resolveSculpt(r,design).studio!;
 }
 const sum=<T,>(list:T[],f:(t:T)=>number)=>list.reduce((n,t)=>n+f(t),0);
-const sources=(s:ReturnType<typeof fixture>):FreeFaceBuffers[]=>[...(s.freeFaces??[]).flatMap(f=>[f.geometry.wall,f.geometry.trim,f.geometry.frame,f.geometry.glass,f.geometry.door,...(f.geometry.aperture?[f.geometry.aperture]:[])]),...(s.roofOpenings??[]).flatMap(p=>[p.geometry.wall,p.geometry.trim,p.geometry.frame,p.geometry.glass,p.geometry.roof,p.geometry.flashing])];
+const sources=(s:ReturnType<typeof fixture>):FreeFaceBuffers[]=>[...(s.freeFaces??[]).flatMap(f=>[f.geometry.wall,f.geometry.trim,f.geometry.frame,f.geometry.glass,f.geometry.door,...(f.geometry.aperture?[f.geometry.aperture]:[]),...(f.geometry.doorGlass?[f.geometry.doorGlass]:[]),...(f.shell?[f.shell]:[])]),...(s.roofOpenings??[]).flatMap(p=>[p.geometry.wall,p.geometry.trim,p.geometry.frame,p.geometry.glass,p.geometry.roof,p.geometry.flashing])];
 function checkBatches(d:StudioDetailBatches){
  for(const b of d.batches){const count=b.positions.length/3;
   assert.equal(b.normals.length,count*3);assert.equal(b.uvs.length,count*2);if(b.distance)assert.equal(b.distance.length,count);if(b.colors)assert.equal(b.colors.length,count*3);
@@ -48,9 +48,9 @@ test('one building merges into one batch per material with every vertex and inde
  checkBatches(d);
  assert.equal(sum(d.batches,b=>b.positions.length),sum(src,b=>b.positions.length),'vertices preserved');
  assert.equal(sum(d.batches,b=>b.indices.length),sum(src,b=>b.indices.length),'indices preserved');
- assert.deepEqual(d.batches.map(b=>b.material.kind).sort(),['glass','painted','roof','wall'],'wall, painted (trim/frame/door/flashing), glass and roof');
- const faceCalls=sum(s.freeFaces!,f=>(['wall','trim','frame','glass','door'] as const).filter(k=>f.geometry[k].indices.length).length)+sum(s.roofOpenings!,p=>(['wall','trim','frame','glass','roof','flashing'] as const).filter(k=>p.geometry[k].indices.length).length);
- assert.ok(d.batches.length*3<=faceCalls,`${faceCalls} per-face meshes become ${d.batches.length}`);
+ assert.deepEqual(d.batches.map(b=>b.material.kind).sort(),['glass','glass','painted','roof','shell','wall'],'wall, painted (trim/frame/door/flashing), see-through face glass, opaque roof glass, window shells and roof');
+ const faceCalls=sum(s.freeFaces!,f=>(['wall','trim','frame','glass','door'] as const).filter(k=>f.geometry[k].indices.length).length+(f.shell?1:0))+sum(s.roofOpenings!,p=>(['wall','trim','frame','glass','roof','flashing'] as const).filter(k=>p.geometry[k].indices.length).length);
+ assert.ok(d.batches.length*2.5<=faceCalls,`${faceCalls} per-face meshes become ${d.batches.length}`);
  assert.ok(d.triangles.far<d.triangles.near*.6,`far LOD drops most detail (${d.triangles.far} of ${d.triangles.near})`);
  const painted=d.batches.find(b=>b.material.kind==='painted')!,wall=d.batches.find(b=>b.material.kind==='wall')!;
  assert.ok(painted.far>0&&painted.far<painted.near*.1,'far keeps door leaves only');assert.equal(wall.near,wall.indices.length,"no far-only wall");assert.ok(wall.far<wall.near,'far wall drops the inner skin');

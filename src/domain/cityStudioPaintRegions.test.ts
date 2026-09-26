@@ -26,10 +26,11 @@ test('erase removes the topmost region under the point',()=>{
 });
 
 test('validation rejects bad regions and long strokes stay within budget',()=>{
- assert.match(validatePaintRegions([{id:'x',shapeId:'m',side:'n',channel:'wall',rects:[[1,0,0,1]],finish:{color:'#fff000'}}])!,/invalid shape/);
- assert.match(validatePaintRegions([{id:'x',shapeId:'m',side:'n',channel:'wall',rects:[[0,1,0,1]],finish:{color:'red'}}])!,/invalid/);
+ assert.match(validatePaintRegions([{id:'x',shapeId:'m',side:'north',channel:'wall',rects:[[1,0,0,1]],finish:{color:'#fff000'}}])!,/invalid shape/);
+ assert.match(validatePaintRegions([{id:'x',shapeId:'m',side:'north',channel:'wall',rects:[[0,1,0,1]],finish:{color:'red'}}])!,/invalid/);
  const scattered=Array.from({length:PAINT_REGIONS.rects+40},(_,i)=>brushRect((i%7)*3,Math.floor(i/7)*.9,.4));
  const r=addPaintStroke(recipe(),{shapeId:'m',side:'n',channel:'wall',rects:scattered,finish:{color:'#123456'}});
- assert.ok(r.studio.paintRegions![0].rects.length<=PAINT_REGIONS.rects);
+ const kept=r.studio.paintRegions![0].rects;assert.ok(kept.length<=PAINT_REGIONS.rects&&kept.length>1,`coarsened, not collapsed (${kept.length})`);
+ for(const q of scattered){const cx=(q[0]+q[1])/2,cy=(q[2]+q[3])/2;assert.ok(kept.some(k=>cx>=k[0]&&cx<=k[1]&&cy>=k[2]&&cy<=k[3]),'every dab stays painted');}
  assert.deepEqual(mergeRects([[0,1,0,1],[1,2,0,1],[5,6,0,1]]),[[0,2,0,1],[5,6,0,1]]);
 });

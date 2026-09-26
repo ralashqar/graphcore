@@ -13,6 +13,7 @@ import {validateVariation} from './cityBuildingVariation.ts';
 import {STAMP_MAP} from './cityStorefrontStamps.ts';
 import {resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
 import {validateFreeOpenings} from './cityStudioFreeOpenings.ts';
+import {validatePaintRegions} from './cityStudioPaintRegions.ts';
 import {validateRoofOpenings} from './cityStudioRoofOpenings.ts';
 import {applyStudioRoofOpenings} from './cityStudioRoofOpeningGeometry.ts';
 import {validateFreeTrims} from './cityStudioTrimParts.ts';
@@ -62,6 +63,7 @@ export function validateStudio(r:StudioRecipe):string|null {
  {const error=validateRoofOpenings(r.studio?.roofOpenings);if(error)return error;}
  {const error=validateFreeTrims(r.studio?.freeTrims);if(error)return error;}
  {const error=validateFacadeRhythm(r.studio?.facadeRhythm);if(error)return error;}
+ {const error=validatePaintRegions(r.studio?.paintRegions);if(error)return error;}
  if(!['synarc-kit-2','synarc-kit-3','synarc-kit-4','synarc-kit-5'].includes(r.studio?.catalogue)||!r.studio.defaults||!r.studio.parts||!Array.isArray(r.studio.openings)||!Array.isArray(r.studio.surfaces)||!Array.isArray(r.studio.assemblies))return 'This building uses an unavailable catalogue.';
  if(r.studio.roofDetails!==undefined&&(!Array.isArray(r.studio.roofDetails)||!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||r.studio.roofDetails.length>16||r.studio.roofDetails.some(p=>!p.id||typeof p.partId!=='string'||!studioModuleAvailable(r.studio.catalogue,p.module)||STUDIO_MODULE_MAP.get(p.module)?.category!=='roof'||![p.u,p.v].every(n=>Number.isFinite(n)&&Math.abs(n)<=.5)||!Number.isInteger(p.rotation)||p.rotation<0||p.rotation>3)||new Set(r.studio.roofDetails.map(p=>p.id)).size!==r.studio.roofDetails.length))return 'A roof detail is invalid.';
  if(r.studio.assemblies.some(a=>a.module&&(!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||!studioModuleAvailable(r.studio.catalogue,a.module)||!['trim','ornament'].includes(STUDIO_MODULE_MAP.get(a.module)?.category??''))))return 'This facade detail is unavailable.';

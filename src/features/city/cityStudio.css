@@ -85,6 +85,11 @@
 .studio-material-sample.is-concrete{background:linear-gradient(135deg,#a8a9a0,#d0d1c7)}
 .studio-material-sample.is-timber{background:repeating-linear-gradient(90deg,#957258 0 12px,#b28d70 12px 24px,#71543f 24px 25px)}
 .studio-paint-bottom{padding-top:6px}
+.studio-brush{display:flex;align-items:center;gap:4px;padding:0 2px 6px}
+.studio-brush .studio-caption{margin:0 6px 0 0;white-space:nowrap}
+.studio-brush button{display:flex;align-items:center;gap:6px;min-height:30px;padding:4px 10px;font-size:10px;background:#f0eee3}
+.studio-brush button i{display:block;border-radius:3px;background:#8d9a82}
+.studio-brush button[aria-pressed=true] i{background:#506d56}
 .studio-surfaces .studio-swatches{padding:5px 2px;gap:6px}
 .studio-surfaces .studio-swatches>button:not(:has(svg)){width:27px;height:27px}
 .studio-paint-actions{display:flex;align-items:center;gap:3px}

@@ -9,6 +9,9 @@
  * frames, sills, mullions, flashing and the free walls' inner skin. Far-only: dark inset fills for
  * unglazed openings (the far wall has no inner skin to look at). `owners` record per-face index ranges
  * so floor slicing can hide individual faces.
+ * Free-face glass is its own `seeThrough` batch (transparent near, opaque far; roof-opening glass stays opaque).
+ * Openable faces (v6 portals) put their static door leaves far-only; interior-less faces add a near-only
+ * `shell` batch (see cityStudioFreeDoors and docs/city-free-doors-glass.md).
  */
 // @deno-types="npm:@types/three@0.186.0"
 import {Color} from 'three';
@@ -17,7 +20,8 @@ import {FREE_FACE,type FreeFaceBuffers,type FreeFaceChannel} from './cityStudioF
 import type {RoofOpeningChannel,StudioRoofOpeningPart} from './cityStudioRoofOpeningGeometry.ts';
 import type {StudioFreeFace} from './cityStudioFreeFaces.ts';
 
-export type DetailMaterial={kind:'wall';color:string;texture:string}|{kind:'painted'}|{kind:'glass';color:string}|{kind:'roof';color:string;texture:string};
+/** Glass `seeThrough`: free-face glazing, transparent near the camera (opaque when far). `shell`: unlit vertex-coloured interior boxes. */
+export type DetailMaterial={kind:'wall';color:string;texture:string}|{kind:'painted'}|{kind:'glass';color:string;seeThrough?:boolean}|{kind:'shell'}|{kind:'roof';color:string;texture:string};
 export type DetailBatch={key:string;material:DetailMaterial;positions:Float32Array;normals:Float32Array;uvs:Float32Array;indices:Uint16Array|Uint32Array;distance?:Float32Array;colors?:Float32Array;
  /** Index ranges: near = [0, near), far = [farStart, farStart+far). */near:number;farStart:number;far:number;sphere:[number,number,number,number];owners:{id:string;start:number;count:number}[]};
 export type StudioDetailBatches={batches:DetailBatch[];triangles:{near:number;far:number};vertices:number};
@@ -27,7 +31,7 @@ type Piece={owner:string;src:FreeFaceBuffers;ranges:{tier:Tier;start:number;coun
 const FLASHING='#7f8a88';
 const rgb=(hex:string):[number,number,number]=>{const c=new Color(hex);return [c.r,c.g,c.b];};
 const whole=(b:FreeFaceBuffers,tier:Tier)=>[{tier,start:0,count:b.indices.length}];
-const materialKey=(m:DetailMaterial)=>m.kind==='painted'?'painted':m.kind==='glass'?`glass|${m.color}`:`${m.kind}|${m.color}|${m.texture}`;
+const materialKey=(m:DetailMaterial)=>m.kind==='painted'||m.kind==='shell'?m.kind:m.kind==='glass'?`glass|${m.color}${m.seeThrough?'|see':''}`:`${m.kind}|${m.color}|${m.texture}`;
 export const roofFinishTexture=(finish:StudioRoofOpeningPart['finish'])=>finish==='terracotta'?'terracotta':finish==='metal'?'metal':'none';
 export const roofFinishColor=(part:Pick<StudioRoofOpeningPart,'color'|'finish'>)=>part.color??(part.finish==='terracotta'?'#a9694e':part.finish==='metal'?'#7c9189':'#64727b');
 
@@ -35,7 +39,7 @@ export const roofFinishColor=(part:Pick<StudioRoofOpeningPart,'color'|'finish'>)
 export function mergeDetailPieces(material:DetailMaterial,pieces:Piece[]):DetailBatch|null{
  pieces=pieces.filter(p=>p.src.indices.length&&p.ranges.some(r=>r.count));if(!pieces.length)return null;
  const vertexCount=pieces.reduce((n,p)=>n+p.src.positions.length/3,0),indexCount=pieces.reduce((n,p)=>n+p.ranges.reduce((m,r)=>m+r.count,0),0);
- const withDistance=material.kind==='wall',withColor=material.kind==='painted';
+ const withDistance=material.kind==='wall',withColor=material.kind==='painted'||material.kind==='shell';
  const positions=new Float32Array(vertexCount*3),normals=new Float32Array(vertexCount*3),uvs=new Float32Array(vertexCount*2),distance=withDistance?new Float32Array(vertexCount):undefined,colors=withColor?new Float32Array(vertexCount*3):undefined;
  const indices=vertexCount>65535?new Uint32Array(indexCount):new Uint16Array(indexCount),bases:number[]=[];
  let v=0,lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
@@ -66,11 +70,16 @@ export function buildStudioDetailBatches(studio:{freeFaces?:StudioFreeFace[];roo
  const add=(material:DetailMaterial,piece:Piece)=>{const key=materialKey(material);let g=groups.get(key);if(!g){g={material,pieces:[]};groups.set(key,g);}g.pieces.push(piece);};
  for(const face of studio.freeFaces??[]){
   const family=STUDIO_FAMILIES[face.family],g=face.geometry,frame={owner:face.id,rotation:face.rotation,offset:[face.origin[0],face.base,face.origin[1]] as [number,number,number]};
-  const wall:DetailMaterial={kind:'wall',color:face.finishes.wall?.color??family.wall,texture:face.finishes.wall?.texture??'none'},glass:DetailMaterial={kind:'glass',color:family.glass};
+  const wall:DetailMaterial={kind:'wall',color:face.finishes.wall?.color??family.wall,texture:face.finishes.wall?.texture??'none'},glass:DetailMaterial={kind:'glass',color:family.glass,seeThrough:true};
   const rear=g.wall.rearStart??g.wall.indices.length;
   add(wall,{...frame,src:g.wall,ranges:[{tier:1,start:0,count:rear},{tier:0,start:rear,count:g.wall.indices.length-rear}]});
+  // Painted regions: outer-skin pieces join the wall batch of their finish (same wear attribute, both tiers).
+  for(const p of g.wallPaint??[])add({kind:'wall',color:p.finish.color??family.wall,texture:p.finish.texture??'none'},{...frame,src:p.buffers,ranges:whole(p.buffers,1)});
   for(const ch of ['trim','frame'] as FreeFaceChannel[])add({kind:'painted'},{...frame,src:g[ch],ranges:whole(g[ch],0)});
-  add({kind:'painted'},{...frame,src:g.door,ranges:whole(g.door,1)});
+  // Openable faces (v6): static leaves draw far only; near the camera animated portal leaves replace them.
+  const leafTier:Tier=face.openable?2:1;add({kind:'painted'},{...frame,src:g.door,ranges:whole(g.door,leafTier)});
+  if(g.doorGlass)add(glass,{...frame,src:g.doorGlass,ranges:whole(g.doorGlass,leafTier)});
+  if(face.shell)add({kind:'shell'},{...frame,src:face.shell,ranges:whole(face.shell,0)});
   add(glass,{...frame,src:g.glass,ranges:whole(g.glass,1)});
   if(g.aperture)add(glass,{...frame,src:g.aperture,ranges:whole(g.aperture,2)});
  }
@@ -94,6 +103,6 @@ const EMPTY:FreeFaceBuffers={positions:new Float32Array(0),normals:new Float32Ar
  */
 export function withoutDetailGeometry<T extends {freeFaces?:StudioFreeFace[];roofOpenings?:StudioRoofOpeningPart[]}>(studio:T):T{
  return {...studio,
-  ...(studio.freeFaces?{freeFaces:studio.freeFaces.map(f=>({...f,geometry:{wall:EMPTY,trim:EMPTY,frame:EMPTY,glass:EMPTY,door:EMPTY,triangles:f.geometry.triangles}}))}:{}),
+  ...(studio.freeFaces?{freeFaces:studio.freeFaces.map(f=>({...f,shell:undefined,geometry:{wall:EMPTY,trim:EMPTY,frame:EMPTY,glass:EMPTY,door:EMPTY,triangles:f.geometry.triangles}}))}:{}),
   ...(studio.roofOpenings?{roofOpenings:studio.roofOpenings.map(p=>({...p,geometry:{wall:EMPTY,trim:EMPTY,frame:EMPTY,glass:EMPTY,roof:EMPTY,flashing:EMPTY,triangles:p.geometry.triangles}}))}:{})};
 }
