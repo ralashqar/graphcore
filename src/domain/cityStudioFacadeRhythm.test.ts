@@ -56,10 +56,10 @@ test('resizing re-lays the facade through resolveSculpt and suppresses kit tiles
 
 test('manual openings own their face unless the rhythm fills around them',()=>{
  const manual:StudioFreeOpening={id:'mine',shapeId:'main',side:'north',u:.2,bottom:5,width:1.2,height:1.5,shape:'round'};
- const own=expand(recipe(newFacadeRhythm('townhouse'),[vol('main')],[manual]));
+ const own=expand(recipe({...newFacadeRhythm('townhouse'),manual:'own'},[vol('main')],[manual]));
  assert.equal(face(own.freeOpenings,'main','north').length,0);assert.equal(own.faces.find(f=>f.side==='north')!.status,'manual');
  assert.ok(face(own.freeOpenings,'main','south').length>0,'other faces still generate');
- const kit=recipe(newFacadeRhythm('townhouse'));kit.studio.openings.push({id:'kit-door',anchor:{shapeId:'main',side:'east',u:.5,floor:0},module:'door-panelled'});
+ const kit=recipe({...newFacadeRhythm('townhouse'),manual:'own'});kit.studio.openings.push({id:'kit-door',anchor:{shapeId:'main',side:'east',u:.5,floor:0},module:'door-panelled'});
  assert.equal(face(expand(kit).freeOpenings,'main','east').length,0,'a manual kit opening also owns its face');
  const fill=expand(recipe({...newFacadeRhythm('townhouse'),manual:'fill'},[vol('main')],[manual])),north=face(fill.freeOpenings,'main','north');
  assert.ok(north.length>0,'fill keeps generated openings around the manual one');
@@ -153,7 +153,7 @@ test('materialize turns generated openings into editable manual ones with identi
 test('local validation accepts the rhythm; business and profile validators keep rejecting it',()=>{
  const r=recipe({...newFacadeRhythm('civic',42),density:.3,variety:.6,trims:'rich',locks:['ground'],layerSeeds:{upper:2},rules:[{partId:'main',side:'north',style:'shopfront'}]});
  assert.equal(validateStudio(r),null);
- for(const bad of [{version:2,seed:1,style:'civic'},{version:1,seed:1.5,style:'civic'},{version:1,seed:1,style:'gothic'},{version:1,seed:1,style:'civic',density:2},{version:1,seed:1,style:'civic',locks:['roof']},{version:1,seed:1,style:'civic',rules:[{style:'loft'}]},{version:1,seed:1,style:'civic',extra:true},{version:1,seed:1,style:'civic',rules:[{side:'north'},{side:'north'}]}])assert.ok(validateFacadeRhythm(bad),JSON.stringify(bad));
+ for(const bad of [{version:3,seed:1,style:'civic'},{version:1,seed:1,style:'civic',layers:{}},{version:1,seed:1,style:'civic',rules:[{fromFloor:1,toFloor:1,off:true}]},{version:2,seed:1,style:'civic',layers:{upper:{pool:[{id:'lintel',weight:1}]}}},{version:2,seed:1,style:'civic',layers:{trims:{pool:[{id:'arch',weight:1}]}}},{version:2,seed:1,style:'civic',layers:{upper:{pool:[{id:'arch',weight:0}]}}},{version:2,seed:1,style:'civic',layers:{upper:{pattern:'zigzag'}}},{version:2,seed:1,style:'civic',rules:[{fromFloor:2,toFloor:1}]},{version:2,seed:1,style:'civic',rules:[{fromFloor:1,toFloor:1,density:.2}]},{version:2,seed:1,style:'civic',rules:[{side:'north',x0:1,x1:3}]},{version:2,seed:1,style:'civic',bay:20},{version:2,seed:1,style:'civic',layers:{roof:{}}},{version:2,seed:1,style:'civic',rules:[{partId:'main',fromFloor:1,toFloor:2},{partId:'main',fromFloor:1,toFloor:2}]},{version:1,seed:1.5,style:'civic'},{version:1,seed:1,style:'gothic'},{version:1,seed:1,style:'civic',density:2},{version:1,seed:1,style:'civic',locks:['roof']},{version:1,seed:1,style:'civic',rules:[{style:'loft'}]},{version:1,seed:1,style:'civic',extra:true},{version:1,seed:1,style:'civic',rules:[{side:'north'},{side:'north'}]}])assert.ok(validateFacadeRhythm(bad),JSON.stringify(bad));
  assert.ok(validateStudio(recipe({version:1,seed:1,style:'nope' as RhythmStyle})));
  assert.ok(validateVariationRecipe(JSON.parse(JSON.stringify(r)),3),'business import rejects facadeRhythm');
  const modular={version:1,template:'x',recipe:{...JSON.parse(JSON.stringify(r)),studio:{...JSON.parse(JSON.stringify(r.studio)),catalogue:'synarc-kit-5',variation:{version:1,seed:1,rules:[],layers:{}}}}};delete modular.recipe.plotSize;modular.recipe.plotSize=24;

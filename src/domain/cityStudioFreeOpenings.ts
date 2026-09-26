@@ -1,8 +1,9 @@
 /**
  * Tiny Glade-style free openings (local studio spike).
  *
- * An opening is stored relative to one straight part face: `u` is the continuous
- * face coordinate (the same convention as StudioAnchor.u for that side), `bottom`
+ * An opening is stored relative to one part face: `u` is the continuous face
+ * coordinate (straight sides: the StudioAnchor.u convention for that side; the curved
+ * wall of an ellipse part, side 'curve': arc length / perimeter, see cityStudioFaceCurve), `bottom`
  * is metres above the part's base. The wall is cut at the exact outline and
  * context decides the result: a ground-touching opening on a ground-level part is
  * a door; close neighbours with similar heights merge into one mullioned window.
@@ -25,6 +26,7 @@ import polygonClipping from 'polygon-clipping';
 import type {MultiPolygon,Polygon} from 'polygon-clipping';
 import {sculptFloorBottom,sculptFloorTop,sculptPrimitiveBoundary,sculptSourceEdge,validSculptSide,type SculptWallSide} from './citySculpt.ts';
 import type {StudioBay,StudioRecipe} from './cityStudioTypes.ts';
+import {curveLength,curveMaxOpening,curveNormal,curvePoint,curveXAt,type FaceCurve} from './cityStudioFaceCurve.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 
 export const FREE_OPENING_SHAPES=['rect','arch','round','pointed'] as const;
@@ -36,14 +38,21 @@ export type StudioFreeOpening={id:string;shapeId:string;side:SculptWallSide;u:nu
 export const FREE_OPENING={limit:64,mergeGap:.25,mergeOverlap:.6,doorSill:.15,doorSnap:.45,edge:.3,top:.2,minWall:.12,min:.3,max:12} as const;
 
 export type FreeRect=[number,number,number,number];
-export type FreeFaceSpec={length:number;height:number;ground:boolean;region?:FreeRect[]};
+/** `maxWidthAt`: curved faces only, the widest opening/group that may sit flat on the curve around x (see cityStudioFaceCurve). */
+export type FreeFaceSpec={length:number;height:number;ground:boolean;region?:FreeRect[];maxWidthAt?:(x:number)=>number};
 export type FreeFaceOpening={id:string;x:number;bottom:number;width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean};
 export type FreeOpeningPanel={id:string;shape:FreeOpeningShape;x0:number;x1:number;y0:number;y1:number;rise:number;spring:number;clamped:boolean};
 export type FreeOpeningGroup={id:string;members:string[];panels:FreeOpeningPanel[];role:'window'|'door';x0:number;x1:number;y0:number;y1:number;spring:number;mullions:{x:number;y0:number;y1:number}[];outline:[number,number][];style:FreeOpeningStyle;glazing:boolean;clamped:boolean};
 export type FreeFaceResolution={groups:FreeOpeningGroup[];inactive:{id:string;reason:string}[]};
 export type FreeOpeningHit={shapeId:string;side:SculptWallSide;u:number;heightAboveBase:number};
 export type FreeOpeningPreset={width:number;height:number;shape:FreeOpeningShape;style?:FreeOpeningStyle;glazing?:boolean;id?:string};
-export type StudioFaceFrame={shapeId:string;side:SculptWallSide;origin:[number,number];tangent:[number,number];normal:[number,number];rotation:number;length:number;base:number;height:number;ground:boolean;flip:boolean};
+/**
+ * Straight faces: `origin` is the viewer-left end at the base line, x runs along `tangent`.
+ * Curved faces (ellipse parts, side 'curve') carry `curve`: x is the arc length (cityStudioFaceCurve), `origin`
+ * is the seam point at the back and `tangent`/`normal`/`rotation` describe the front (x = L/2) only; use
+ * faceS/facePose/studioBayFaceSpans instead of origin + tangent*x for anything positional.
+ */
+export type StudioFaceFrame={shapeId:string;side:SculptWallSide;origin:[number,number];tangent:[number,number];normal:[number,number];rotation:number;length:number;base:number;height:number;ground:boolean;flip:boolean;curve?:FaceCurve};
 
 const finite=(n:unknown,lo:number,hi:number)=>typeof n==='number'&&Number.isFinite(n)&&n>=lo&&n<=hi;
 const KEYS=['id','shapeId','side','u','bottom','width','height','shape','style','glazing'];
@@ -102,12 +111,15 @@ export function freeRegion(rects:FreeRect[]):MultiPolygon{
 
 function panelFor(face:FreeFaceSpec,o:FreeFaceOpening):{panel?:FreeOpeningPanel;role?:'window'|'door';reason?:string}{
  const L=face.length,H=face.height,door=face.ground&&o.shape!=='round'&&o.bottom<=FREE_OPENING.doorSill;
- let w=o.width,x0=o.x-w/2,y0=door?0:o.bottom,y1=o.bottom+o.height;
+ let w=o.width,x0=o.x-w/2,y0=door?0:o.bottom,y1=o.bottom+o.height,narrowed=false;
  if(o.shape==='round'){const d=Math.min(o.width,o.height),cy=o.bottom+o.height/2;w=d;x0=o.x-d/2;y0=cy-d/2;y1=cy+d/2;}
+ // Curved walls: the opening sits flat on a chord, so tight curves narrow it (or refuse it when too tight).
+ if(face.maxWidthAt){const lim=face.maxWidthAt(o.x);if(w>lim+1e-9){if(lim<FREE_OPENING.min||lim<w*.5)return {reason:'This wall curves too tightly for an opening this wide.'};
+  if(o.shape==='round'){const cy=(y0+y1)/2;y0=cy-lim/2;y1=cy+lim/2;}w=lim;x0=o.x-w/2;narrowed=true;}}
  const h=y1-y0;
  if(w>L-2*FREE_OPENING.edge+1e-9)return {reason:'This wall is too narrow for that opening.'};
  if(h>H-FREE_OPENING.top+1e-9)return {reason:'This wall is too low for that opening.'};
- let clamped=false;
+ let clamped=narrowed;
  if(x0<FREE_OPENING.edge){x0=FREE_OPENING.edge;clamped=true;}
  if(x0+w>L-FREE_OPENING.edge){x0=L-FREE_OPENING.edge-w;clamped=true;}
  if(y1>H-FREE_OPENING.top){if(door)return {reason:'This door is taller than the wall.'};y0-=y1-(H-FREE_OPENING.top);y1=H-FREE_OPENING.top;clamped=true;}
@@ -125,13 +137,20 @@ const mergeable=(a:FreeOpeningPanel,b:FreeOpeningPanel)=>a.shape!=='round'&&b.sh
 
 /** Resolve the openings of one face rectangle: individual fit, merged groups, door role and outlines. */
 export function resolveFreeOpenings(face:FreeFaceSpec,openings:FreeFaceOpening[]):FreeFaceResolution{
+ const limit=face.maxWidthAt;
  const inactive:FreeFaceResolution['inactive']=[],items:{o:FreeFaceOpening;panel:FreeOpeningPanel;role:'window'|'door';order:number}[]=[];
  openings.forEach((o,order)=>{const fit=panelFor(face,o);if(fit.reason)inactive.push({id:o.id,reason:fit.reason});else items.push({o,panel:fit.panel!,role:fit.role!,order});});
  let parent:number[]=[];
  const find=(i:number):number=>parent[i]===i?i:(parent[i]=find(parent[i]));
  for(;;){
   parent=items.map((_,i)=>i);
-  for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++)if(items[i].role===items[j].role&&mergeable(items[i].panel,items[j].panel))parent[find(j)]=find(i);
+  if(!limit){for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++)if(items[i].role===items[j].role&&mergeable(items[i].panel,items[j].panel))parent[find(j)]=find(i);}
+  else{
+   // Curved faces: a merged group is one flat chord, so merging (left to right) stops before a group outgrows the curve.
+   const extent=items.map(it=>[it.panel.x0,it.panel.x1] as [number,number]),order=items.map((_,i)=>i).sort((a,b)=>items[a].panel.x0-items[b].panel.x0||a-b);
+   for(let p=0;p<order.length;p++)for(let q=p+1;q<order.length;q++){const i=order[p],j=order[q],a=find(i),b=find(j);if(a===b||items[i].role!==items[j].role||!mergeable(items[i].panel,items[j].panel))continue;
+    const x0=Math.min(extent[a][0],extent[b][0]),x1=Math.max(extent[a][1],extent[b][1]);if(x1-x0>limit((x0+x1)/2)+1e-9)continue;parent[b]=a;extent[a]=[x0,x1];}
+  }
   let loser=-1;
   for(let i=0;i<items.length&&loser<0;i++)for(let j=i+1;j<items.length;j++)if(find(i)!==find(j)&&rectGap(items[i].panel,items[j].panel)<FREE_OPENING.minWall){loser=items[i].order>items[j].order?i:j;break;}
   if(loser<0)break;
@@ -161,7 +180,12 @@ function buildGroup(members:{o:FreeFaceOpening;panel:FreeOpeningPanel;role:'wind
 /** Viewer-right face frame of a straight part side. `origin` is the left end at the part base. */
 export function studioFaceFrame(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,shapeId:string,side:SculptWallSide):StudioFaceFrame|{reason:string}{
  const v=r.volumes.find(v=>v.id===shapeId&&v.operation==='add');if(!v)return {reason:'This part no longer exists.'};
- if(v.kind==='ellipse'||side==='curve')return {reason:'Free openings need a straight wall.'};
+ if(v.kind==='ellipse'||side==='curve'){
+  if(v.kind!=='ellipse'||side!=='curve')return {reason:'This wall is no longer part of the outline.'};
+  // The whole curved wall is one face in arc-length coordinates (see cityStudioFaceCurve).
+  const curve:FaceCurve={cx:v.x,cz:v.z,a:v.width/2,b:v.depth/2},length=curveLength(curve),normal=curveNormal(curve,length/2),base=sculptFloorBottom(v.startFloor,d.groundHeight,d.upperHeight);
+  return {shapeId,side,origin:curvePoint(curve,0),tangent:[normal[1],-normal[0]],normal,rotation:Math.atan2(normal[0],normal[1]),length,base,height:sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight)-base,ground:v.startFloor===0,flip:false,curve};
+ }
  let p0:[number,number],p1:[number,number],normal:[number,number];
  if(v.kind==='polygon'){
   const edge=sculptSourceEdge(v,side);if(!edge)return {reason:'This wall is no longer part of the outline.'};
@@ -176,23 +200,44 @@ export function studioFaceFrame(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'grou
  return {shapeId,side,origin:flip?p1:p0,tangent,normal,rotation:Math.atan2(normal[0],normal[1]),length:Math.hypot(p1[0]-p0[0],p1[1]-p0[1]),base,height:sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight)-base,ground:v.startFloor===0,flip};
 }
 export const faceX=(f:StudioFaceFrame,u:number)=>(f.flip?1-u:u)*f.length;
+/** Face x of a building-local point on (or near) the face: projection on straight faces, arc length on curves. */
+export const faceS=(f:Pick<StudioFaceFrame,'origin'|'tangent'|'curve'>,x:number,z:number)=>f.curve?curveXAt(f.curve,x,z):(x-f.origin[0])*f.tangent[0]+(z-f.origin[1])*f.tangent[1];
+/** Building-local point `out` metres along the outward normal at face x, with that normal's rotation. */
+export function facePose(f:Pick<StudioFaceFrame,'origin'|'tangent'|'normal'|'rotation'|'curve'>,x:number,out=0):{x:number;z:number;rotation:number;normal:[number,number]}{
+ if(!f.curve)return {x:f.origin[0]+f.tangent[0]*x+f.normal[0]*out,z:f.origin[1]+f.tangent[1]*x+f.normal[1]*out,rotation:f.rotation,normal:f.normal};
+ const p=curvePoint(f.curve,x),n=curveNormal(f.curve,x);return {x:p[0]+n[0]*out,z:p[1]+n[1]*out,rotation:Math.atan2(n[0],n[1]),normal:n};
+}
+/** Widest opening that may sit flat on the face around x (unbounded on straight faces). */
+export const faceMaxOpeningWidth=(f:Pick<StudioFaceFrame,'curve'>,x:number)=>f.curve?curveMaxOpening(f.curve,x):Infinity;
+/**
+ * Face-x spans covered by a bay of this face. On curves the bay's chord ends map by angle (so neighbouring
+ * bays share their ends exactly) and a bay across the seam splits into two spans.
+ */
+export function studioBayFaceSpans(f:Pick<StudioFaceFrame,'origin'|'tangent'|'length'|'curve'>,b:Pick<StudioBay,'x'|'z'|'width'|'rotation'>):[number,number][]{
+ if(!f.curve){const s=faceS(f,b.x,b.z);return [[s-b.width/2,s+b.width/2]];}
+ const tx=Math.cos(b.rotation),tz=-Math.sin(b.rotation),L=f.length;
+ let x0=faceS(f,b.x-tx*b.width/2,b.z-tz*b.width/2),x1=faceS(f,b.x+tx*b.width/2,b.z+tz*b.width/2);
+ if(x1<x0){if(x0-x1>L/2)return [[x0,L],[0,x1]];[x0,x1]=[x1,x0];}
+ else if(x1-x0>L/2)return [[x1,L],[0,x0]];
+ return [[x0,x1]];
+}
 export const faceU=(f:StudioFaceFrame,x:number)=>Math.max(0,Math.min(1,f.flip?1-x/f.length:x/f.length));
 export const isFrame=(f:StudioFaceFrame|{reason:string}):f is StudioFaceFrame=>!('reason' in f);
 /** Exposed wall of a face as face-local rectangles, from the resolved bays. */
 export function studioFaceRegion(f:StudioFaceFrame,bays:StudioBay[]):FreeRect[]{
- return bays.filter(b=>b.anchor.shapeId===f.shapeId&&b.anchor.side===f.side).map(b=>{const s=(b.x-f.origin[0])*f.tangent[0]+(b.z-f.origin[1])*f.tangent[1];return [s-b.width/2,s+b.width/2,b.y-f.base,b.y+b.height-f.base] as FreeRect;});
+ return bays.filter(b=>b.anchor.shapeId===f.shapeId&&b.anchor.side===f.side).flatMap(b=>studioBayFaceSpans(f,b).map(([s0,s1])=>[s0,s1,b.y-f.base,b.y+b.height-f.base] as FreeRect));
 }
 export function resolveStudioFreeFace(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,shapeId:string,side:SculptWallSide,bays?:StudioBay[]):{frame:StudioFaceFrame;region?:FreeRect[];resolution:FreeFaceResolution}|{reason:string}{
  const frame=studioFaceFrame(r,d,shapeId,side);if(!isFrame(frame))return frame;
  const region=bays?studioFaceRegion(frame,bays):undefined;if(region&&!region.length)return {reason:'This wall is hidden by another part.'};
  const openings=(r.studio.freeOpenings??[]).filter(o=>o.shapeId===shapeId&&o.side===side).map(o=>({...o,x:faceX(frame,o.u)}));
- return {frame,region,resolution:resolveFreeOpenings({length:frame.length,height:frame.height,ground:frame.ground,region},openings)};
+ const curve=frame.curve;
+ return {frame,region,resolution:resolveFreeOpenings({length:frame.length,height:frame.height,ground:frame.ground,region,...(curve?{maxWidthAt:(x:number)=>curveMaxOpening(curve,x)}:{})},openings)};
 }
 
 export function freeOpeningHitFromBay(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,bay:Pick<StudioBay,'anchor'>,point:{x:number;y:number;z:number}):FreeOpeningHit|null{
  const f=studioFaceFrame(r,d,bay.anchor.shapeId,bay.anchor.side);if(!isFrame(f))return null;
- const s=(point.x-f.origin[0])*f.tangent[0]+(point.z-f.origin[1])*f.tangent[1];
- return {shapeId:f.shapeId,side:f.side,u:faceU(f,s),heightAboveBase:point.y-f.base};
+ return {shapeId:f.shapeId,side:f.side,u:faceU(f,faceS(f,point.x,point.z)),heightAboveBase:point.y-f.base};
 }
 type Placed={recipe:StudioRecipe;opening:StudioFreeOpening;role:'window'|'door';merged:boolean};
 function commitFree(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,f:StudioFaceFrame,o:StudioFreeOpening,list:StudioFreeOpening[],bays?:StudioBay[]):Placed|{reason:string}{

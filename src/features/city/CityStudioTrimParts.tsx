@@ -20,6 +20,7 @@ import {STUDIO_FAMILIES} from '../../domain/cityStudioCatalog';
 import {DEFAULT_FREE_PALETTE} from '../../domain/cityStudioFreeOpeningGeometry';
 import {TRIM_PARTS,deformTrimPositions,fitFreeTrims,groupTrimKinds,trimFactors,trimPart,type StudioFreeTrim,type TrimPartId,type TrimPlacement} from '../../domain/cityStudioTrimParts';
 import type {StudioFreeFace} from '../../domain/cityStudioFreeFaces';
+import {bendPose} from '../../domain/cityStudioCurvedWalls';
 
 type TrimClass='trim'|'planting'|'metal'|'light';
 type Piece={cls:TrimClass;geometry:BufferGeometry};
@@ -93,7 +94,10 @@ export function CityStudioTrimParts({faces,trims,groundHeight=3.2,visible=true}:
   if(!kit.pack)return [];
   const materials=trimMaterials(),lists=new Map<TrimClass,TrimMergeItem[]>(),obj=new Object3D(),white=new Color(1,1,1);
   for(const f of fitted)for(const p of f.placements){
-   obj.position.set(p.x,p.y,p.z);obj.rotation.set(0,p.turn,0);obj.scale.setScalar(p.scale);obj.updateMatrix();const matrix=new Matrix4().multiplyMatrices(f.frame,obj.matrix);
+   // Curved faces: each part stands on the facet under it, turned to that facet's normal (cityStudioCurvedWalls).
+   let matrix:Matrix4;
+   if(f.face.bend){const pose=bendPose(f.face.bend,p.x,p.z);obj.position.set(pose.x,f.face.base+p.y,pose.z);obj.rotation.set(0,pose.rotation+p.turn,0);obj.scale.setScalar(p.scale);obj.updateMatrix();matrix=obj.matrix.clone();}
+   else{obj.position.set(p.x,p.y,p.z);obj.rotation.set(0,p.turn,0);obj.scale.setScalar(p.scale);obj.updateMatrix();matrix=new Matrix4().multiplyMatrices(f.frame,obj.matrix);}
    const tint=p.tint==='accent'?f.accent:p.tint==='trim'?f.tints.get(p.groupId)??white:white;
    (kit.pack.get(p.part)??[]).forEach((piece,i)=>{const list=lists.get(piece.cls)??[];list.push({geometry:cachedPiece(piece,p.part,i,p.stretch,p.mirror),matrix,tint:piece.cls==='trim'?tint:null});lists.set(piece.cls,list);});
   }

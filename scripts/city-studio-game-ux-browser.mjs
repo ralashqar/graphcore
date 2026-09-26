@@ -109,7 +109,7 @@ try{
  await page.getByRole('button',{name:'Lock ground',exact:true}).click();
  await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.locks??[]).includes('ground');});
  const freeCount=async()=>((await sculpt()).studio.freeOpenings??[]).length;
- const sides=async()=>{const seen=new Map();for(const b of (await state()).bays.filter(b=>b.part==='main'&&b.x>80&&b.x<1520&&b.y>80&&b.y<600)){if(seen.has(b.side))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover?.startsWith(`main/${b.side}/`))seen.set(b.side,b);}return [...seen.values()];};
+ const sides=async()=>{const seen=new Map(),dockTop=(await page.locator('.studio-dock').boundingBox()).y-16;for(const b of (await state()).bays.filter(b=>b.part==='main'&&b.x>80&&b.x<1520&&b.y>80&&b.y<Math.min(600,dockTop))){if(seen.has(b.side))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover?.startsWith(`main/${b.side}/`))seen.set(b.side,b);}return [...seen.values()];};
  await page.getByRole('button',{name:'Unpack a wall',exact:true}).click();await page.waitForTimeout(300);
  let unpacked=null;
  for(let turn=0;turn<4&&!unpacked;turn++){
@@ -119,7 +119,7 @@ try{
  assert.ok(unpacked,'a generated wall was unpacked into editable free openings');
  await page.getByRole('button',{name:'Plain wall',exact:true}).click();await page.waitForTimeout(300);
  const plain=(await sides())[0];assert.ok(plain,'a wall to keep plain');await page.mouse.click(plain.x,plain.y);
- await until(side=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.rules??[]).some(r=>r.partId==='main'&&r.side===side&&r.off);},plain.side);
+ await until(side=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.rules??[]).some(r=>r.partId==='main'&&r.side===side&&r.off);},plain.side).catch(async e=>{await page.screenshot({path:'output/city-studio-rhythm-plain-failure.png'});console.log(JSON.stringify({plain,rules:(await sculpt()).studio.facadeRhythm.rules,feedback:await page.locator('.studio-feedback').textContent(),state:await state()}).slice(0,3000));throw e;});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.waitForTimeout(600);
  await page.screenshot({path:'output/city-studio-rhythm-edited.png'});
  await page.getByRole('button',{name:'Remove rhythm',exact:true}).click();

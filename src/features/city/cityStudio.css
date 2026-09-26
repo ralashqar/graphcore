@@ -192,3 +192,63 @@
 .city-studio .studio-free-dress button{font-size:11px;min-height:28px;padding:4px 9px;background:#f1f1e6}
 .city-studio:has(.studio-roof-openings) .studio-feedback{bottom:auto;top:84px}
 .city-studio:has(.studio-free-dress) .studio-feedback{bottom:auto;top:84px}
+
+/* Facade rhythm rules panel */
+.rhythm-panel{display:grid;grid-template-columns:226px minmax(0,1fr);gap:10px;padding:2px 4px 4px;max-height:min(300px,40vh);overflow:auto;font-size:11px}
+.rhythm-panel .studio-caption{display:block;margin:2px 0 3px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#6d796c}
+.rhythm-side{display:flex;flex-direction:column;gap:3px;min-width:0}
+.rhythm-styles{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.city-studio .rhythm-styles .studio-tile{min-height:0;padding:3px 2px;gap:1px;font-size:10px;align-items:center}
+.city-studio .rhythm-styles .studio-tile svg.studio-free-icon{width:30px;height:30px}
+.rhythm-scopes{display:flex;flex-wrap:wrap;gap:3px}
+.city-studio .rhythm-scopes button{font-size:10.5px;min-height:25px;padding:3px 7px;background:#f1f1e6}
+.city-studio .rhythm-scopes button[aria-checked=true]{background:#e9d9b5;color:#5b3f10;box-shadow:inset 0 0 0 1px #cda15b}
+.rhythm-targets{display:flex;flex-wrap:wrap;gap:3px;min-height:20px;padding:3px 0}
+.rhythm-targets>span{display:inline-flex;align-items:center;gap:2px;padding:1px 2px 1px 7px;border-radius:10px;background:#f7e6c3;color:#5b4520;font-size:10px}
+.city-studio .rhythm-targets>span button{min-height:18px;padding:1px 3px;background:transparent}
+.rhythm-targets small{color:#7d8677;font-size:10px;line-height:1.3}
+.rhythm-actions{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;padding-top:5px;border-top:1px solid var(--studio-line)}
+.city-studio .rhythm-actions button{font-size:10.5px;min-height:26px;padding:3px 7px;background:#f1f1e6;display:inline-flex;align-items:center;gap:3px}
+.rhythm-main{display:flex;flex-direction:column;gap:5px;min-width:0}
+.rhythm-tabs{display:flex;align-items:center;gap:3px;flex-wrap:wrap;border-bottom:1px solid var(--studio-line);padding-bottom:5px}
+.rhythm-tab{display:inline-flex;border-radius:9px;background:#f1f1e6}
+.city-studio .rhythm-tab button{min-height:26px;font-size:11px;padding:3px 8px;background:transparent;position:relative}
+.city-studio .rhythm-tab button[role=tab][aria-selected=true]{background:#34453c;color:#faf7ed}
+.rhythm-tab button i{position:absolute;top:3px;right:2px;width:5px;height:5px;border-radius:50%;background:#e39a3b}
+.city-studio .rhythm-tab .rhythm-lock{padding:3px 5px;color:#7b857a}
+.city-studio .rhythm-tab .rhythm-lock[aria-pressed=true]{color:#8a4f10;background:#f3dfbd;box-shadow:none}
+.rhythm-tab-tools{margin-left:auto;display:flex;gap:3px}
+.city-studio .rhythm-tab-tools button{min-height:26px;padding:3px 7px;background:#f1f1e6}
+.rhythm-pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:3px}
+.rhythm-chip{position:relative;display:flex;flex-direction:column;border-radius:10px;background:#f1f1e6;border:1px solid transparent}
+.rhythm-chip.is-favoured{border-color:#d49a45;background:#f8ebd2}
+.rhythm-chip.is-avoided{opacity:.55}
+.city-studio .rhythm-chip-main{display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 2px 2px;min-height:0;background:transparent;font-size:10px;line-height:1.15;box-shadow:none}
+.city-studio .rhythm-chip-main[aria-pressed=true]{background:transparent;box-shadow:none;color:inherit}
+.rhythm-chip-main small{font-size:9px;color:#8a5a1d;font-weight:700}
+.rhythm-chip.is-avoided .rhythm-chip-main span{text-decoration:line-through}
+.rhythm-chip-weights{display:flex;justify-content:space-between;padding:0 3px 3px}
+.city-studio .rhythm-chip-weights button{min-height:18px;padding:0 5px;background:#e8e6d8;border-radius:6px}
+.rhythm-icon{width:26px;height:26px}
+.rhythm-icon rect{fill:#d9d2bf}
+.rhythm-icon path{fill:#23312a;stroke:#f3ead6;stroke-width:1.4;stroke-linejoin:round}
+.rhythm-icon path.rhythm-hatch{fill:none;stroke:#8f8672;stroke-width:1.6}
+.rhythm-sliders{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:3px 12px}
+.rhythm-sliders label{display:flex;align-items:center;gap:6px;font-weight:700;font-size:10.5px}
+.rhythm-sliders input[type=range]{flex:1;min-width:60px;accent-color:#b6772b}
+.rhythm-sliders output{min-width:34px;text-align:right;font-variant-numeric:tabular-nums;color:#5c6a5e;font-weight:600}
+.city-studio .rhythm-sliders .rhythm-auto{min-height:20px;padding:1px 6px;font-size:10px;background:#f1f1e6}
+.rhythm-row{display:flex;flex-wrap:wrap;align-items:center;gap:3px}
+.rhythm-row>span{font-weight:700;font-size:10.5px;margin:0 2px 0 6px}
+.rhythm-row>span:first-child{margin-left:0}
+.city-studio .rhythm-row button{font-size:10.5px;min-height:24px;padding:2px 7px;background:#f1f1e6}
+.rhythm-empty{margin:6px 2px;color:#6d796c;line-height:1.4}
+.rhythm-rules{border-top:1px solid var(--studio-line);padding-top:4px}
+.rhythm-rules summary{cursor:pointer;font-weight:700;font-size:10.5px}
+.rhythm-rules ul{list-style:none;margin:3px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
+.rhythm-rules li{display:flex;align-items:center;gap:3px}
+.city-studio .rhythm-rules .rhythm-rule-pick{flex:1;display:flex;gap:6px;align-items:baseline;justify-content:flex-start;text-align:left;min-height:22px;padding:2px 6px;background:#f5f3e9;font-size:10.5px}
+.rhythm-rule-pick small{color:#7d8677}
+.city-studio .rhythm-rules li>button:last-child{min-height:22px;padding:2px 5px;background:#f1f1e6}
+.city-studio:has(.rhythm-panel) .studio-feedback{bottom:auto;top:84px}
+@container studio-dock (max-width:640px){.rhythm-panel{grid-template-columns:1fr;max-height:52vh}}

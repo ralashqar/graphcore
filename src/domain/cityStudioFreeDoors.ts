@@ -16,9 +16,11 @@ import {FREE_FACE,type FreeFaceBuffers} from './cityStudioFreeOpeningGeometry.ts
 import type {FreeOpeningGroup} from './cityStudioFreeOpenings.ts';
 import {sculptFloorBottom,sculptFloorTop} from './citySculpt.ts';
 import type {StudioBay,StudioBox,StudioPortal} from './cityStudioTypes.ts';
+import {bendFreeFaceBuffers,bendPose,type FreeFaceBend} from './cityStudioCurvedWalls.ts';
 
 export const FREE_DOOR={frame:.075,mullion:.07,pair:1.5,shellDepth:1.6,shellMargin:.45} as const;
-type Face={id:string;origin:[number,number];rotation:number;base:number;groups:FreeOpeningGroup[]};
+/** Curved faces carry `bend`: doors sit on the flat chord of their opening (cityStudioCurvedWalls). */
+type Face={id:string;origin:[number,number];rotation:number;base:number;groups:FreeOpeningGroup[];bend?:FreeFaceBend;curve?:{a:number;b:number}};
 export type FreeDoorLeaf={x0:number;x1:number;hinge:'left'|'right';index:number};
 
 /** True for door groups that carry a leaf (stone doorways are open arcades). */
@@ -41,33 +43,40 @@ export const freeDoorPortalId=(groupId:string,index:number)=>`exterior/free/${gr
 /** All leaves of the group a portal belongs to (see cityStudioDoorState). */
 export const freeDoorGroupKey=(portalId:string)=>portalId.startsWith('exterior/free/')?portalId.split('#')[0]:null;
 
-const frameOf=(f:Pick<Face,'origin'|'rotation'>)=>{const c=Math.cos(f.rotation),s=Math.sin(f.rotation);return {at:(x:number,z:number)=>({x:f.origin[0]+x*c+z*s,z:f.origin[1]-x*s+z*c})};};
+/**
+ * Face-local (x, z) of group `g` to building-local x/z, and the wall rotation there. On curved faces doors stand on
+ * their opening's flat plane (the chord through its jambs, see cityStudioCurvedWalls).
+ */
+const frameOf=(f:Pick<Face,'origin'|'rotation'|'bend'|'groups'>)=>{
+ const b=f.bend;if(b)return {at:(x:number,z:number,g:FreeOpeningGroup)=>{const p=bendPose(b,x,z,f.groups.indexOf(g));return {x:p.x,z:p.z};},rot:(x:number,g:FreeOpeningGroup)=>bendPose(b,x,0,f.groups.indexOf(g)).rotation};
+ const c=Math.cos(f.rotation),s=Math.sin(f.rotation);return {at:(x:number,z:number,_g?:FreeOpeningGroup)=>({x:f.origin[0]+x*c+z*s,z:f.origin[1]-x*s+z*c}),rot:(_x?:number,_g?:FreeOpeningGroup)=>f.rotation};
+};
 const glazingZ=FREE_FACE.thickness/2-FREE_FACE.inset;
 /** Openable portals of one resolved free face, in building-local space (floor 0 doors). */
 export function studioFreeDoorPortals(face:Face):StudioPortal[]{
- const {at}=frameOf(face),out:StudioPortal[]=[];
- for(const g of face.groups)for(const leaf of freeDoorLeaves(g)){const p=at((leaf.x0+leaf.x1)/2,glazingZ);
-  out.push({id:freeDoorPortalId(g.id,leaf.index),floor:0,x:p.x,y:face.base+g.y0,z:p.z,width:leaf.x1-leaf.x0,height:g.spring-g.y0,rotation:face.rotation,hinge:leaf.hinge,style:g.glazing?'glazed':'panelled'});}
+ const {at,rot}=frameOf(face),out:StudioPortal[]=[];
+ for(const g of face.groups)for(const leaf of freeDoorLeaves(g)){const p=at((leaf.x0+leaf.x1)/2,glazingZ,g);
+  out.push({id:freeDoorPortalId(g.id,leaf.index),floor:0,x:p.x,y:face.base+g.y0,z:p.z,width:leaf.x1-leaf.x0,height:g.spring-g.y0,rotation:rot((g.x0+g.x1)/2,g),hinge:leaf.hinge,style:g.glazing?'glazed':'panelled'});}
  return out;
 }
 /** Closed static leaves block like a wall where no portal replaces them (buildings without interiors). */
 export function closedFreeDoorBlockers(face:Face):StudioBox[]{
- const {at}=frameOf(face);
- return face.groups.filter(freeDoorHasLeaf).map(g=>{const p=at((g.x0+g.x1)/2,glazingZ);return {id:`free-door/${g.id}`,x:p.x,z:p.z,y:face.base+g.y0+(g.spring-g.y0)/2,width:g.x1-g.x0,height:g.spring-g.y0,depth:.1,rotation:face.rotation};});
+ const {at,rot}=frameOf(face);
+ return face.groups.filter(freeDoorHasLeaf).map(g=>{const p=at((g.x0+g.x1)/2,glazingZ,g);return {id:`free-door/${g.id}`,x:p.x,z:p.z,y:face.base+g.y0+(g.spring-g.y0)/2,width:g.x1-g.x0,height:g.spring-g.y0,depth:.1,rotation:rot((g.x0+g.x1)/2,g)};});
 }
 /**
  * Approach to each openable free door: a flat doorstep landing at the threshold (so the character stands level
  * with the door to open it) and a ramp from the pavement up to it, both drawn like kit entrance ramps.
  */
 export function freeDoorRamps(face:Face,ground=.18){
- const {at}=frameOf(face),landing=.75,run=1.55;
- return face.groups.filter(freeDoorHasLeaf).flatMap(g=>{const top=face.base+g.y0+.04,rise=top-ground;if(rise<=.02)return [];const width=Math.min(2.4,g.x1-g.x0+.3),x=(g.x0+g.x1)/2,step=at(x,landing/2-.05),ramp=at(x,landing-.05+run/2);
-  return [{id:`entry/free/${g.id}/landing`,x:step.x,z:step.z,y:top,width,depth:landing,rotation:face.rotation,rise:0},{id:`entry/free/${g.id}`,x:ramp.x,z:ramp.z,y:ground,width,depth:run,rotation:face.rotation+Math.PI,rise}];});
+ const {at,rot}=frameOf(face),landing=.75,run=1.55;
+ return face.groups.filter(freeDoorHasLeaf).flatMap(g=>{const top=face.base+g.y0+.04,rise=top-ground;if(rise<=.02)return [];const width=Math.min(2.4,g.x1-g.x0+.3),x=(g.x0+g.x1)/2,step=at(x,landing/2-.05,g),ramp=at(x,landing-.05+run/2,g),rotation=rot(x,g);
+  return [{id:`entry/free/${g.id}/landing`,x:step.x,z:step.z,y:top,width,depth:landing,rotation,rise:0},{id:`entry/free/${g.id}`,x:ramp.x,z:ramp.z,y:ground,width,depth:run,rotation:rotation+Math.PI,rise}];});
 }
 /** The floor area in front of a door (inside) that interior partitions and stairs must leave clear. */
 export function freeDoorClearZones(face:Face,depth=1.6){
- const {at}=frameOf(face);
- return face.groups.filter(freeDoorHasLeaf).map(g=>{const p=at((g.x0+g.x1)/2,-FREE_FACE.thickness/2-depth/2);return {id:g.id,x:p.x,z:p.z,width:g.x1-g.x0+.2,depth,rotation:face.rotation};});
+ const {at,rot}=frameOf(face);
+ return face.groups.filter(freeDoorHasLeaf).map(g=>{const x=(g.x0+g.x1)/2,p=at(x,-FREE_FACE.thickness/2-depth/2,g);return {id:g.id,x:p.x,z:p.z,width:g.x1-g.x0+.2,depth,rotation:rot(x,g)};});
 }
 
 type Rgb=[number,number,number];
@@ -117,5 +126,7 @@ export function finishFreeFace(r:{version:number},d:{groundHeight:number;upperHe
  if(r.version===6){face.openable=true;return;}
  blockers.push(...closedFreeDoorBlockers(face));
  const storeys=face.floors.map(floor=>({floor,bottom:sculptFloorBottom(floor,d.groundHeight,d.upperHeight)-face.base,top:sculptFloorTop(floor,d.groundHeight,d.upperHeight)-face.base}));
- const shell=buildFreeFaceShell(face,face.groups,storeys,(x0,x1,floor)=>freeFaceDepth(face,bays,floor,x0,x1));if(shell)face.shell=shell;
+ // Curved faces: the room behind is the part itself (about its smaller diameter); the shell box is bent with the wall.
+ const inner=face.curve?Math.max(.8,2*Math.min(face.curve.a,face.curve.b)-FREE_FACE.thickness-.4):0;
+ const shell=buildFreeFaceShell(face,face.groups,storeys,(x0,x1,floor)=>face.bend?inner:freeFaceDepth(face,bays,floor,x0,x1));if(shell)face.shell=face.bend?bendFreeFaceBuffers(shell,face.bend):shell;
 }

@@ -88,6 +88,32 @@ export function splitPaintedTriangles(points:[number,number][],triangles:number[
  return out;
 }
 
+/**
+ * Splits counter-clockwise triangles (face coordinates, per-point distance) at vertical lines x = breaks[k]
+ * (sorted), so that no piece crosses a break. Curved walls bend each strip between breaks onto one planar
+ * facet (cityStudioCurvedWalls), so triangles must not span facets. Triangles inside one strip keep their
+ * shared vertices; crossing triangles are clipped per strip and fan-triangulated (degenerate slivers dropped).
+ */
+export function splitTrianglesAtX(points:[number,number][],triangles:number[],distance:number[],breaks:readonly number[]):PaintPiece{
+ const out:PaintPiece={points:[],distance:[],triangles:[]},reuse=new Map<number,number>();
+ const add=(v:Vtx)=>{out.points.push([v[0],v[1]]);out.distance.push(v[2]);return out.points.length-1;};
+ const first=(x:number)=>{let lo=0,hi=breaks.length;while(lo<hi){const m=(lo+hi)>>1;if(breaks[m]<=x)lo=m+1;else hi=m;}return lo;};// first break > x
+ for(let t=0;t<triangles.length;t+=3){
+  const ids=[triangles[t],triangles[t+1],triangles[t+2]],v=ids.map(i=>[points[i][0],points[i][1],distance[i]] as Vtx);
+  const minX=Math.min(v[0][0],v[1][0],v[2][0]),maxX=Math.max(v[0][0],v[1][0],v[2][0]);
+  let k=first(minX+1e-7);
+  if(k>=breaks.length||breaks[k]>=maxX-1e-7){for(const i of ids){let j=reuse.get(i);if(j===undefined){j=add([points[i][0],points[i][1],distance[i]]);reuse.set(i,j);}out.triangles.push(j);}continue;}
+  let lo=-Infinity;
+  for(;;k++){
+   const hi=k<breaks.length&&breaks[k]<maxX-1e-7?breaks[k]:Infinity;
+   let cell=v;if(lo>-Infinity)cell=clipAxis(cell,0,lo,true);if(hi<Infinity)cell=clipAxis(cell,0,hi,false);
+   if(cell.length>=3&&Math.abs(polyArea(cell))>1e-9){const base=cell.map(add);for(let m=1;m+1<base.length;m++)if(Math.abs(polyArea([cell[0],cell[m],cell[m+1]]))>1e-9)out.triangles.push(base[0],base[m],base[m+1]);}
+   if(hi===Infinity)break;lo=hi;
+  }
+ }
+ return out;
+}
+
 /** Slot of the topmost layer covering (x,y), or -1 for the base finish (caps and reveals). */
 export function paintSlotAt(p:PaintPartition|null,x:number,y:number):number{
  if(!p)return -1;for(let i=p.layers.length-1;i>=0;i--){const l=p.layers[i];if(l.rects.some(r=>x>=r[0]-1e-4&&x<=r[1]+1e-4&&y>=r[2]-1e-4&&y<=r[3]+1e-4))return l.slot;}return -1;

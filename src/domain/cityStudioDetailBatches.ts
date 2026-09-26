@@ -10,6 +10,7 @@
  * unglazed openings (the far wall has no inner skin to look at). `owners` record per-face index ranges
  * so floor slicing can hide individual faces.
  * Free-face glass is its own `seeThrough` batch (transparent near, opaque far; roof-opening glass stays opaque).
+ * Curved faces (side 'curve') are already bent into building-local x/z and only take their base height.
  * Openable faces (v6 portals) put their static door leaves far-only; interior-less faces add a near-only
  * `shell` batch (see cityStudioFreeDoors and docs/city-free-doors-glass.md).
  */
@@ -69,7 +70,8 @@ export function buildStudioDetailBatches(studio:{freeFaces?:StudioFreeFace[];roo
  const groups=new Map<string,{material:DetailMaterial;pieces:Piece[]}>();
  const add=(material:DetailMaterial,piece:Piece)=>{const key=materialKey(material);let g=groups.get(key);if(!g){g={material,pieces:[]};groups.set(key,g);}g.pieces.push(piece);};
  for(const face of studio.freeFaces??[]){
-  const family=STUDIO_FAMILIES[face.family],g=face.geometry,frame={owner:face.id,rotation:face.rotation,offset:[face.origin[0],face.base,face.origin[1]] as [number,number,number]};
+  // Curved faces arrive baked into building-local x/z (cityStudioCurvedWalls): only the base height remains.
+  const family=STUDIO_FAMILIES[face.family],g=face.geometry,frame={owner:face.id,rotation:face.bend?0:face.rotation,offset:(face.bend?[0,face.base,0]:[face.origin[0],face.base,face.origin[1]]) as [number,number,number]};
   const wall:DetailMaterial={kind:'wall',color:face.finishes.wall?.color??family.wall,texture:face.finishes.wall?.texture??'none'},glass:DetailMaterial={kind:'glass',color:family.glass,seeThrough:true};
   const rear=g.wall.rearStart??g.wall.indices.length;
   add(wall,{...frame,src:g.wall,ranges:[{tier:1,start:0,count:rear},{tier:0,start:rear,count:g.wall.indices.length-rear}]});

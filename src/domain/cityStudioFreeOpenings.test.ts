@@ -104,7 +104,9 @@ test('placement API maps bay hits, snaps doors, merges neighbours and refuses wh
  const moved=nudgeFreeOpening(pair.recipe,d,'w2',{dx:1.5},bays);assert.ok(!('reason' in moved));assert.equal(moved.merged,false);
  const blocked=nudgeFreeOpening(moved.recipe,d,'w2',{u:.5,bottom:5.85},bays);assert.ok('reason' in blocked&&/close/.test(blocked.reason));
  assert.ok('reason' in placeFreeOpening(r,d,hit,{width:12,height:1,shape:'rect'},bays));
- assert.ok('reason' in placeFreeOpening(recipe([],[volume({kind:'ellipse'})]),d,{shapeId:'main',side:'curve',u:.2,heightAboveBase:2},{width:1,height:1,shape:'rect'}));
+ // Curved walls are faces too (arc-length x, see cityStudioCurvedWalls.test.ts); a wrong side on an ellipse is not.
+ assert.ok(!('reason' in placeFreeOpening(recipe([],[volume({kind:'ellipse'})]),d,{shapeId:'main',side:'curve',u:.2,heightAboveBase:2},{width:1,height:1,shape:'rect'})));
+ assert.ok('reason' in placeFreeOpening(recipe([],[volume({kind:'ellipse'})]),d,{shapeId:'main',side:'north',u:.2,heightAboveBase:2},{width:1,height:1,shape:'rect'}));
  const clamped=placeFreeOpening(r,d,{shapeId:'main',side:'east',u:1,heightAboveBase:20},{width:1,height:1.4,shape:'rect'},bays);assert.ok(!('reason' in clamped));
  const east=studioFaceFrame(r,d,'main','east');assert.ok(!('reason' in east));assert.ok(faceX(east,clamped.opening.u)<=east.length-.3-.5+1e-9&&clamped.opening.bottom+1.4<=east.height-.2+1e-9);
  assert.equal(removeFreeOpening(moved.recipe,'w2').studio.freeOpenings!.length,2);assert.equal(removeFreeOpening(recipe([free('x',.5,4,1,1)]),'x').studio.freeOpenings,undefined);

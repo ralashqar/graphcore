@@ -1,6 +1,7 @@
 // Studio tool helpers for free openings: shape presets, picking an existing opening under the
 // pointer, and the ghost that shows where a click will cut (snapping to a door near the ground).
-import {FREE_OPENING,faceU,faceX,isFrame,resolveStudioFreeFace,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
+import {FREE_OPENING,faceMaxOpeningWidth,facePose,faceU,faceX,isFrame,resolveStudioFreeFace,studioFaceFrame,type FreeOpeningHit,type FreeOpeningPreset,type FreeOpeningShape,type StudioFaceFrame,type StudioFreeOpening} from '../../domain/cityStudioFreeOpenings.ts';
+import {curveSag} from '../../domain/cityStudioFaceCurve.ts';
 import type {StudioBay,StudioRecipe} from '../../domain/cityStudioTypes.ts';
 import {applicableTrimKinds,type TrimKind} from '../../domain/cityStudioTrimParts.ts';
 
@@ -23,12 +24,17 @@ export function freeOpeningAtHit(r:StudioRecipe,d:Heights,hit:FreeOpeningHit):St
 }
 
 export type FreeOpeningGhost={x:number;y:number;z:number;rotation:number;width:number;height:number;shape:FreeOpeningShape;door:boolean};
+/** Ghost placement at face x: proud of the wall by `out`; on curved walls it faces the local normal and clears the arc. */
+function ghostAt(f:StudioFaceFrame,s:number,y:number,out:number,width:number,height:number,shape:FreeOpeningShape,door:boolean):FreeOpeningGhost{
+ const w=Math.min(width,faceMaxOpeningWidth(f,s)),p=facePose(f,s,out+(f.curve?curveSag(f.curve,s,w):0));
+ return {x:p.x,y,z:p.z,rotation:p.rotation,width:w,height,shape,door};
+}
 /** Where a click would place `preset`, mirroring placeFreeOpening's centring and door snap. */
 export function freeOpeningGhost(r:StudioRecipe,d:Heights,hit:FreeOpeningHit,preset:FreeOpeningPreset):FreeOpeningGhost|null{
  const f=studioFaceFrame(r,d,hit.shapeId,hit.side);if(!isFrame(f))return null;
  let bottom=hit.heightAboveBase-preset.height/2;const door=f.ground&&preset.shape!=='round'&&bottom<FREE_OPENING.doorSnap;if(door)bottom=0;
  const s=Math.max(FREE_OPENING.edge+preset.width/2,Math.min(f.length-FREE_OPENING.edge-preset.width/2,faceX(f,hit.u)));bottom=Math.max(0,Math.min(f.height-FREE_OPENING.top-preset.height,bottom));
- return {x:f.origin[0]+f.tangent[0]*s+f.normal[0]*.06,y:f.base+bottom+preset.height/2,z:f.origin[1]+f.tangent[1]*s+f.normal[1]*.06,rotation:f.rotation,width:preset.width,height:preset.height,shape:preset.shape,door};
+ return ghostAt(f,s,f.base+bottom+preset.height/2,.06,preset.width,preset.height,preset.shape,door);
 }
 
 /** 2D outline of an opening shape centred on its middle, used for ghosts and tray icons. */
@@ -63,7 +69,7 @@ export function planArcade(r:StudioRecipe,d:Heights,start:FreeOpeningHit,end:Fre
  const lo=FREE_OPENING.edge,hi=f.length-FREE_OPENING.edge,clamp=(x:number)=>Math.max(lo,Math.min(hi,x));
  const endX=end.shapeId===start.shapeId&&end.side===start.side?faceX(f,end.u):faceX(f,start.u);
  const a=clamp(faceX(f,start.u)),b=clamp(endX);if(Math.abs(b-a)<ARCADE.width)return {reason:'Drag further along the wall to lay out the arcade.'};
- const centres=arcadeCentres(a,b),ghosts=centres.map(s=>({x:f.origin[0]+f.tangent[0]*s+f.normal[0]*.06,y:f.base+h/2,z:f.origin[1]+f.tangent[1]*s+f.normal[1]*.06,rotation:f.rotation,width:ARCADE.width,height:h,shape:'arch' as FreeOpeningShape,door:true}));
+ const centres=arcadeCentres(a,b),ghosts=centres.map(s=>ghostAt(f,s,f.base+h/2,.06,ARCADE.width,h,'arch',true));
  return {centres:centres.map(s=>faceU(f,s)),height:h,ghosts};
 }
 
@@ -73,5 +79,5 @@ export function freeOpeningTrimChoices(r:StudioRecipe,d:Heights,id:string,bays?:
  const face=resolveStudioFreeFace(r,d,o.shapeId,o.side,bays);if('reason' in face)return null;
  const group=face.resolution.groups.find(g=>g.members.includes(id));if(!group)return null;
  const f=face.frame,s=faceX(f,o.u);
- return {kinds:applicableTrimKinds({groundTop:Math.max(0,d.groundHeight-f.base)},group),role:group.role,ghost:{x:f.origin[0]+f.tangent[0]*s+f.normal[0]*.08,y:f.base+o.bottom+o.height/2,z:f.origin[1]+f.tangent[1]*s+f.normal[1]*.08,rotation:f.rotation,width:o.width,height:o.height,shape:o.shape,door:group.role==='door'}};
+ return {kinds:applicableTrimKinds({groundTop:Math.max(0,d.groundHeight-f.base)},group),role:group.role,ghost:ghostAt(f,s,f.base+o.bottom+o.height/2,.08,o.width,o.height,o.shape,group.role==='door')};
 }

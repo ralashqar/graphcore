@@ -188,6 +188,32 @@ Details: `docs/city-free-doors-glass.md`.
   - Leaves are rectangular under arches, and a low arch's fixed transom can clip the character's head.
   - Kit exterior doors on 48 m plots may still miss the E prompt.
 
+## Unifying facades: one system with four layers
+
+**Direction:** every wall is a generated wall. A rules layer (the facade rhythm) fills walls from weighted pools. A manual layer (free openings, kit pieces, shopfronts) reserves only the span it occupies. A paint layer sits on top. Rendering can still use kit or simplified geometry far away, but authoring is one system.
+
+- **Curved walls (done):**
+  - Round and oval parts take generated walls. Face x is the arc length (x = 0 at the back, increasing to the viewer's right). The wall is built flat in face space, split at adaptive facet lines (≤ 6° turn, 0.15–0.6 m long), then bent onto the ellipse with shared facet edges, so there are no cracks.
+  - Frames, glass, sills and leaves sit flat on each opening's chord, pushed out by its sagitta.
+  - Freeform, Arcade, rhythm, paint regions and bands, trims, glass and free doors all work on curves through the existing tools.
+  - Tight radii narrow openings (about 1.0 m at 1 m radius, 1.45 m at 2 m) or refuse them with a reason.
+  - A curved face costs about 2.3× the triangles and 2–3× the build time of a straight face of equal length.
+  - Parapet rails stay coarse polygons.
+  - Details: `docs/city-curved-walls.md`.
+- **Rules panel (done):**
+  - Facade rhythm version 2 adds a bay width plus, per layer (ground, upper, top, corners, trims), a weighted pool of opening types:
+    - rect, tall, wide, arch, pointed, round, paired, triple;
+    - door, shop, blind;
+    - trim kinds, for the trims layer.
+  - Each layer also has coverage, spacing, pattern (aligned, groups, alternating, scattered), uniformity, seed and lock.
+  - Styles are presets that fill these pools and can then be tweaked.
+  - Rules are scoped to the whole building, several parts, a wall, a floor range or a painted region (two clicks on a wall). Later rules win within a scope class.
+  - Version-1 recipes resolve unchanged (hash-pinned tests) until a version-2 field is edited.
+  - Manual free openings now **fill**: they reserve their span plus a margin and the rhythm stays around them. "Keep wall manual" gives a wall back to the user, and unpacking a wall does this automatically.
+  - UI: `CityRhythmPanel.tsx`, with pool chips (tap to include, + to favour, long-press to avoid, − to halve), sliders, scope picking in 3D with Shift for multi-select, and a list of scoped rules.
+  - Details: `docs/city-rhythm-rules.md`.
+- **Next:** kit pieces as opening types in generated walls, with automatic conversion of old buildings (this retires whole-wall ownership by kit tiles); paint rules; then city-scale rendering.
+
 ## Known issue
 
 After some paint commits, one wrong frame showing the interior at eye level has been seen, identical in WebGPU and WebGL. It clears on the next camera change and is likely the walk-around camera rendering a frame. Not yet investigated.
