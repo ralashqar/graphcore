@@ -1,5 +1,7 @@
 import {STOREFRONT_STAMPS,STAMP_MAP,protectedStorefrontAtBay,unpackStorefront} from '../../domain/cityStorefrontStamps';
 import {easeInOutCubic,glideCameraPose,studioGlideEnabled,STUDIO_GLIDE_MS,type CameraPose,type Vec3} from './studioCameraGlide';
+import {studioClearanceBoxes,studioClearanceFraction,studioClearViewPosition,STUDIO_CLEARANCE_MARGIN} from '../../domain/cityStudioCameraClearance';
+import {useCityMapLayout} from './CityMapLayout';
 import {CityStudioToast} from './CityStudioToast';
 import {studioDeleteTarget,studioDuplicateTarget} from './studioKeys';
 import {CityStudioToolBelt} from './CityStudioToolBelt';
@@ -134,8 +136,22 @@ export function CityStudio({land,session,camera,reduced}:{land:CityLandControlle
  const empty=()=>{if(!recipe)return;commit({...recipe,volumes:[],attachments:[],studio:freshStudio()});land.setSelectedVolume(null);setStarters(false);setTool('block');};
  const starter=(index:number)=>{if(index<=-2){land.edit(studioExample(draft,-index-2,plot.size));land.setSelectedVolume(null);setStarters(false);setReplace(null);return;}const design=applyComposition(draft.design,index),next=upgradeStudio({...draft,sculpt:undefined,design},plot.size);if(next){land.edit(next);land.setSelectedVolume(null);setStarters(false);setReplace(null);}};
  const glide=useRef<{from:CameraPose;to:CameraPose;start:number}|null>(null);
- const glideTo=(aim:Vector3,position:Vector3)=>{const c=controls.current;if(reduced||!c||!studioGlideEnabled()){c?.target.copy(aim);camera.position.copy(position);c?.update();invalidate();return;}glide.current={from:{position:camera.position.toArray() as Vec3,target:c.target.toArray() as Vec3},to:{position:position.toArray() as Vec3,target:aim.toArray() as Vec3},start:performance.now()};invalidate();};
- useFrame(()=>{const g=glide.current,c=controls.current;if(!g||!c)return;const t=Math.min(1,(performance.now()-g.start)/STUDIO_GLIDE_MS),pose=glideCameraPose(g.from,g.to,easeInOutCubic(t));c.target.set(...pose.target);camera.position.set(...pose.position);c.update();if(t>=1)glide.current=null;invalidate();});
+ // Neighbouring city and test-world buildings stream in around the plot. Presets, glides and zooming must never
+ // leave the camera inside one (docs/city-studio-game-ux.md, "Camera clearance").
+ const {plotAxis}=useCityMapLayout(),occupied=land.world?.occupied,landPlots=land.world?.plots;
+ const cityClearance=useMemo(()=>studioClearanceBoxes((occupied??[]).map(p=>({id:p.id,x:p.x,z:p.z,tier:p.tier,design:p.profile.buildingDesign})),plot.id,plotAxis,plot.size),[occupied,plot.id,plot.size,plotAxis]);
+ const landClearance=useMemo(()=>studioClearanceBoxes((landPlots??[]).flatMap(p=>{const built=p.finished??p.draft;return built&&p.id!==plot.id?[{id:p.id,x:p.x,z:p.z,design:built.design,centre:landPosition(p)}]:[];}),plot.id,plotAxis,plot.size),[landPlots,plot.id,plot.size,plotAxis]);
+ const clearanceBoxes=useMemo(()=>[...cityClearance,...landClearance],[cityClearance,landClearance]);
+ /** Pulls `position` towards `aim` until the sight line no longer enters a neighbouring building. */
+ const clearPosition=(aim:Vector3,position:Vector3)=>{const t=studioClearanceFraction(aim,position,clearanceBoxes,STUDIO_CLEARANCE_MARGIN);if(t<1)position.sub(aim).multiplyScalar(t).add(aim);return t<1;};
+ // Framed views keep their distance and rise over a neighbour; the per-frame clamp below only ever comes in.
+ const glideTo=(aim:Vector3,position:Vector3)=>{const clear=studioClearViewPosition(aim,position,clearanceBoxes,STUDIO_CLEARANCE_MARGIN);position.set(clear.x,clear.y,clear.z);const c=controls.current;if(reduced||!c||!studioGlideEnabled()){c?.target.copy(aim);camera.position.copy(position);c?.update();invalidate();return;}glide.current={from:{position:camera.position.toArray() as Vec3,target:c.target.toArray() as Vec3},to:{position:position.toArray() as Vec3,target:aim.toArray() as Vec3},start:performance.now()};invalidate();};
+ // Runs after OrbitControls (priority -1): glide first, then keep the drawn pose clear of neighbouring buildings.
+ // Scaling along the sight line keeps the orientation, and the controls read the clamped radius next frame.
+ useFrame(()=>{const g=glide.current,c=controls.current;if(!c||walking)return;
+  if(g){const t=Math.min(1,(performance.now()-g.start)/STUDIO_GLIDE_MS),pose=glideCameraPose(g.from,g.to,easeInOutCubic(t));c.target.set(...pose.target);camera.position.set(...pose.position);c.update();if(t>=1)glide.current=null;invalidate();}
+  if(clearPosition(c.target,camera.position)){camera.updateMatrixWorld();invalidate();}
+ });
  useEffect(()=>{const c=controls.current;if(!c)return;const stop=()=>{glide.current=null;};c.addEventListener('start',stop);return()=>c.removeEventListener('start',stop);});
  const focusInteriorFloor=(level:number)=>{const aim=new Vector3(center.x,(sculptFloorBottom(level,draft.design.groundHeight,draft.design.upperHeight)+1.1)*scale,center.z);glideTo(aim,aim.clone().add(new Vector3(plot.size*.28,plot.size*1.05,plot.size*.52)));};
  const chooseInteriorFloor=(level:number)=>{interaction.cancel();setFloor(level);setSelectedRoomId(null);setSelectedFurnitureId(null);setFloorViewMode('floor');focusInteriorFloor(level);};
