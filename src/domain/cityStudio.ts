@@ -37,6 +37,11 @@ export function upgradeStudio(draft:LandDraft, plotSize:24|48):LandDraft|null {
  return {...draft,builderMode:'sculpt',sculpt:{...solid,version:5,plotSize,studio},design:{...draft.design,synarcKit:undefined,roof:'flat'}};
 }
 export function studioFloorCount(r:StudioRecipe){return Math.max(1,...r.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors));}
+/** A studio draft with no parts: keeps the recipe's version, catalogue and style defaults, drops everything built. */
+export function emptyStudioDraft(draft:LandDraft):LandDraft{
+ const r=draft.sculpt as StudioRecipe,studio=freshStudio();
+ return studioDraft(draft,{...r,volumes:[],attachments:[],studio:{...studio,catalogue:r.studio?.catalogue??studio.catalogue,defaults:{...studio.defaults,...r.studio?.defaults}}});
+}
 export function studioDraft(draft:LandDraft,r:StudioRecipe):LandDraft{return {...draft,builderMode:'sculpt',sculpt:r,design:{...draft.design,crown:'none',middleFloors:studioFloorCount(r)-1,roof:'flat',synarcKit:undefined}};}
 export const sameFace=(a:StudioAnchor,b:StudioAnchor)=>a.shapeId===b.shapeId&&a.side===b.side&&a.floor===b.floor;
 export const sameSpot=(a:StudioAnchor,b:StudioAnchor)=>sameFace(a,b)&&Math.abs(a.u-b.u)<.025;

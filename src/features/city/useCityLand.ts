@@ -1,5 +1,5 @@
 import {studioEnabled} from '../../domain/cityStudioTypes';
-import {upgradeStudio} from '../../domain/cityStudio';
+import {emptyStudioDraft,upgradeStudio} from '../../domain/cityStudio';
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import type {CityProperty} from '../../domain/city';
 import {createLandWorld,LocalLandRepository,initialLandDraft,fitLandDesign,type LandDraft,type LandPlot,type LandWorld} from '../../domain/cityLand';
@@ -33,7 +33,9 @@ export function useCityLand(enabled:boolean,properties:CityProperty[],capacity:n
  const open=(p:LandPlot)=>{selectedRef.current=p;setSelected(p);setSelectedVolume(null);const d=structuredClone(p.draft||p.finished||initialLandDraft(p));draftRef.current=d;setDraft(d);setHistory([]);setFuture([]);setNotice(null);editVersion.current=0;savedVersion.current=0;setDirty(false);setError('');requestId.current=crypto.randomUUID();setPhase('staging');};
  const close=async()=>{if(phase==='purchasing'||saving)return;if(dirty&&!await persist())return;setPhase('exploring');setSelected(null);setDraft(null);};
  const purchase=async()=>{if(!selectedRef.current||phase!=='inspection')return;setPhase('purchasing');setError('');try{apply(await repository.purchase(selectedRef.current.id,selectedRef.current.revision,requestId.current));setPhase('celebration');}catch(e){setError(e instanceof Error?e.message:String(e));setPhase('inspection');}};
- const beginConstruction=()=>{if(studioEnabled()&&!selectedRef.current?.draft&&draftRef.current&&selectedRef.current){const next=upgradeStudio(draftRef.current,selectedRef.current.size);if(next)edit(next);}setPhase('construction');if(!selectedRef.current?.draft){editVersion.current++;setDirty(true);}};
+ // A newly bought plot opens empty: the preset design only supplies studio defaults (catalogue, style); the player
+ // builds from scratch or picks a starting idea from the Build palette.
+ const beginConstruction=()=>{if(studioEnabled()&&!selectedRef.current?.draft&&draftRef.current&&selectedRef.current){const upgraded=upgradeStudio(draftRef.current,selectedRef.current.size),fresh=!selectedRef.current.finished;const next=upgraded&&fresh&&upgraded.sculpt?.version&&upgraded.sculpt.version>=5?emptyStudioDraft(upgraded):upgraded;if(next)edit(next);}setPhase('construction');if(!selectedRef.current?.draft){editVersion.current++;setDirty(true);}};
  const finish=async()=>{if(await persist(true)){setPhase('exploring');setSelected(null);setDraft(null);}};
  const undo=()=>{if(!history.length||!draft)return;const prev=history[history.length-1];setHistory(h=>h.slice(0,-1));setFuture(f=>[{draft,label:prev.label,at:prev.at},...f]);setNotice(n=>({kind:'undo',label:prev.label,id:(n?.id??0)+1}));edit(prev.draft,false);};
  const redo=()=>{if(!future.length||!draft)return;const next=future[0];setFuture(f=>f.slice(1));setHistory(h=>[...h,{draft,label:next.label,at:next.at}]);setNotice(n=>({kind:'redo',label:next.label,id:(n?.id??0)+1}));edit(next.draft,false);};

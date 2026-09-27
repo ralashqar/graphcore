@@ -18,11 +18,12 @@ import {useEffect,useLayoutEffect,useMemo,useRef,useState,type MutableRefObject}
 import {useFrame,useThree} from '@react-three/fiber';
 import {Box3,BoxGeometry,BufferGeometry,Color,InstancedBufferAttribute,InstancedMesh,Matrix4,Quaternion,Vector3,type Material} from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {STUDIO_FAMILIES,STUDIO_MODULE_MAP} from '../../domain/cityStudioCatalog';
+import {STOREFRONT_MODULE_IDS,STUDIO_FAMILIES,STUDIO_MODULE_MAP} from '../../domain/cityStudioCatalog';
 import type {StudioChannel,StudioPiece} from '../../domain/cityStudioTypes';
 import type {CityPlotTransform} from '../../domain/citySculptCityBake';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
+import {seeThroughGlass} from './CityStudioOpeningInstances';
 import {KIT_MEDIUM,loadStudioKit,usesStorefrontKit,type StudioKitDetail} from './CityStudioMeshes';
 export {KIT_MEDIUM};
 import {viewDistance} from './CityStudioDetailBatches';
@@ -35,13 +36,14 @@ type Tier='full'|'near'|'medium'|'proxy';
 type Pack=Map<string,{geometry:BufferGeometry;channel:string}[]>;
 const kitStats=new Map<string,{tier:Tier;triangles:number;instances:number}>();
 type Block={plot:string;matrices:Float32Array;colors:Float32Array;count:number};
-type GroupSource={geometry:BufferGeometry;channel:string;texture?:string;tier:Tier};
+/** `see`: storefront-pack glass, drawn see-through (as in the studio) so shop displays show from the street. */
+type GroupSource={geometry:BufferGeometry;channel:string;texture?:string;tier:Tier;see?:boolean};
 type Group=GroupSource&{key:string;blocks:Block[];total:number};
 
 const shows=(tier:Tier,level:KitLevel|undefined)=>tier==='proxy'?level==='proxy':tier==='medium'?level==='medium':tier==='near'?level==='near':level==='full'||level==='near';
 const materials=new Map<string,{material:Material;users:number}>();
-function acquire(glass:boolean,texture?:string){const key=`${glass}|${texture??''}`;let e=materials.get(key);if(!e){e={material:citySurfaceMaterial(glass,texture as CityTextureId),users:0};materials.set(key,e);}e.users++;return e.material;}
-function release(glass:boolean,texture?:string){const key=`${glass}|${texture??''}`,e=materials.get(key);if(!e||--e.users>0)return;materials.delete(key);e.material.dispose();}
+function acquire(glass:boolean,texture?:string,see=false){const key=`${glass}|${texture??''}|${see}`;let e=materials.get(key);if(!e){const material=citySurfaceMaterial(glass,texture as CityTextureId);if(glass&&see)seeThroughGlass(material);e={material,users:0};materials.set(key,e);}e.users++;return e.material;}
+function release(glass:boolean,texture?:string,see=false){const key=`${glass}|${texture??''}|${see}`,e=materials.get(key);if(!e||--e.users>0)return;materials.delete(key);e.material.dispose();}
 
 // Proxy shapes are shared across plots and never disposed (a few dozen small boxes).
 const proxyGeometry=new Map<string,BufferGeometry>();
@@ -66,13 +68,13 @@ function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
    // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
    if(p.omit?.includes(piece.channel))continue;
    const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,tier:Tier=near?'near':'full';
-   push(`${plot.version}/${p.module}/${i}/${texture??''}/${tier}`,{geometry:piece.geometry,channel:piece.channel,texture,tier},p);
+   push(`${plot.version}/${p.module}/${i}/${texture??''}/${tier}`,{geometry:piece.geometry,channel:piece.channel,texture,tier,see:piece.channel==='glass'&&STOREFRONT_MODULE_IDS.has(p.module)},p);
   }
   // Medium kit: the same modules and channels (near-only modules stay out, as at the full level).
   if(medium&&!near)for(const piece of medium.get(p.module)??[]){
    if(p.omit?.includes(piece.channel))continue;
    const texture=p.finishes?.[piece.channel as StudioChannel]?.texture;
-   push(`${plot.version}/${p.module}/medium:${piece.channel}/${texture??''}/medium`,{geometry:piece.geometry,channel:piece.channel,texture,tier:'medium'},p);
+   push(`${plot.version}/${p.module}/medium:${piece.channel}/${texture??''}/medium`,{geometry:piece.geometry,channel:piece.channel,texture,tier:'medium',see:piece.channel==='glass'&&STOREFRONT_MODULE_IDS.has(p.module)},p);
   }
   for(const x of studioPieceProxies(p))push(`proxy/${x.key}`,{geometry:x.geometry,channel:x.channel,texture:x.texture,tier:'proxy'},p);
  }
@@ -83,7 +85,7 @@ function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
    local.compose(pos.set(p.x,p.y,p.z),q.setFromAxisAngle(up,p.rotation),scale.set(...p.scale));local.premultiply(world).toArray(matrices,i*16);
    const palette=STUDIO_FAMILIES[p.family];color.set(p.finishes?.[s.channel as StudioChannel]?.color??palette[s.channel as keyof typeof palette]??palette.trim).toArray(colors,i*3);
   });
-  out.set(key,{geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,block:{plot:plot.id,matrices,colors,count:n}});
+  out.set(key,{geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,see:s.see,block:{plot:plot.id,matrices,colors,count:n}});
  }
  return out;
 }
@@ -117,7 +119,7 @@ export function CitySculptSharedKit({plots,levels}:{plots:KitPlot[];levels:Mutab
    // Until the storefront pack arrives the plain v5 pack draws everything else.
    const pack=packs.get(packKey(plot.version,'full',storefront))??packs.get(packKey(plot.version,'full')),medium=packs.get(packKey(plot.version,'medium',storefront))??packs.get(packKey(plot.version,'medium'));if(!pack)continue;
    let cached=blockCache.get(plot);if(!cached||cached.pack!==pack||cached.medium!==medium){cached={pack,medium,blocks:plotBlocks(plot,pack,medium)};blockCache.set(plot,cached);}
-   for(const [key,s] of cached.blocks){let g=out.get(key);if(!g){g={key,geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,blocks:[],total:0};out.set(key,g);}g.blocks.push(s.block);g.total+=s.block.count;}
+   for(const [key,s] of cached.blocks){let g=out.get(key);if(!g){g={key,geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,see:s.see,blocks:[],total:0};out.set(key,g);}g.blocks.push(s.block);g.total+=s.block.count;}
   }
   return [...out.values()];
  },[plots,packs,storefront]);
@@ -158,8 +160,9 @@ if(typeof window!=='undefined'&&import.meta.env?.DEV)(window as unknown as {__ci
 
 function KitGroup({group,capacity,levels}:{group:Group;capacity:number;levels:MutableRefObject<KitLevels>}){
  const glass=group.channel==='glass';
- const material=useMemo(()=>acquire(glass,group.texture),[glass,group.texture]);
- useEffect(()=>()=>release(glass,group.texture),[glass,group.texture]);
+ const see=!!group.see;
+ const material=useMemo(()=>acquire(glass,group.texture,see),[glass,group.texture,see]);
+ useEffect(()=>()=>release(glass,group.texture,see),[glass,group.texture,see]);
  const mesh=useMemo(()=>{const m=new InstancedMesh(group.geometry,material,capacity);m.instanceColor=new InstancedBufferAttribute(new Float32Array(capacity*3),3);m.count=0;m.visible=false;m.frustumCulled=false;m.name=`city-sculpt-kit-${group.tier}`;return m;},[group.geometry,material,capacity]);
  useEffect(()=>()=>{mesh.dispose();kitStats.delete(group.key);},[mesh,group.key]);
  const applied=useRef<{revision:number;group:Group|null;included:string}>({revision:-1,group:null,included:''});
