@@ -55,7 +55,7 @@ try{
  const roofs=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.roofOpenings??[];});
  const before=(await roofs()).length;
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);
- await page.keyboard.press('2');await page.getByRole('button',{name:'Add Skylight',exact:true}).click();await page.waitForTimeout(400);
+ await page.keyboard.press('r');await page.getByRole('button',{name:'Add Skylight',exact:true}).click();await page.waitForTimeout(400);
  const view=await page.locator('canvas').first().boundingBox();let spot=null;
  for(let gy=0;gy<14&&!spot;gy+=2)for(let gx=0;gx<16&&!spot;gx+=2){const x=view.x+view.width*(.36+gx*.018),y=view.y+view.height*(.34+gy*.016);await page.mouse.move(x,y);await page.waitForTimeout(180);const g=(await studio()).roofGhost;if(g?.valid)spot={x,y};}
  assert.ok(spot,'a slope where the skylight ghost fits');await page.screenshot({path:`output/city-studio-roof-openings-ghost${suffix}.png`});

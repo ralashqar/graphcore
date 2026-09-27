@@ -2,6 +2,10 @@
 
 The construction studio (`/city?demo=1`, opt out with `cityStudio=0`) should feel like a building game in the spirit of Tiny Glade, The Sims build/buy and Townscaper, not a form. The recipe/domain layer and worker pipeline stay unchanged; this is a presentation, interaction and feel revamp.
 
+## UI v2 (September 2026)
+
+The flat tool belt below has been replaced by a select → inspect → act layout: a left tool rail with per-tool palettes, Select granularity (Part, Wall, Tile, Opening, Object) with a breadcrumb inspector on the right, one brush with a "what to paint" target, size and erase mode, and a hotbar. The phase notes below describe how features were first built; their controls now live where the old → new map in [city-studio-ui-v2.md](city-studio-ui-v2.md) says.
+
 ## Pillars
 
 1. The world is the UI: edit on the building with handles, brushes and in-world labels.

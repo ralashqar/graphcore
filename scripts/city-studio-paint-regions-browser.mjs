@@ -3,6 +3,7 @@
 // quick ring and reloaded. Needs a running dev server (CITY_TEST_ORIGIN, default http://localhost:5180).
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {brush,brushSize} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
@@ -34,7 +35,7 @@ try{
  await open();
  const prepared=await page.evaluate(async()=>{const {resolveSculpt}=await import('/src/domain/citySculpt.ts'),k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),d=JSON.parse(localStorage.getItem(k)).plots[0].draft,t=performance.now(),s=resolveSculpt(d.sculpt,d.design).studio,ms=performance.now()-t;return {ms,faces:s.freeFaces.map(f=>({id:f.id,paint:(f.geometry.wallPaint??[]).map(p=>p.finish)})),inactive:s.inactive};});
  assert.deepEqual(prepared.inactive,[]);assert.deepEqual(prepared.faces.find(f=>f.id==='main/north').paint,[{color:'#7d8fa6'}],'legacy tile paint becomes a region on the generated face');
- await page.getByRole('button',{name:'Paint',exact:true}).click();
+ await brush(page,'Material');
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1600);
   const screen=async()=>{const st=await page.locator('canvas').evaluateAll(cs=>JSON.parse(cs.find(c=>c.dataset.cityStudio)?.dataset.cityStudio||'{}'));const north=st.bays.filter(b=>b.part==='main'&&b.side==='north');const row=f=>north.filter(b=>b.floor===f).sort((a,b)=>a.x-b.x);return {g:row(0),u:row(1),t:row(2)};};
  let s=await screen();assert.ok(s.g.length>=4&&s.u.length>=4,JSON.stringify(s).slice(0,300));
@@ -45,10 +46,10 @@ try{
  const gh=d.groundHeight,uh=d.upperHeight??3,yAt=h=>s.g[0].y+(h-gh/2)*(s.u[0].y-s.g[0].y)/((gh+uh/2)-gh/2);
  // 1) Fill wall: one full-height band on the generated face.
  await swatch(2);
- await page.getByRole('button',{name:'Fill wall',exact:true}).click();await pressed('.studio-paint-actions button','Fill wall');
+ await brushSize(page,'Wall');await pressed('.studio-sizes button','Wall');
  await page.mouse.move(s.u[1].x,s.u[1].y);await page.waitForTimeout(250);await page.mouse.click(s.u[1].x,s.u[1].y);
  await waitRegions(list=>list.length===1&&list[0].band&&list[0].rects[0][2]===0,'fill');
- assert.equal(await page.getByRole('button',{name:'Fill wall',exact:true}).getAttribute('aria-pressed'),'false','fill returns to the brush');
+ await brushSize(page,'Freeform');
  await settle();
  // 2) Brush stroke with the large brush across the upper storey, between the windows.
  const brushes=page.getByRole('group',{name:'Brush size'});await brushes.getByRole('button',{name:'Large'}).click();
@@ -80,11 +81,11 @@ try{
  await page.mouse.move(bx,yAt(.4));await page.waitForTimeout(200);await page.mouse.click(bx,yAt(.4));
  await page.waitForFunction(()=>[...document.querySelectorAll('.studio-materials button')].find(b=>b.textContent?.includes('Brick'))?.getAttribute('aria-pressed')==='true',null,{timeout:10000});
  // 6) Restore removes the topmost region under the pointer (the stroke), undo brings it back.
- await page.getByRole('button',{name:'Restore tile'}).click();await pressed('button[aria-label="Restore tile"]','Restore tile');
+ await brush(page,'Material',{erase:true});await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).erase===true,null,{timeout:10000});
  await page.mouse.move(s.u[1].x+60,y);await page.waitForTimeout(200);await page.mouse.click(s.u[1].x+60,y);
  await waitRegions(new Function('list',`return list.length===3&&!list.some(g=>g.id===${JSON.stringify(stroke.id)})`),'erase');
  await page.getByRole('button',{name:'Undo'}).click();await waitRegions(new Function('list',`return list.length===4&&list[1].id===${JSON.stringify(stroke.id)}`),'undo');
- await page.getByRole('button',{name:'Restore tile'}).click();
+ await brush(page,'Material');
  // 7) Quick paint ring on a region recolours it in place.
  await settle();await page.mouse.move(s.u[1].x+60,y);await page.waitForTimeout(300);await page.keyboard.press('c');
  await page.getByRole('dialog',{name:'Quick paint'}).waitFor({timeout:5000});

@@ -3,6 +3,7 @@
 // Needs a running dev server (CITY_TEST_ORIGIN, default http://localhost:5180). CITY_BACKEND=webgl for WebGL2.
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {brush,onCanvas,openings} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
@@ -49,11 +50,11 @@ try{
 
  // 2) Freeform on the round tower: hover curved bays until the ghost shows, click to cut.
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1500);
- await page.keyboard.press('4');await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Window',exact:true}).click();
+ await openings(page,'Freeform');await page.getByRole('button',{name:'Cut Window',exact:true}).click();
  const cut=async(floor,offset)=>{
   const all=(await studio()).bays.filter(b=>b.part==='tower'&&b.side==='curve'&&b.floor===floor&&b.x>150&&b.x<1450&&b.y>100&&b.y<900),centre=all.reduce((t,b)=>t+b.x,0)/all.length;
   const before=((await saved()).freeOpenings??[]).length,candidates=all.sort((p,q)=>Math.abs(p.x-centre-offset)-Math.abs(q.x-centre-offset));
-  let spot=null;for(const b of candidates){await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);const st=await studio();if(st.freeGhost){spot=b;break;}}
+  let spot=null;for(const b of candidates){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);const st=await studio();if(st.freeGhost){spot=b;break;}}
   assert.ok(spot,`a curved bay on floor ${floor} shows the ghost`);await page.mouse.click(spot.x,spot.y);
   await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeOpenings??[]).length===n+1;},before,{timeout:15000})
    .catch(async e=>{const st=await studio();console.log('cut failed',floor,JSON.stringify({issue:st.issue,note:st.note,ghost:st.freeGhost,spot}),await page.locator('.studio-issue, [role=alert]').allTextContents().catch(()=>[]));await shot(page,'cut-failure');throw e;});
@@ -72,7 +73,7 @@ try{
 
  // 3) Paint a band on the curved tower wall (Paint → Band, drag from the base upwards).
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1500);
- await page.getByRole('button',{name:'Paint',exact:true}).click();await page.getByRole('button',{name:'Brick',exact:true}).click().catch(()=>{});
+ await brush(page,'Material');await page.getByRole('button',{name:'Brick',exact:true}).click().catch(()=>{});
  await page.getByRole('button',{name:'Band',exact:true}).click();
  const g0=(await studio()).bays.filter(b=>b.part==='tower'&&b.side==='curve'&&b.floor===0&&b.x>150&&b.x<1450).sort((a,b)=>Math.abs(a.x-700)-Math.abs(b.x-700))[0],g1=(await studio()).bays.find(b=>b.part==='tower'&&b.side==='curve'&&b.floor===1&&Math.abs(b.x-g0.x)<80)??{y:g0.y-120};
  const pxm=(g0.y-g1.y)/3.2,base=g0.y+pxm*1.7;

@@ -3,6 +3,7 @@
 // Needs the Vite dev server: CITY_TEST_ORIGIN (default http://localhost:5180); CITY_BACKEND=webgl for WebGL2.
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {onCanvas,openings} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 try{
@@ -53,8 +54,8 @@ try{
  const studio=()=>page.locator('canvas').evaluateAll(cs=>JSON.parse(cs.find(c=>c.dataset.cityStudio)?.dataset.cityStudio||'{}'));
  const trims=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.stringify(JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeTrims??[]);});
  await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(800);
- await page.keyboard.press('4');await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Window',exact:true}).click();await page.waitForTimeout(400);
- let target=null;for(const b of (await studio()).bays.filter(b=>b.x>150&&b.x<1450&&b.y>120&&b.y<650)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);const st=await studio();if(st.hover===b.id&&!st.freeGhost){target=b;break;}}
+ await openings(page,'Freeform');await page.getByRole('button',{name:'Cut Window',exact:true}).click();await page.waitForTimeout(400);
+ let target=null;for(const b of (await studio()).bays.filter(b=>b.x>150&&b.x<1450&&b.y>120&&b.y<650)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);const st=await studio();if(st.hover===b.id&&!st.freeGhost){target=b;break;}}
  assert.ok(target,'an existing free opening under the pointer');
  await page.mouse.click(target.x,target.y);
  const dress=page.getByRole('group',{name:'Dress this opening'});await dress.waitFor({timeout:5000});

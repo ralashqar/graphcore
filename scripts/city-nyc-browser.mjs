@@ -1,6 +1,7 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
+import {brush,brushSize,openings} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 mkdirSync('output/playwright',{recursive:true});
@@ -22,14 +23,14 @@ try{
  assert.equal(keys.length,105);assert.ok(keys.includes('wall-nyc-garage'));
  await page.getByRole('button',{name:'Front view',exact:true}).click();
  await page.screenshot({path:`output/playwright/city-nyc-garage-${backend}.png`});
- await page.getByRole('button',{name:'Paint',exact:true}).click();await page.getByRole('button',{name:'Openings',exact:true}).click();await page.getByRole('button',{name:'Walls',exact:true}).click();await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).waitFor();
+ await openings(page,'Walls');await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).waitFor();
  const garage=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.find(b=>b.module==='wall-nyc-garage'));
- await page.getByRole('button',{name:'Erase',exact:true}).click();await page.mouse.click(garage.x,garage.y);
+ await brush(page,'Openings',{erase:true});await brushSize(page,'Tile');await page.mouse.move(garage.x,garage.y);await page.waitForTimeout(200);await page.mouse.click(garage.x,garage.y);
  await page.waitForFunction(()=>!JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays.some(b=>b.module==='wall-nyc-garage'));
- await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).click();await page.waitForFunction(()=>[...document.querySelectorAll('.studio-openings .studio-tile')].some(button=>button.getAttribute('aria-label')==='Wide roller shutter · closed'&&button.getAttribute('aria-pressed')==='true'),null,{timeout:10000});
+ await openings(page,'Walls');await page.getByRole('button',{name:'Wide roller shutter · closed',exact:true}).click();await page.waitForFunction(()=>[...document.querySelectorAll('.studio-openings .studio-tile')].some(button=>button.getAttribute('aria-label')==='Wide roller shutter · closed'&&button.getAttribute('aria-pressed')==='true'),null,{timeout:10000});
  const raw=await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays.filter(b=>b.floor===0&&b.side==='north').sort((a,b)=>Number(a.id.split('/').at(-1))-Number(b.id.split('/').at(-1)))[1]);
  await page.mouse.click(raw.x,raw.y);await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).bays.some(b=>b.module==='wall-nyc-garage'),null,{timeout:30000});
- await page.getByRole('button',{name:'Decorate',exact:true}).click();await page.getByRole('button',{name:'Stone belt course',exact:true}).waitFor();
+ await brush(page,'Decorations');await page.getByRole('button',{name:'Stone belt course',exact:true}).waitFor();
  const records=[];
  for(const name of ['Corner deli','Neighborhood café','SoHo cast-iron loft','Garage workshop loft','Balcony apartments','Ornate commercial corner']){
   await page.getByRole('button',{name:'Build',exact:true}).click();await page.getByRole('button',{name:'Starting ideas',exact:true}).click();

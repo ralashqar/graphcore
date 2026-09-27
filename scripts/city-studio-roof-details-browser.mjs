@@ -21,7 +21,7 @@ try{
  const state=()=>page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio||'{}'));
  const details=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.roofDetails??[];});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});
- await page.keyboard.press('2');await page.getByRole('button',{name:'Top view',exact:true}).click();await page.waitForTimeout(600);
+ await page.keyboard.press('r');await page.getByRole('button',{name:'Top view',exact:true}).click();await page.waitForTimeout(600);
  const tray=page.getByRole('group',{name:'Roof details'}).or(page.locator('[aria-label="Roof details"]'));
  await tray.getByRole('button').first().click();
  await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).tool==='roof-detail',null,{timeout:5000});

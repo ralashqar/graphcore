@@ -4,6 +4,7 @@
 // fills around) and paint a storefront stamp (a manual span on the generated wall). The `cityFacade=unified`
 // flag converts a kit building silently when the studio opens. Needs a running dev server (CITY_TEST_ORIGIN).
 import {chromium} from 'playwright';
+import {brush,onCanvas,openings} from './city-studio-ui.mjs';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180',backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
@@ -56,7 +57,7 @@ try{
 
  // 1. A New York kit building, as it looks with kit tiles.
  await setDraft('nyc',preset);await open();await settle(2500);
- await page.keyboard.press('4');await page.getByRole('button',{name:'Windows',exact:true}).click();
+ await openings(page,'Windows');
  await page.getByRole('button',{name:'Front view'}).click();await settle(2800);await frame();
  const beforeShot=`output/city-studio-unified-before${suffix}.png`;await page.screenshot({path:beforeShot});
  const kitState=await resolved();assert.equal(kitState.faces,0,'kit tiles, no generated walls yet');const kitInfo=await renderInfo();
@@ -72,7 +73,7 @@ try{
  await until(async()=>(await saved()).sculpt.studio.facade==='unified','redo converts again');
  // Same camera for the comparison: reopen the saved (converted) plot and repeat the steps of the before shot.
  // (After a large commit the known eye-level frame from docs/city-studio-game-ux.md can persist in this session.)
- await open();await settle(2500);await page.keyboard.press('4');await page.getByRole('button',{name:'Windows',exact:true}).click();
+ await open();await settle(2500);await openings(page,'Windows');
  await page.getByRole('button',{name:'Front view'}).click();await settle(2800);await frame();
  const afterShot=`output/city-studio-unified-after${suffix}.png`;await page.screenshot({path:afterShot});const unifiedInfo=await renderInfo();
  const diff=await imageDiff(beforeShot,afterShot);
@@ -91,10 +92,10 @@ try{
  // 4. A unified rhythm building: place a kit window from the Windows tray on a rhythm wall.
  await setDraft('rhythm',0);await open();await settle(2500);
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await settle();
- await page.keyboard.press('4');await page.getByRole('button',{name:'Windows',exact:true}).click();
+ await openings(page,'Windows');
  await page.getByRole('button',{name:'Shuttered',exact:true}).click();
  await until(async()=>(await state()).tool==='free-opening','free kit tool');
- const bayOnScreen=async floor=>{for(const b of (await state()).bays.filter(b=>b.floor===floor&&b.x>200&&b.x<1400&&b.y>120&&b.y<650)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(170);const st=await state();if(st.freeGhost)return b;}return null;};
+ const bayOnScreen=async floor=>{for(const b of (await state()).bays.filter(b=>b.floor===floor&&b.x>200&&b.x<1400&&b.y>120&&b.y<650)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(170);const st=await state();if(st.freeGhost)return b;}return null;};
  const spot=await bayOnScreen(2);assert.ok(spot,'a wall to place on (ghost shown)');
  await page.mouse.click(spot.x,spot.y);
  await until(async()=>((await saved()).sculpt.studio.freeOpenings??[]).some(o=>o.module==='window-shuttered'),'kit window placed');
@@ -110,9 +111,9 @@ try{
  await settle();await page.screenshot({path:`output/city-studio-unified-kit-window${suffix}.png`});
 
  // 5. A storefront stamp on the generated ground floor reserves its span; the rhythm fills around it.
- await page.getByRole('button',{name:'Storefronts',exact:true}).click();await page.getByRole('button',{name:/^Paint Café · 4 m$/}).click();
+ await brush(page,'Storefronts');await page.getByRole('button',{name:/^Paint Café · 4 m$/}).click();
  await until(async()=>(await state()).tool==='opening','stamp tool');
- let stamped=false;for(const b of (await state()).bays.filter(b=>b.floor===0&&b.x>200&&b.x<1400&&b.y>150&&b.y<800)){await page.mouse.click(b.x,b.y);await page.waitForTimeout(900);if(((await saved()).sculpt.studio.stamps??[]).length){stamped=true;break;}}
+ let stamped=false;for(const b of (await state()).bays.filter(b=>b.floor===0&&b.x>200&&b.x<1400&&b.y>150&&b.y<800)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.click(b.x,b.y);await page.waitForTimeout(900);if(((await saved()).sculpt.studio.stamps??[]).length){stamped=true;break;}}
  assert.ok(stamped,'a storefront stamp was placed');
  const stampState=await page.evaluate(async()=>{
   const {resolveSculpt}=await import('/src/domain/citySculpt.ts'),k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),draft=JSON.parse(localStorage.getItem(k)).plots.find(p=>p.purchaseId==='unified-facade-browser').draft,s=resolveSculpt(draft.sculpt,draft.design).studio;

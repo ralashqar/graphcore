@@ -3,6 +3,7 @@
 // rhythm wall while generated openings stay around it. Needs a running dev server (CITY_TEST_ORIGIN).
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {inspectBuilding,onCanvas,openRhythm,openings} from './city-studio-ui.mjs';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180',backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 try{
@@ -37,7 +38,7 @@ try{
   return {openings:out.freeOpenings.map(o=>({id:o.id,shapeId:o.shapeId,side:o.side,shape:o.shape,u:o.u,bottom:o.bottom,width:o.width})),faces:out.faces,inactive:studio.inactive,groups:(studio.freeFaces??[]).flatMap(f=>f.groups.map(g=>({face:f.id,members:g.members})))};
  });
  const group=page.getByRole('group',{name:'Facade rhythm'});
- await page.keyboard.press('4');await page.getByRole('button',{name:'Rhythm',exact:true}).click();
+ await inspectBuilding(page);await openRhythm(page);
  // 1. Style preset.
  await group.getByRole('button',{name:'Townhouse'}).click();
  await until(async()=>(await rhythm())?.style==='townhouse','townhouse');
@@ -69,8 +70,8 @@ try{
  // 4. Scope a rule to one wall by clicking it.
  await group.getByRole('radio',{name:'This wall'}).click();
  await until(async()=>(await state()).tool==='rhythm-face','wall picking tool');
- const dockTop=async()=>(await page.locator('.studio-dock').boundingBox()).y-16;
- const pickWall=async(avoid=[])=>{const top=await dockTop();for(const b of (await state()).bays.filter(b=>b.floor>=1&&b.x>120&&b.x<1480&&b.y>90&&b.y<top&&!avoid.includes(`${b.part}/${b.side}`))){await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);if((await state()).hover===b.id)return b;}return null;};
+ const dockTop=async()=>10000;
+ const pickWall=async(avoid=[])=>{const top=await dockTop();for(const b of (await state()).bays.filter(b=>b.floor>=1&&b.x>120&&b.x<1480&&b.y>90&&b.y<top&&!avoid.includes(`${b.part}/${b.side}`))){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);if((await state()).hover===b.id)return b;}return null;};
  const wall=await pickWall();assert.ok(wall,'a wall on screen');await page.mouse.click(wall.x,wall.y);
  await group.locator('.rhythm-targets span').first().waitFor({timeout:5000});
  await group.getByRole('button',{name:'Civic'}).click();
@@ -99,10 +100,10 @@ try{
  await until(async()=>((await rhythm()).rules??[]).some(r=>r.partId===plain.part&&r.side===plain.side&&r.off),'plain wall rule');
  await group.getByRole('button',{name:'Plain wall',exact:true}).click();
  // 6. A manual free opening on a rhythm wall: generated openings stay around it (fill is the default).
- await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Round window',exact:true}).click();
+ await openings(page,'Freeform');await page.getByRole('button',{name:'Cut Round window',exact:true}).click();
  const before=(await sculpt()).studio.freeOpenings?.length??0;
  let spot=null;
- const top=await dockTop();for(const b of (await state()).bays.filter(b=>b.floor===2&&b.x>150&&b.x<1450&&b.y>100&&b.y<top&&`${b.part}/${b.side}`!==`${plain.part}/${plain.side}`)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);const st=await state();if(st.hover===b.id&&st.freeGhost&&!st.freeGhost.door){spot=b;break;}}
+ const top=await dockTop();for(const b of (await state()).bays.filter(b=>b.floor===2&&b.x>150&&b.x<1450&&b.y>100&&b.y<top&&`${b.part}/${b.side}`!==`${plain.part}/${plain.side}`)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);const st=await state();if(st.hover===b.id&&st.freeGhost&&!st.freeGhost.door){spot=b;break;}}
  assert.ok(spot,'a spot for a manual window');await page.mouse.click(spot.x,spot.y);
  await until(async()=>((await sculpt()).studio.freeOpenings?.length??0)>before,'manual window placed');
  const manual=(await sculpt()).studio.freeOpenings.at(-1),filled=await expanded();
@@ -114,7 +115,7 @@ try{
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await settle();
  await page.screenshot({path:`output/city-studio-rhythm-rules-manual${suffix}.png`});
  // 7. Keep that wall manual from the rules panel (walls scope acts on the selection directly).
- await page.getByRole('button',{name:'Rhythm',exact:true}).click();
+ await openRhythm(page);
  await group.getByRole('button',{name:'Keep wall manual',exact:true}).click();
  const target=await pickWall();assert.ok(target);
  await page.mouse.click(target.x,target.y);

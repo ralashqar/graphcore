@@ -1,10 +1,11 @@
 // Studio camera inside a neighbouring building (docs/city-studio-game-ux.md, "Camera clearance"). The canvas used
 // to show an eye-level wall close-up that looked like a stale frame: the Front/orbit presets put the camera up to
 // 1.25 plot sizes from the plot, inside a neighbouring demo building that streams in a few seconds after the studio
-// opens. Open the test plot N times, use the unified-facade test's steps (Openings → Windows → Front view), and check
+// opens. Open the test plot N times, use the unified-facade test's steps (Paint → Openings → Windows → Front view), and check
 // that no view ray from the rendered camera hits another property's building within a few metres, and that the
 // canvas still follows view changes. Needs a running dev server (CITY_TEST_ORIGIN). CITY_REPEAT sets the loop count.
 import {chromium} from 'playwright';
+import {openings} from './city-studio-ui.mjs';
 import sharp from 'sharp';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180',backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const repeat=Number(process.env.CITY_REPEAT??10);
@@ -49,7 +50,7 @@ try{
   await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000}).catch(()=>{});
   await page.waitForTimeout(2500);
   const open=await blocked(page);
-  await page.keyboard.press('4');await page.getByRole('button',{name:'Windows',exact:true}).click();
+  await openings(page,'Windows');
   await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(2800);
   const front=await blocked(page);
   // Neighbours keep arriving as their recipes finish preparing; look again once they have.

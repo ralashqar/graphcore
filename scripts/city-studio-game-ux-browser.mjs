@@ -1,6 +1,7 @@
-// Tool belt, storey rail, hotkeys and context card for the game-style construction studio.
+// Tool rail, storey rail, hotkeys and inspector for the game-style construction studio (docs/city-studio-ui-v2.md).
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {brush,inspectBuilding,inspector,openRhythm,openings,rail as railTool,visibleBays} from './city-studio-ui.mjs';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 try{
  const page=await browser.newPage({viewport:{width:1600,height:950}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -13,13 +14,13 @@ try{
  const state=()=>page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio||'{}'));
  const floorIs=n=>page.waitForFunction(n=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).floor===n,n,{timeout:10000});
  const belt=page.getByRole('navigation',{name:'Building tools'});
- for(const name of ['Build','Roof','Paint','Openings','Decorate','Garden','Rooms','Furniture'])await belt.getByRole('button',{name,exact:true}).waitFor();
- const dock=await page.locator('.studio-dock').boundingBox();assert.ok(dock&&dock.width>600,`build dock keeps its width (${dock?.width})`);await page.screenshot({path:'output/city-studio-build.png'});
- // Number keys pick tools; the belt reflects the choice.
+ for(const name of ['Select','Build','Paint','Erase','Roof','Garden','Rooms','Furnish'])await belt.getByRole('button',{name,exact:true}).waitFor();
+ assert.ok(await inspector(page).isVisible(),'the inspector sits on the right');await page.screenshot({path:'output/city-studio-build.png'});
+ // Letter keys pick tools; the rail reflects the choice.
  await page.locator('canvas').click({position:{x:40,y:40},button:'middle'}).catch(()=>{});
- await page.keyboard.press('3');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Surfaces');
+ await page.keyboard.press('p');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Surfaces');
  assert.equal(await belt.getByRole('button',{name:'Paint',exact:true}).getAttribute('aria-pressed'),'true');
- await page.keyboard.press('7');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Rooms');
+ await page.keyboard.press('i');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Rooms');
  // Storey rail is shared by every tool and follows PageUp/PageDown.
  const rail=page.getByRole('complementary',{name:'Storeys'});
  await rail.getByRole('button',{name:'Floor 2',exact:true}).click();await floorIs(1);
@@ -27,15 +28,15 @@ try{
  await page.keyboard.press('PageUp');await page.waitForTimeout(300);assert.equal((await state()).floor,2,'rail stops at the top storey');
  await page.keyboard.press('PageDown');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).floor===1);
  assert.equal(await rail.getByRole('button',{name:'This floor view'}).getAttribute('aria-pressed'),'true','interior tools isolate the storey');
- await page.keyboard.press('1');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Shape');
+ await page.keyboard.press('v');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Shape');
  await rail.getByRole('button',{name:'Floor 1',exact:true}).click();await floorIs(0);
- // Selecting a part opens the floating context card with its actions.
+ // Selecting a part shows its actions in the inspector.
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(300);
  const box=await page.locator('canvas').boundingBox(),s=await state(),bay=(await page.locator('canvas').evaluate(c=>JSON.parse(c.dataset.cityStudio).bays))[0];
  assert.ok(bay&&box&&s,'bays are exposed');
  await page.mouse.click(bay.x,bay.y);
- await page.getByRole('button',{name:'Duplicate part'}).waitFor({timeout:15000});
- assert.ok(await page.locator('.city-studio.is-floating .studio-selection').isVisible(),'context card floats above the part');
+ await inspector(page).getByRole('button',{name:'Duplicate part'}).waitFor({timeout:15000});
+ assert.deepEqual(await page.getByRole('navigation',{name:'Selection path'}).getByRole('button').allTextContents(),['Building','Main part'],'the breadcrumb names the part');
  // Height handle follows the pointer on the building and snaps to storeys, showing live measurements.
  const spans=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.find(v=>v.id==='main').spanFloors;});
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(400);
@@ -58,16 +59,16 @@ try{
  await page.screenshot({path:'output/city-studio-rotate.png'});
  // Place where you click: drawing a block over the roof starts on the storey above.
  await page.waitForFunction(()=>{const d=JSON.parse(document.querySelector('canvas').dataset.cityStudio);return !d.busy&&!document.querySelector('.studio-preparing');},null,{timeout:30000});
- await page.getByRole('button',{name:'Block',exact:true}).click();await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).tool==='block',null,{timeout:5000});
+ await railTool(page,'Build');await page.getByRole('button',{name:'Box',exact:true}).click();await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).tool==='block',null,{timeout:5000});
  await page.mouse.move(move.x,move.y+30);await page.mouse.down();for(let i=1;i<=8;i++){await page.mouse.move(move.x+i*6,move.y+30+i*5);await page.waitForTimeout(30);}await page.mouse.up();
  await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.length===2;},null,{timeout:15000});
  const stacked=(await saved()).volumes.find(v=>v.id!=='main');assert.equal(stacked.startFloor,3,`new block sits on the roof (storey ${stacked.startFloor+1})`);
  await page.screenshot({path:'output/city-studio-stacked.png'});
  await page.keyboard.press('Control+z');await page.waitForFunction(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.volumes.length===1;},null,{timeout:15000});
  // Paint answers back: one click on a tile spawns a paint splash burst.
- await page.keyboard.press('3');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Surfaces');
+ await brush(page,'Material');await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).category==='Surfaces');
  await page.getByRole('button',{name:'Brick',exact:true}).click();await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(500);
- let tile=null;for(const b of (await state()).bays.filter(b=>b.x>200&&b.x<1400&&b.y>120&&b.y<680)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover===b.id){tile=b;break;}}
+ let tile=null;for(const b of await visibleBays(page)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover===b.id){tile=b;break;}}
  assert.ok(tile,'a visible tile to paint');await page.mouse.click(tile.x,tile.y);
  await page.waitForFunction(()=>JSON.parse(document.querySelector('canvas').dataset.cityStudio).bursts>0,null,{timeout:10000});
  await page.screenshot({path:'output/city-studio-paint-burst.png'});
@@ -82,9 +83,9 @@ try{
  await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.surfaces.length>=n;},painted,{timeout:15000});
  await page.keyboard.press('c');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({timeout:5000});await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'Quick paint'}).waitFor({state:'detached',timeout:5000});
  // Arcade: Front view shows the clean north wall straight on; drag along its ground floor.
- await page.keyboard.press('4');await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Arcade',exact:true}).click();
+ await openings(page,'Freeform');await page.getByRole('button',{name:'Cut Arcade',exact:true}).click();
  await page.getByRole('button',{name:'Front view',exact:true}).click();await page.waitForTimeout(500);
- const north=(await state()).bays.filter(b=>b.part==='main'&&b.side==='north'&&b.floor===0&&b.x>60&&b.x<1540&&b.y>80&&b.y<660).sort((p,q)=>p.x-q.x);
+ const north=(await visibleBays(page,b=>b.part==='main'&&b.side==='north'&&b.floor===0)).sort((p,q)=>p.x-q.x);
  assert.ok(north.length>=2,'ground-floor bays of the front wall are on screen');
  const from=north[0],to=north.at(-1),free=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.freeOpenings??[];});
  await page.mouse.move(from.x,from.y);await page.mouse.down();for(let i=1;i<=12;i++){await page.mouse.move(from.x+(to.x-from.x)*i/12,from.y);await page.waitForTimeout(40);}
@@ -98,7 +99,7 @@ try{
  // Facade rhythm: pick a style, shuffle it, keep one wall plain, unpack another for editing.
  const sculpt=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt;});
  const until=(fn,arg)=>page.waitForFunction(fn,arg,{timeout:15000});
- await page.getByRole('button',{name:'Rhythm',exact:true}).click();
+ await inspectBuilding(page);await openRhythm(page);
  await page.getByRole('group',{name:'Facade rhythm'}).getByRole('button',{name:'Townhouse'}).click();
  await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm?.style==='townhouse';});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);
@@ -109,7 +110,7 @@ try{
  await page.getByRole('button',{name:'Lock ground',exact:true}).click();
  await until(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots.find(p=>p.owner).draft.sculpt.studio.facadeRhythm.locks??[]).includes('ground');});
  const freeCount=async()=>((await sculpt()).studio.freeOpenings??[]).length;
- const sides=async()=>{const seen=new Map(),dockTop=(await page.locator('.studio-dock').boundingBox()).y-16;for(const b of (await state()).bays.filter(b=>b.part==='main'&&b.x>80&&b.x<1520&&b.y>80&&b.y<Math.min(600,dockTop))){if(seen.has(b.side))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover?.startsWith(`main/${b.side}/`))seen.set(b.side,b);}return [...seen.values()];};
+ const sides=async()=>{const seen=new Map();for(const b of await visibleBays(page,b=>b.part==='main')){if(seen.has(b.side))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(180);if((await state()).hover?.startsWith(`main/${b.side}/`))seen.set(b.side,b);}return [...seen.values()];};
  await page.getByRole('button',{name:'Unpack a wall',exact:true}).click();await page.waitForTimeout(300);
  let unpacked=null;
  for(let turn=0;turn<4&&!unpacked;turn++){
@@ -129,5 +130,5 @@ try{
  await page.getByRole('button',{name:'Turn sound on'}).click();
  await page.screenshot({path:'output/city-studio-game-ux.png'});
  assert.deepEqual(errors,[]);
- console.log('Studio game UX: tool belt, number keys, storey rail with PageUp/PageDown, walls view, floating context card, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring, one-step arcade, facade rhythm style/shuffle/lock/plain/unpack and remembered mute passed.');
+ console.log('Studio game UX: tool rail, letter keys, storey rail with PageUp/PageDown, walls view, inspector breadcrumb, world-space height handle with live measurement, one-step undo, paint burst, free rotation, roof stacking, quick paint ring, one-step arcade, facade rhythm style/shuffle/lock/plain/unpack and remembered mute passed.');
 }finally{await browser.close();}

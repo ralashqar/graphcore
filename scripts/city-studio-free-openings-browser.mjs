@@ -1,6 +1,7 @@
 // Free openings spike: a studio building whose front face is a generated wall with real holes.
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {brush,brushSize,onCanvas,openings} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
 try{
@@ -56,8 +57,8 @@ try{
  const free=()=>page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeOpenings??[];});
  const before=(await free()).length;
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await page.waitForTimeout(800);
- await page.keyboard.press('4');await page.getByRole('button',{name:'Freeform',exact:true}).click();await page.getByRole('button',{name:'Cut Arch',exact:true}).click();
- let spot=null;for(const b of (await studio()).bays.filter(b=>b.floor===2&&b.x>200&&b.x<1400&&b.y>120&&b.y<650)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);const st=await studio();if(st.freeGhost&&!st.freeGhost.door){spot=b;break;}}
+ await openings(page,'Freeform');await page.getByRole('button',{name:'Cut Arch',exact:true}).click();
+ let spot=null;for(const b of (await studio()).bays.filter(b=>b.floor===2&&b.x>200&&b.x<1400&&b.y>120&&b.y<650)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);const st=await studio();if(st.freeGhost&&!st.freeGhost.door){spot=b;break;}}
  assert.ok(spot,'a wall spot shows the arch ghost');await page.screenshot({path:`output/city-studio-free-openings-ghost${suffix}.png`});
  await page.mouse.click(spot.x,spot.y);await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeOpenings??[]).length===n+1;},before,{timeout:15000});
  const added=(await free()).at(-1);assert.equal(added.shape,'arch');
@@ -69,8 +70,8 @@ try{
  // One undo returns the moved opening to where it was cut; then Remove takes it out.
  await page.keyboard.press('Control+z');await page.waitForFunction(([id,u])=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));const o=(JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeOpenings??[]).find(o=>o.id===id);return o&&Math.abs(o.u-u)<.001;},[added.id,added.u],{timeout:15000});
  await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:30000});await page.waitForTimeout(400);
- await page.getByRole('button',{name:'Remove free opening',exact:true}).click();await page.waitForTimeout(500);await page.mouse.click(spot.x,spot.y);
+ await brush(page,'Openings',{erase:true});await brushSize(page,'Tile');await page.waitForTimeout(500);await page.mouse.move(spot.x,spot.y);await page.waitForTimeout(200);await page.mouse.click(spot.x,spot.y);
  await page.waitForFunction(n=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return (JSON.parse(localStorage.getItem(k)).plots[0].draft.sculpt.studio.freeOpenings??[]).length===n;},before,{timeout:15000});
  assert.deepEqual(errors.filter(e=>!/favicon|ResizeObserver/.test(e)),[]);
- console.log(`Free openings (${backend}): ${faces.faces.map(f=>`${f.id} ${f.groups.length} groups/${f.triangles} tris`).join(', ')}; resolveSculpt ${faces.ms.toFixed(1)} ms in page; freeform tray ghost, cut, drag and remove passed.`);
+ console.log(`Free openings (${backend}): ${faces.faces.map(f=>`${f.id} ${f.groups.length} groups/${f.triangles} tris`).join(', ')}; resolveSculpt ${faces.ms.toFixed(1)} ms in page; freeform brush ghost, cut, drag and erase passed.`);
 }finally{await browser.close();}

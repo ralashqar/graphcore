@@ -5,6 +5,7 @@
 // default http://localhost:5180). CITY_BACKEND=webgl runs the WebGL2 fallback.
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
+import {brush,inspector,onCanvas,visibleBays} from './city-studio-ui.mjs';
 const backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',suffix=backend==='webgl'?'-webgl':'';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11']});
@@ -36,7 +37,7 @@ try{
  const key=f=>`${f.color??''}|${f.texture??''}`;
  await open();
  const base=await resolved();assert.ok(base.faces.some(f=>f.side==='curve')&&base.faces.filter(f=>f.part==='main').length>=2,`generated walls on both parts (${base.faces.map(f=>f.id)})`);
- await page.getByRole('button',{name:'Paint',exact:true}).click();
+ await brush(page,'Material');
  // Front view, then pan the building up so its ground floor clears the paint dock.
  const frontView=async()=>{await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1600);await page.mouse.move(800,420);await page.mouse.wheel(0,240);await page.waitForTimeout(300);await page.mouse.move(800,420);await page.mouse.down({button:'middle'});for(let i=1;i<=10;i++){await page.mouse.move(800,420-26*i);await page.waitForTimeout(25);}await page.mouse.up({button:'middle'});await page.waitForTimeout(900);};
  await frontView();
@@ -51,8 +52,7 @@ try{
  await page.getByRole('button',{name:'Smooth',exact:true}).click();const groundColor=await swatch(3);
  await panel.getByRole('radio',{name:'These parts'}).click();
  await until(async()=>(await state()).tool==='surface','surface tool');
- const dockTop=async()=>(await page.locator('.studio-dock').boundingBox()).y-16;
- const hoverBay=async(filter)=>{const top=await dockTop();for(const b of (await state()).bays.filter(b=>filter(b)&&b.x>80&&b.x<1520&&b.y>90&&b.y<top)){await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);if((await state()).hover===b.id)return b;}return null;};
+ const hoverBay=async(filter)=>{for(const b of (await state()).bays.filter(b=>filter(b)&&b.y>90)){if(!await onCanvas(page,b.x,b.y))continue;await page.mouse.move(b.x,b.y);await page.waitForTimeout(160);if((await state()).hover===b.id)return b;}return null;};
  const towerBay=await hoverBay(b=>b.part==='tower'&&b.floor===1);assert.ok(towerBay,'a tower wall on screen');
  await page.screenshot({path:`output/city-studio-paint-rules-pick${suffix}.png`});
  await page.mouse.click(towerBay.x,towerBay.y);
@@ -69,7 +69,7 @@ try{
  let r=await resolved();assert.deepEqual(r.inactive.filter(i=>!i.id.startsWith('generated/')),[]);
  for(const f of r.faces){assert.ok(f.paint.includes(key(plinth.finish)),`plinth on ${f.id}`);assert.ok(f.paint.includes(key({color:courseColor})),`courses on ${f.id}`);assert.equal(f.paint.includes(key({color:groundColor})),f.part==='tower',`ground floor only on the tower (${f.id})`);}
  // 4) Shift+Band on the front: becomes a building-wide band rule anchored to its floor.
- const s=await state(),north=s.bays.filter(b=>b.part==='main'&&b.side==='north'),row=f=>north.filter(b=>b.floor===f).sort((a,b)=>a.x-b.x),g=row(0),u=row(1);
+ const north=await visibleBays(page,b=>b.part==='main'&&b.side==='north'),row=f=>north.filter(b=>b.floor===f).sort((a,b)=>a.x-b.x),g=row(0),u=row(1);
  assert.ok(g.length>=2&&u.length>=2,'front bays on screen');
  const design=await page.evaluate(()=>{const k=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-'));return JSON.parse(localStorage.getItem(k)).plots[0].draft.design;});
  const gh=design.groundHeight,uh=design.upperHeight??3,yAt=h=>g[0].y+(h-gh/2)*(u[0].y-g[0].y)/((gh+uh/2)-gh/2);
@@ -107,14 +107,14 @@ try{
  const plinthRow=panel.locator('.paint-rule-pick').first();await plinthRow.click();
  const height=panel.getByRole('spinbutton',{name:'Band height'});await height.fill('1.2');
  await until(async()=>(await rules())[0].band.height===1.2,'plinth height 1.2');
- await settle();await nudge();await page.locator('.studio-dock').screenshot({path:`output/city-studio-paint-rules-edit${suffix}.png`});
+ await settle();await nudge();await inspector(page).screenshot({path:`output/city-studio-paint-rules-edit${suffix}.png`});
  await page.getByRole('button',{name:'Undo'}).click();await until(async()=>(await rules())[0].band.height===.9,'undo height');
  await plinthRow.click();
  // Drag-to-reorder: drop the tower ground rule on the first row.
  const tower=panel.locator('.paint-rule-list li').nth(1);await tower.dragTo(panel.locator('.paint-rule-list li').nth(0));
  await until(async()=>(await rules())[0].scope?.parts?.[0]==='tower','drag reorder');const dragged=true;
  await settle();
- await page.locator('.studio-dock').screenshot({path:`output/city-studio-paint-rules-panel${suffix}.png`});
+ await inspector(page).screenshot({path:`output/city-studio-paint-rules-panel${suffix}.png`});
  await page.getByRole('button',{name:'Orbit view',exact:true}).click();await settle();await page.mouse.move(20,300);await page.waitForTimeout(800);
  await page.screenshot({path:`output/city-studio-paint-rules-orbit${suffix}.png`});
  // 8) Reload: rules and regions persist and render.
@@ -122,7 +122,7 @@ try{
  assert.deepEqual(after.studio.paintRules,saved.studio.paintRules,'rules survive save and reload');assert.deepEqual(after.studio.paintRegions,saved.studio.paintRegions);
  await frontView();await page.mouse.move(20,300);await page.waitForTimeout(800);
  await page.screenshot({path:`output/city-studio-paint-rules-reload${suffix}.png`});
- await page.getByRole('button',{name:'Paint',exact:true}).click();await page.getByRole('button',{name:/^Paint rules/}).click();await panel.waitFor({timeout:5000});
+ await brush(page,'Material');await page.getByRole('button',{name:/^Paint rules/}).click();await panel.waitFor({timeout:5000});
  await frontView();await page.mouse.move(20,300);await settle();
  await page.screenshot({path:`output/city-studio-paint-rules${suffix}.png`});
  // The selected part rule highlights its scope (the tower) and shows its editor.
