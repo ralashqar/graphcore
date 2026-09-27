@@ -4,7 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {studioModules} from './cityStudioCatalog.ts';
+import {STUDIO_MODULES_V5,studioModules} from './cityStudioCatalog.ts';
+// Kit v5's own modules (the studio's v5 catalogue also lists the Tokyo pack, tested in cityStudioTokyoKit.test.ts).
+const kitModules=(v:2|3|4|5)=>v===5?STUDIO_MODULES_V5:studioModules(v);
 
 type Gltf={scenes:{nodes:number[]}[];scene?:number;nodes:{name?:string;children?:number[];mesh?:number}[];meshes:{primitives:{material?:number}[]}[];materials:{name:string}[]};
 const folder=(v:number)=>new URL(`../../public/city/synarc-kit/v${v}/`,import.meta.url);
@@ -31,13 +33,13 @@ for(const version of [2,3,4,5] as const){
   assert.equal(manifest.sourceSha256,createHash('sha256').update(readFileSync(new URL('kit.glb',folder(version)))).digest('hex'),'kit.glb changed: rebuild with scripts/build-city-kit-medium.py');
   assert.equal(manifest.glbSha256,createHash('sha256').update(readFileSync(new URL('kit-medium.glb',folder(version)))).digest('hex'));
   const full=modules(readGlb(new URL('kit.glb',folder(version)))),medium=modules(readGlb(new URL('kit-medium.glb',folder(version))));
-  assert.equal(medium.size,studioModules(version).length);
+  assert.equal(medium.size,kitModules(version).length);
   assert.deepEqual([...medium.keys()].sort(),[...full.keys()].sort());
   // A medium module never gains a channel (every channel keeps its instance colour and material).
   for(const [id,channels] of medium)for(const c of channels)assert.ok(full.get(id)!.has(c),`${id}: ${c}`);
   // Modules that are drawn beyond 120 m keep geometry; the kit as a whole is less than 60 % of the full triangles.
   // (v2's `sill` root is exported as `sill.014` in both files, as the runtime reads it.)
-  for(const part of studioModules(version))if(part.minDetail!=='near'&&full.get(part.id)?.size)assert.ok(medium.get(part.id)!.size>0,part.id);
+  for(const part of kitModules(version))if(part.minDetail!=='near'&&full.get(part.id)?.size)assert.ok(medium.get(part.id)!.size>0,part.id);
   assert.ok(manifest.triangles.medium<.6*manifest.triangles.full);
  });
 }

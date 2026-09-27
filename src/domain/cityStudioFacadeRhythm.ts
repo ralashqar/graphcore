@@ -3,7 +3,7 @@
  *
  * Recipe: optional `studio.facadeRhythm` (local plots only; business/profile validators reject it):
  *  {version:1|2, seed, style, density?, variety?, trims?, manual?, bay?, locks?, layerSeeds?, layers?, rules?}
- *   style      townhouse | shopfront | civic | cottage | warehouse | loft (see RHYTHM_STYLES). A style is a
+ *   style      townhouse | shopfront | civic | cottage | warehouse | loft | tokyo (see RHYTHM_STYLES). A style is a
  *              PRESET: it fills every layer's pool/coverage/pattern/uniformity (see rhythmLayerPreset);
  *              explicit `layers` fields override the preset. Setting a style on a scope clears the layer
  *              overrides accumulated below it ("apply preset").
@@ -61,7 +61,8 @@
  *     manual free openings so they can be edited one by one.
  */
 import {FREE_OPENING,faceMaxOpeningWidth,faceU,freeOpeningIsDoor,isFrame,studioBayFaceSpans,studioFaceFrame,studioKitModuleOpenings,validateFreeOpenings,type FreeOpeningShape,type FreeOpeningStyle,type StudioFaceFrame,type StudioFreeOpening} from './cityStudioFreeOpenings.ts';
-import {moduleOpeningSpec,poolModule} from './cityStudioModuleSpec.ts';
+import {MODULE_POOL_PREFIX,moduleOpeningSpec,poolModule} from './cityStudioModuleSpec.ts';
+import {studioModuleAvailable} from './cityStudioCatalog.ts';
 import {FREE_TRIM_KINDS,validateFreeTrims,type StudioFreeTrim,type TrimKind} from './cityStudioTrimParts.ts';
 import {sculptFloorBottom,validSculptSide,type SculptWallSide} from './citySculpt.ts';
 import {studioBays} from './cityStudio.ts';
@@ -69,7 +70,7 @@ import {expandBuildingVariation} from './cityBuildingVariation.ts';
 import type {StudioBay,StudioRecipe} from './cityStudioTypes.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 
-export const RHYTHM_STYLE_IDS=['townhouse','shopfront','civic','cottage','warehouse','loft'] as const;
+export const RHYTHM_STYLE_IDS=['townhouse','shopfront','civic','cottage','warehouse','loft','tokyo'] as const;
 /** Seeded layers (shuffle/lock). */
 export const RHYTHM_LAYERS=['ground','upper','attic','trims'] as const;
 /** Layers with pool settings (version 2). */
@@ -96,7 +97,10 @@ type Role='door'|'ground'|'side'|'piano'|'upper'|'attic';
 type Slot={shape:FreeOpeningShape;w:number;h:number;sill:number;head?:number;panels?:number;alt?:FreeOpeningShape[];style?:FreeOpeningStyle;glazing?:boolean;fill?:boolean};
 type Spec={label:string;blurb:string;bay:number;corner:number;pier:number;symmetric:boolean;style:FreeOpeningStyle;
  door:Slot&{at:number[];second?:number};ground:Slot&{kind:'windows'|'shop'|'arcade'};side:Slot;piano?:Slot;upper:Slot&{blind?:number;single?:Slot};attic?:Slot;
- trims:Record<'simple'|'rich',Partial<Record<Role,TrimKind[][]>>>};
+ trims:Record<'simple'|'rich',Partial<Record<Role,TrimKind[][]>>>;
+ /** Kit pieces the style's preset pools draw (main first). Where the building's kit lacks a piece or the column
+  *  cannot take it, the cell falls back to the style's own opening shape (docs/city-tokyo-kit.md). */
+ modules?:Partial<Record<'ground'|'upper'|'attic',[string,number][]>>};
 /** Style catalogue. Heights clamp to the storey; widths clamp to the column pitch minus the pier. */
 export const RHYTHM_SPECS:Record<RhythmStyle,Spec>={
  townhouse:{label:'Townhouse',blurb:'Symmetric bays, centred arched door, tall piano-nobile windows, small attic lights.',bay:2.3,corner:.75,pier:.9,symmetric:true,style:'painted',
@@ -127,6 +131,13 @@ export const RHYTHM_SPECS:Record<RhythmStyle,Spec>={
   door:{shape:'rect',w:1.4,h:2.6,sill:0,style:'painted',glazing:true,at:[.5,0,1]},ground:{kind:'shop',shape:'rect',w:3.4,h:3,sill:.45,head:.5,fill:true,alt:['rect']},side:{shape:'rect',w:1.2,h:1.9,sill:.8},
   upper:{shape:'rect',w:.85,h:2.1,sill:.6,head:.5,panels:3,alt:['arch'],single:{shape:'rect',w:1.3,h:2.1,sill:.6,head:.5}},
   trims:{simple:{door:[['canopy']],side:[['lintel']],upper:[['lintel','keystone']]},rich:{door:[['canopy','lamps']],ground:[['lintel']],side:[['lintel','sill-brackets']],upper:[['lintel','keystone','sill-brackets']]}}},
+ tokyo:{label:'Tokyo',blurb:'Narrow mixed-use: aluminium sashes, AC units and balconies over glazed or shuttered shops (Tokyo kit).',bay:2.4,corner:.35,pier:.4,symmetric:false,style:'painted',
+  door:{shape:'rect',w:1,h:2.2,sill:0,style:'painted',glazing:true,at:[0,1]},ground:{kind:'shop',shape:'rect',w:2.2,h:2.5,sill:.3,head:.4,fill:true},side:{shape:'rect',w:.9,h:1.1,sill:1.1},
+  upper:{shape:'rect',w:1.5,h:1.45,sill:.85},attic:{shape:'rect',w:1.7,h:1.25,sill:.9},
+  trims:{simple:{door:[['canopy']]},rich:{door:[['canopy','lamps']],upper:[['sill-brackets']]}},
+  modules:{ground:[['window-tokyo-shop-glass',1],['window-tokyo-shop-shutter-closed',.8],['window-tokyo-shop-lattice',.6]],
+   upper:[['window-tokyo-sash',1],['window-tokyo-sash-ac',1],['window-tokyo-balcony-rail',.6],['window-tokyo-grille',.35]],
+   attic:[['window-tokyo-strip',1],['window-tokyo-sash-ac',.5]]}},
 };
 export const RHYTHM_STYLES=RHYTHM_STYLE_IDS.map(id=>({id,label:RHYTHM_SPECS[id].label,blurb:RHYTHM_SPECS[id].blurb}));
 /** Opening types for the pool editor: label and an icon outline (shape, relative width/height, panels). */
@@ -248,6 +259,9 @@ export function rhythmLayerPreset(style:RhythmStyle,variety:number=RHYTHM.defaul
   for(const options of Object.values(spec.trims.simple))for(const kinds of options??[])for(const k of kinds)addEntry(pool,k,.75);
   return {pool,coverage:1,spacing:0,pattern:'aligned',uniformity:1};
  }
+ // Kit-piece styles: the pool is the style's kit pieces; variety spreads the weight over the secondary pieces.
+ const kit=layer==='corners'?undefined:spec.modules?.[layer==='attic'&&!spec.modules.attic?'upper':layer];
+ if(kit){kit.forEach(([id,w],i)=>addEntry(pool,MODULE_POOL_PREFIX+id,i?w*(.25+variety):1));return {pool,coverage:1,spacing:0,pattern:layer==='ground'?'independent':'aligned',uniformity:round2(Math.max(0,.55-variety*.6))};}
  if(layer==='ground'){const s=spec.ground;addEntry(pool,s.kind==='shop'?'shop':typeOfShape(s.shape),1);alt(s,s.kind==='shop'?'rect':s.shape);}
  else{
   const s=layer==='attic'&&spec.attic?spec.attic:spec.upper,main=s.panels===2?'paired':s.panels===3?'triple':typeOfShape(s.shape);addEntry(pool,main,1);alt(s,s.shape);
@@ -478,8 +492,9 @@ export function expandFacadeRhythm(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'g
       const pk=L.pattern==='aligned'?`c${c}`:L.pattern==='groups'?`g${Math.floor(c/2)}/${Math.floor(floor/2)}`:L.pattern==='alternating'?`c${c}/${floor%2}`:`c${c}/${floor}`;
       const spaced=c%(L.spacing+1)===0,cov=CR('coverage',pk),pick=()=>{const type=CR('uniform',pk)<L.uniformity?favourite(L.pool,CB('dominant')):choose(L.pool,CR('pick',pk));
        // Kit pieces from the pool: the tile stands on the storey floor, centred on its column.
-       const kit=type&&poolModule(type.id);if(kit){const p=placeModule(kit,i,floor,x,lay,Math.min(lay.room,faceMaxOpeningWidth(f,x)),floorY,floorH,f.height);return p&&inside(list,x-p.width/2+RHYTHM.pad,x+p.width/2-RHYTHM.pad)?{...p,trimKey:`${c}/${floor}`} as Placed:null;}
-       const t=type&&typeSlot(type.id,role,cspec);if(!t)return null;
+       const kit=type&&poolModule(type.id);if(kit){const p=studioModuleAvailable(r.studio.catalogue,kit)&&!(cspec.modules&&role==='side')?placeModule(kit,i,floor,x,lay,Math.min(lay.room,faceMaxOpeningWidth(f,x)),floorY,floorH,f.height):null;if(p&&inside(list,x-p.width/2+RHYTHM.pad,x+p.width/2-RHYTHM.pad))return {...p,trimKey:`${c}/${floor}`} as Placed;if(!cspec.modules)return null;}
+       // Kit-piece styles fall back to their own opening shape where the piece is missing or does not fit.
+       const t=type&&typeSlot(kit?(floor===0&&street?'shop':'rect'):type.id,role,cspec);if(!t)return null;
        const p=place(t.slot,t.role,cspec,t.shape,i,floor,x,Math.min(lay.room,faceMaxOpeningWidth(f,x)),floorY,floorH,f.height);if(!p||!inside(list,x-p.width/2,x+p.width/2))return null;
        return {...p,trimRole:t.role==='door'?'door':role==='attic'&&!cspec.attic?'upper':role,trimStyle:cs.style,trimSet:cs,trimKey:`${c}/${floor}`} as Placed;};
       if(!spaced)return;

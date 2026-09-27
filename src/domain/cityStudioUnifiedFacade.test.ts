@@ -177,7 +177,9 @@ test('conversion keeps New York presets looking the same: every kit tile becomes
 
 test('conversion of the studio examples: parity except the one tile across a round seam',()=>{
  for(let i=0;i<STUDIO_EXAMPLES.length;i++){
-  const draft=studioExample(initialLandDraft(plot),i,24),r=draft.sculpt as StudioRecipe,before=resolveSculpt(r,draft.design).studio!,out=convertToUnifiedFacade(r,draft.design);
+  const draft=studioExample(initialLandDraft(plot),i,24),r=draft.sculpt as StudioRecipe;
+  if(r.studio.facade==='unified')continue;// the Tokyo starting ideas are unified already
+  const before=resolveSculpt(r,draft.design).studio!,out=convertToUnifiedFacade(r,draft.design);
   assert.ok(!('reason' in out),STUDIO_EXAMPLES[i].name);const after=resolveSculpt(out.recipe,draft.design).studio!,b=kitTiles(before),a=kitTiles(after);
   assert.deepEqual(after.inactive.map(x=>x.id).sort(),before.inactive.map(x=>x.id).sort(),`${STUDIO_EXAMPLES[i].name}: nothing new is inactive`);
   if(r.volumes.some(v=>v.kind==='ellipse'))assert.ok(a.length>=b.length-2,`${STUDIO_EXAMPLES[i].name}: curved walls keep their tiles`);

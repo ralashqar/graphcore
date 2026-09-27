@@ -20,7 +20,9 @@ export type StudioKitDetail='full'|'medium';
 const mediumParam=typeof window!=='undefined'?new URLSearchParams(window.location.search).get('cityGwKitMedium'):null;
 export const KIT_MEDIUM=mediumParam==='0'?null:{enter:Number(mediumParam)||135,leave:(Number(mediumParam)||135)*.9} as const;
 const pending=new Map<string,Promise<Map<string,Piece[]>>>();
-export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full'){const id=`${version}/${detail}`,previous=pending.get(id);if(previous)return previous;const loading=new GLTFLoader().loadAsync(`/city/synarc-kit/v${version}/${detail==='medium'?'kit-medium':'kit'}.glb`).then(gltf=>{
+/** The Tokyo pack (docs/city-tokyo-kit.md) is served beside kit v5; its roots are plain module ids. */
+const TOKYO_KIT={full:'/city/tokyo-kit/v1/kit.glb',medium:'/city/tokyo-kit/v1/kit-medium.glb'} as const;
+function parseStudioKit(url:string){return new GLTFLoader().loadAsync(url).then(gltf=>{
  const pack=new Map<string,Piece[]>();gltf.scene.updateMatrixWorld(true);
  for(const root of gltf.scene.children){const groups=new Map<string,BufferGeometry[]>();root.traverse(child=>{
   if(!(child instanceof Mesh)||Array.isArray(child.material))return;
@@ -31,6 +33,12 @@ export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full'){c
  });
  pack.set(String(root.userData.name??root.name).replace(/^v[345]\//,''),[...groups].flatMap(([channel,geometries])=>{const geometry=geometries.length===1?geometries[0]:mergeGeometries(geometries);if(!geometry)return geometries.map(geometry=>({geometry,channel}));if(geometries.length>1)geometries.forEach(g=>g.dispose());return [{geometry,channel}];}));}
  gltf.scene.traverse(child=>{if(child instanceof Mesh){child.geometry.dispose();(Array.isArray(child.material)?child.material:[child.material]).forEach((m:Material)=>m.dispose());}});
+ return pack;
+});}
+export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full'){const id=`${version}/${detail}`,previous=pending.get(id);if(previous)return previous;
+ // Kit v5 also loads the Tokyo pack: the studio's v5 catalogue (studioModules(5)) includes its modules.
+ const loading=Promise.all([parseStudioKit(`/city/synarc-kit/v${version}/${detail==='medium'?'kit-medium':'kit'}.glb`),version===5?parseStudioKit(TOKYO_KIT[detail]):null]).then(([pack,tokyo])=>{
+ if(tokyo)for(const [module,pieces] of tokyo)pack.set(module,pieces);
  if(pack.size!==studioModules(version).length||!pack.has('wall-full')||version>=3&&!pack.has('stair-top-threshold'))throw Error('The architectural kit is incomplete.');return pack;
 }).catch(e=>{pending.delete(id);throw e;});pending.set(id,loading);return loading;}
 

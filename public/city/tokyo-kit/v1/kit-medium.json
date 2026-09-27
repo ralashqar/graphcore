@@ -1,0 +1,269 @@
+{
+ "rules": "kit-medium-2",
+ "version": "tokyo",
+ "source": "kit.glb",
+ "sourceSha256": "3fb197aa673af04e4e253ace4b03224f02b8996dca4dee941bf7eba197d70181",
+ "glbSha256": "ad1ad37d7b2501fc17d3f0f7b0f4629aa858f3d4c38a4ed021d0ef201418380b",
+ "triangles": {
+  "full": 9852,
+  "medium": 7494
+ },
+ "modules": [
+  {
+   "id": "door-tokyo-noren",
+   "full": 504,
+   "medium": 414,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 45
+  },
+  {
+   "id": "door-tokyo-shop-shutter",
+   "full": 272,
+   "medium": 178,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 36
+  },
+  {
+   "id": "door-tokyo-sliding",
+   "full": 264,
+   "medium": 240,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 23
+  },
+  {
+   "id": "door-tokyo-stair",
+   "full": 176,
+   "medium": 118,
+   "unbevelled": 1,
+   "dropped": 1,
+   "facesRemoved": 12
+  },
+  {
+   "id": "tokyo-awning",
+   "full": 120,
+   "medium": 82,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 5
+  },
+  {
+   "id": "tokyo-fascia",
+   "full": 260,
+   "medium": 166,
+   "unbevelled": 1,
+   "dropped": 1,
+   "facesRemoved": 25
+  },
+  {
+   "id": "tokyo-hood",
+   "full": 56,
+   "medium": 20,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "tokyo-roof-ac-cluster",
+   "full": 472,
+   "medium": 340,
+   "unbevelled": 3,
+   "dropped": 0,
+   "facesRemoved": 33
+  },
+  {
+   "id": "tokyo-roof-antenna",
+   "full": 336,
+   "medium": 316,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 4
+  },
+  {
+   "id": "tokyo-roof-billboard",
+   "full": 264,
+   "medium": 205,
+   "unbevelled": 0,
+   "dropped": 3,
+   "facesRemoved": 13
+  },
+  {
+   "id": "tokyo-roof-laundry",
+   "full": 188,
+   "medium": 172,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 16
+  },
+  {
+   "id": "tokyo-roof-railing",
+   "full": 132,
+   "medium": 124,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "tokyo-roof-stairhouse",
+   "full": 312,
+   "medium": 178,
+   "unbevelled": 3,
+   "dropped": 1,
+   "facesRemoved": 20
+  },
+  {
+   "id": "tokyo-roof-water-tank",
+   "full": 468,
+   "medium": 360,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 54
+  },
+  {
+   "id": "wall-tokyo-ac",
+   "full": 252,
+   "medium": 185,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 28
+  },
+  {
+   "id": "wall-tokyo-lantern",
+   "full": 328,
+   "medium": 298,
+   "unbevelled": 0,
+   "dropped": 2,
+   "facesRemoved": 3
+  },
+  {
+   "id": "wall-tokyo-louvre",
+   "full": 204,
+   "medium": 170,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 33
+  },
+  {
+   "id": "wall-tokyo-pipes",
+   "full": 260,
+   "medium": 140,
+   "unbevelled": 3,
+   "dropped": 0,
+   "facesRemoved": 16
+  },
+  {
+   "id": "wall-tokyo-sign",
+   "full": 440,
+   "medium": 326,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 41
+  },
+  {
+   "id": "wall-tokyo-sign-flat",
+   "full": 272,
+   "medium": 202,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 19
+  },
+  {
+   "id": "wall-tokyo-tile",
+   "full": 180,
+   "medium": 150,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 15
+  },
+  {
+   "id": "wall-tokyo-vending",
+   "full": 228,
+   "medium": 114,
+   "unbevelled": 3,
+   "dropped": 0,
+   "facesRemoved": 9
+  },
+  {
+   "id": "window-tokyo-balcony",
+   "full": 440,
+   "medium": 348,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 21
+  },
+  {
+   "id": "window-tokyo-balcony-rail",
+   "full": 672,
+   "medium": 514,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 59
+  },
+  {
+   "id": "window-tokyo-grille",
+   "full": 412,
+   "medium": 320,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 21
+  },
+  {
+   "id": "window-tokyo-sash",
+   "full": 284,
+   "medium": 232,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 20
+  },
+  {
+   "id": "window-tokyo-sash-ac",
+   "full": 536,
+   "medium": 394,
+   "unbevelled": 2,
+   "dropped": 3,
+   "facesRemoved": 36
+  },
+  {
+   "id": "window-tokyo-shoji",
+   "full": 520,
+   "medium": 410,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 46
+  },
+  {
+   "id": "window-tokyo-shop-glass",
+   "full": 144,
+   "medium": 130,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 14
+  },
+  {
+   "id": "window-tokyo-shop-lattice",
+   "full": 368,
+   "medium": 322,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 14
+  },
+  {
+   "id": "window-tokyo-shop-shutter-closed",
+   "full": 320,
+   "medium": 172,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 63
+  },
+  {
+   "id": "window-tokyo-strip",
+   "full": 168,
+   "medium": 154,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 14
+  }
+ ]
+}

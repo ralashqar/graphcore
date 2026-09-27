@@ -1,7 +1,7 @@
-import {STUDIO_MODULE_MAP,STUDIO_MODULES_V5} from './cityStudioCatalog.ts';
+import {STUDIO_MODULE_MAP,STUDIO_MODULES_V5,TOKYO_MODULE_IDS} from './cityStudioCatalog.ts';
 import {validSculptSide} from './citySculpt.ts';
 import {studioBays} from './cityStudio.ts';
-import {STAMP_MAP,STOREFRONT_STAMPS,faceMatches} from './cityStorefrontStamps.ts';
+import {STAMP_MAP,STOREFRONT_STAMPS,TOKYO_STAMP_IDS,faceMatches} from './cityStorefrontStamps.ts';
 import {VARIATION_LAYERS,type BuildingVariation,type VariationLayer,type VariationLayerRule,type VariationRule,type VariationDiagnostic,type ModularBuilding} from './cityVariationTypes.ts';
 import type {StudioRecipe,StudioBay,StudioAnchor} from './cityStudioTypes.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
@@ -114,7 +114,13 @@ export function validateModularBuilding(value:unknown):value is ModularBuilding{
  if(!object(value)||!keys(value,['version','template','recipe'])||value.version!==1||typeof value.template!=='string'||value.template.length>80||!object(value.recipe))return false;
  const r=value.recipe;if(!keys(r,['version','plotSize','volumes','attachments','studio'])||r.version!==5||r.plotSize!==24||!Array.isArray(r.volumes)||r.volumes.length>32||!Array.isArray(r.attachments)||r.attachments.length||!object(r.studio)||JSON.stringify(value).length>65536)return false;
  const s=r.studio;if(!keys(s,['catalogue','roofRevision','assemblyRevision','defaults','parts','surfaces','openings','assemblies','roofDetails','variation','stamps'])||s.catalogue!=='synarc-kit-5'||!s.variation||validateVariation(s.variation))return false;
- return true;
+ return !usesTokyoKit(s);
+}
+/** The Tokyo pack (modules and stamps) is local to the construction studio: business recipes never reference it. */
+export function usesTokyoKit(s:Record<string,unknown>){
+ const local=(id:unknown)=>typeof id==='string'&&(TOKYO_MODULE_IDS.has(id)||TOKYO_STAMP_IDS.has(id)),list=(v:unknown)=>Array.isArray(v)?v.filter(object):[];
+ const styles=[s.defaults,...(object(s.parts)?Object.values(s.parts):[])].filter(object);
+ return styles.some(x=>local(x.window))||list(s.openings).some(o=>local(o.module))||list(s.assemblies).some(a=>local(a.module))||list(s.roofDetails).some(d=>local(d.module))||list(s.stamps).some(x=>local(x.stamp));
 }
 export function enableBuildingVariation(input:StudioRecipe){const r=structuredClone(input);r.studio.catalogue='synarc-kit-5';r.studio.variation??=newVariation(r.studio.defaults.window);return r;}
 

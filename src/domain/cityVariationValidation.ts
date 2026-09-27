@@ -1,5 +1,6 @@
 import {validateSculpt} from './citySculpt.ts';
 import {validateStudio} from './cityStudio.ts';
+import {usesTokyoKit} from './cityBuildingVariation.ts';
 import type {StudioRecipe} from './cityStudioTypes.ts';
 const obj=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const only=(v:unknown,keys:string[])=>obj(v)&&Object.keys(v).every(k=>keys.includes(k));
@@ -17,6 +18,8 @@ export function validateVariationRecipe(value:unknown,floors:number,plotSize:24|
   if(!list(s.openings,128,v=>only(v,['id','anchor','module','span'])&&obj(v)&&id(v.id)&&anchor(v.anchor))||!list(s.surfaces,256,v=>only(v,['id','anchor','scope','channel','finish'])&&obj(v)&&id(v.id)&&anchor(v.anchor)&&finish(v.finish))||!list(s.assemblies,64,v=>only(v,['id','kind','anchors','look','variant','module','destination','flip','exit','exitKind','layout'])&&obj(v)&&id(v.id)&&list(v.anchors,64,anchor)&&(!v.exit||anchor(v.exit))&&['simple','ornate'].includes(String(v.look))&&(v.flip===undefined||typeof v.flip==='boolean')))return 'Invalid manual building details.';
   if(s.roofDetails!==undefined&&!list(s.roofDetails,16,v=>only(v,['id','partId','module','u','v','rotation'])&&obj(v)&&id(v.id)))return 'Invalid roof details.';
   if(s.stamps!==undefined&&!list(s.stamps,32,v=>only(v,['id','stamp','anchor'])&&obj(v)&&id(v.id)&&anchor(v.anchor)))return 'Invalid storefront stamps.';
+  // The Tokyo pack is local to the construction studio (allowInterior): business presets keep the shared catalogue.
+  if(!allowInterior&&usesTokyoKit(s))return 'This kit piece is not in the selected kit.';
   if(value.version===5&&value.interior!==undefined)return 'Interior data needs an interior recipe.';
   if(value.version===6){const t=value.interior;if(!only(t,['partitions','doors','stairs','openFloors','roomFinishes','furniture','floorFinish','wallColor'])||!obj(t))return 'Invalid interior preset.';
    for(const [key,fields] of Object.entries({partitions:['id','floor','a','b'],doors:['id','partitionId','u','style','hinge'],stairs:['id','floor','x','z','rotation','layout','flip'],roomFinishes:['id','floor','x','z','boundaryIds','floorFinish','wallColor','openToBelow'],furniture:['id','floor','kind','x','z','rotation']}))if(t[key]!==undefined&&!list(t[key],256,item=>only(item,fields)&&obj(item)&&id(item.id)))return 'Invalid interior details.';
