@@ -8,12 +8,13 @@
 import {useEffect,useLayoutEffect,useMemo,useRef,type ReactNode} from 'react';
 import {useFrame,useThree} from '@react-three/fiber';
 import {BufferAttribute,BufferGeometry,Group,Mesh,Sphere,Vector3,type Camera,type Material,type OrthographicCamera,type PerspectiveCamera,type Texture} from 'three';
-import {MeshBasicNodeMaterial,type MeshStandardNodeMaterial} from 'three/webgpu';
-import {abs,dot,float,mix,normalView,positionViewDirection,pow} from 'three/tsl';
+import {type MeshStandardNodeMaterial} from 'three/webgpu';
+import {seeThroughGlass,shownInTree,useOpeningStore,worldOpenings,type OpeningLevel} from './CityStudioOpeningInstances';
 import {useCityReflection} from './cityReflections';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import {warmHiddenMaterials} from './cityStudioWarmup';
 import {freeWallMaterial} from './CityStudioFreeOpeningFace';
+import {interiorShellMaterial} from './cityInteriorShellMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import type {DetailBatch,DetailMaterial,StudioDetailBatches} from '../../domain/cityStudioDetailBatches';
 
@@ -24,17 +25,8 @@ function createMaterial(m:DetailMaterial):Material{
  if(m.kind==='wall')return freeWallMaterial(m.color,m.texture as CityTextureId);
  if(m.kind==='painted'){const p=citySurfaceMaterial();p.vertexColors=true;return p;}
  if(m.kind==='glass'){const g=citySurfaceMaterial(true);g.color.set(m.color);if(m.seeThrough)seeThroughGlass(g);return g;}
- if(m.kind==='shell'){const s=new MeshBasicNodeMaterial();s.vertexColors=true;return s;}
+ if(m.kind==='shell')return interiorShellMaterial();
  const r=citySurfaceMaterial(false,m.texture as CityTextureId);r.color.set(m.color);return r;
-}
-/**
- * Real glass for free-face glazing near the camera: blended after the opaque pass without depth writes, clear
- * head-on and more reflective at grazing angles (Fresnel-weighted opacity over the shared reflective glass shading).
- * Single-sided: the glazing is built as two opposite one-sided sheets, so exactly one draws from either side.
- */
-function seeThroughGlass(g:MeshStandardNodeMaterial){
- g.transparent=true;g.depthWrite=false;g.envMapIntensity=3;
- const facing=abs(dot(normalView,positionViewDirection));g.opacityNode=mix(float(.9),float(.2),pow(facing,float(.55)));
 }
 /** Far and interior-less views keep the opaque reflective glass (same colour), swapped in without new buffers. */
 const opaqueKey=(key:string)=>`${key}|opaque`;
@@ -60,6 +52,7 @@ export function viewDistance(camera:Camera,height:number,x:number,z:number){
  const p=camera as PerspectiveCamera;return Math.hypot(p.position.x-x,p.position.z-z);
 }
 
+let blockSequence=0;
 /** Test hook (?cityStudioTest): window.__cityStudioDetailForce = 'near' | 'far' pins every unedited building. */
 const testForce=()=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('cityStudioTest')?(window as unknown as {__cityStudioDetailForce?:'near'|'far'}).__cityStudioDetailForce:undefined;
 /** `seeThrough`: near glazing may be transparent (something is behind it: interiors in view or window shells). */
@@ -77,23 +70,41 @@ export function CityStudioDetailBatches({details,center,full,pinNear=false,hidde
  useEffect(()=>()=>{for(const key of opaque.keys())release(opaqueKey(key));},[opaque]);
  // The canvas-scoped prefiltered reflection (CityEnvironment), shared with the city's own glass.
  const reflection=useCityReflection();
- useEffect(()=>{for(const m of [...details.batches.filter(b=>b.material.kind==='glass').map(b=>materials.get(b.key)),...opaque.values()]){const g=m as MeshStandardNodeMaterial|undefined;if(!g||g.envMap===reflection)continue;g.envMap=reflection as Texture|null;g.needsUpdate=true;}invalidate();},[materials,opaque,reflection,invalidate]);
+ useEffect(()=>{openings.setReflection(reflection as Texture|null);for(const m of [...details.batches.filter(b=>b.material.kind==='glass').map(b=>materials.get(b.key)),...opaque.values()]){const g=m as MeshStandardNodeMaterial|undefined;if(!g||g.envMap===reflection)continue;g.envMap=reflection as Texture|null;g.needsUpdate=true;}invalidate();},[materials,opaque,reflection,invalidate]);
  const clear=useRef(seeThrough);clear.current=seeThrough;
  const meshes=useRef<(Mesh|null)[]>([]),root=useRef<Group>(null),nearGroup=useRef<Group>(null),lod=useRef<'near'|'far'>('near'),check=useRef(0);
+ // Instanced openings (CityStudioOpeningInstances): one scene-wide block in world space, at this building's level.
+ const openings=useOpeningStore(),blockId=useMemo(()=>`detail/${++blockSequence}`,[]),placed=useRef<{elements:number[];details:StudioDetailBatches|null;hidden:ReadonlySet<string>|null|undefined}>({elements:[],details:null,hidden:undefined});
+ const openingLevel=():OpeningLevel=>shownInTree(root.current)?lod.current:'off';
+ const placeOpenings=()=>{
+  const r=root.current,o=details.openings;if(!r)return false;r.updateWorldMatrix(true,false);
+  const p=placed.current,e=r.matrixWorld.elements;if(p.details===details&&p.hidden===hidden&&e.every((v,i)=>v===p.elements[i]))return false;
+  p.details=details;p.hidden=hidden;p.elements=[...e];
+  if(!o){openings.removeBlock(blockId);return true;}
+  openings.setBlock(blockId,worldOpenings(o,r.matrixWorld),openingLevel(),clear.current,hidden?.size?hidden:null);return true;
+ };
+ useEffect(()=>()=>{openings.removeBlock(blockId);openings.flush();invalidate();},[openings,blockId,invalidate]);
  const apply=(next:'near'|'far')=>{
   lod.current=next;
   details.batches.forEach((b,i)=>{const mesh=meshes.current[i];if(!mesh)return;if(subsets){mesh.visible=(subsets[i].index?.count??0)>0;return;}const [start,count]=next==='near'?[0,b.near]:[b.farStart,b.far];mesh.geometry.setDrawRange(start,count);mesh.visible=count>0;});
   details.batches.forEach((b,i)=>{const mesh=meshes.current[i],far=opaque.get(b.key);if(mesh&&far)mesh.material=next==='near'&&clear.current?materials.get(b.key)!:far;});
   if(nearGroup.current)nearGroup.current.visible=next==='near';
+  openings.setLevel(blockId,openingLevel(),next==='near'&&clear.current);
  };
  const decide=()=>{if(full||pinNear||subsets)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
- useLayoutEffect(()=>{apply(decide());});
+ useLayoutEffect(()=>{placeOpenings();apply(decide());if(openings.flush())invalidate();});
  useEffect(()=>{warmHiddenMaterials(gl,root.current,camera,scene);},[geometries,materials,gl,camera,scene]);
- useFrame((state)=>{if(state.clock.elapsedTime-check.current<.2)return;check.current=state.clock.elapsedTime;const next=decide();if(next!==lod.current){apply(next);invalidate();}});
+ useFrame((state)=>{
+  // Every frame (cheap): follow the tree's visibility (a hidden overlay draws no openings) and the building's placement.
+  let changed=placeOpenings();if(openings.setLevel(blockId,openingLevel(),lod.current==='near'&&clear.current))changed=true;
+  openings.cull(state.camera,state.clock.elapsedTime);
+  if(state.clock.elapsedTime-check.current>=.2){check.current=state.clock.elapsedTime;const next=decide();if(next!==lod.current){apply(next);changed=true;}}
+  if(openings.flush()||changed)invalidate();
+ });
  useEffect(()=>{
   if(typeof window==='undefined'||!new URLSearchParams(window.location.search).has('cityStudioTest'))return;
   const w=window as unknown as {__cityStudioDetail?:Record<string,unknown>};w.__cityStudioDetail??={};
-  const id=`${center.x.toFixed(1)}:${center.z.toFixed(1)}`;w.__cityStudioDetail[id]={batches:details.batches.length,triangles:details.triangles,vertices:details.vertices,full};return()=>{delete w.__cityStudioDetail?.[id];};
+  const id=`${center.x.toFixed(1)}:${center.z.toFixed(1)}`;w.__cityStudioDetail[id]={batches:details.batches.length,triangles:details.triangles,vertices:details.vertices,full,openings:details.openings?{pieces:details.openings.groups.length,instances:details.openings.count,triangles:details.openings.triangles}:null};return()=>{delete w.__cityStudioDetail?.[id];};
  },[details,center.x,center.z,full]);
  return <group ref={root} name="studio-detail-batches">
   {details.batches.map((b,i)=>opaque.has(b.key)&&<mesh key={`${b.key}|warm`} visible={false} dispose={null} geometry={geometries[i]} material={opaque.get(b.key)}/>)}

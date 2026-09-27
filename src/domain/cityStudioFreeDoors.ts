@@ -92,7 +92,11 @@ export function buildFreeFaceShell(face:{length:number;thickness?:number},groups
  for(const g of groups){const cy=(g.y0+g.y1)/2,s=storeys.find(s=>cy>=s.bottom-1e-6&&cy<s.top+1e-6)??storeys.reduce((a,b)=>Math.abs((a.bottom+a.top)/2-cy)<Math.abs((b.bottom+b.top)/2-cy)?a:b);
   const list=runs.get(s.floor)??[];list.push({x0:Math.max(.2,g.x0-FREE_DOOR.shellMargin),x1:Math.min(face.length-.2,g.x1+FREE_DOOR.shellMargin),y0:Math.min(s.bottom+.04,g.y0-.02),y1:Math.max(s.top-.02,g.y1+.05)});runs.set(s.floor,list);}
  const p:number[]=[],n:number[]=[],uv:number[]=[],c:number[]=[],idx:number[]=[],t=(face.thickness??FREE_FACE.thickness)/2+.005;
- const quad=(q:[number,number,number][],normal:[number,number,number],colours:Rgb[])=>{const base=p.length/3;q.forEach((v,k)=>{p.push(...v);n.push(...normal);uv.push(v[0]+v[2],v[1]);c.push(...colours[k]);});idx.push(base,base+1,base+2,base,base+2,base+3);};
+ // The shell draws unlit (no normals or UVs needed), so both carry its facade instead: every normal is the facade's
+ // outward direction and uv.x the vertex's depth behind the wall's centre plane. The shell material uses them to
+ // drop the boxes whenever the camera is on the inner side of that facade (inside the building), where they
+ // would otherwise float in the rooms. Bending (curved walls) turns the normal with the wall.
+ const quad=(q:[number,number,number][],_facing:[number,number,number],colours:Rgb[])=>{const base=p.length/3;q.forEach((v,k)=>{p.push(...v);n.push(0,0,1);uv.push(-v[2],v[1]);c.push(...colours[k]);});idx.push(base,base+1,base+2,base,base+2,base+3);};
  for(const [floor,list] of runs){
   list.sort((a,b)=>a.x0-b.x0);const merged:typeof list=[];
   for(const r of list){const last=merged.at(-1);if(last&&r.x0<=last.x1+.05){last.x1=Math.max(last.x1,r.x1);last.y0=Math.min(last.y0,r.y0);last.y1=Math.max(last.y1,r.y1);}else merged.push({...r});}

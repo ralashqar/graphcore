@@ -20,12 +20,14 @@ import {STUDIO_FAMILIES} from './cityStudioCatalog.ts';
 import {FREE_FACE,type FreeFaceBuffers,type FreeFaceChannel} from './cityStudioFreeOpeningGeometry.ts';
 import type {RoofOpeningChannel,StudioRoofOpeningPart} from './cityStudioRoofOpeningGeometry.ts';
 import type {StudioFreeFace} from './cityStudioFreeFaces.ts';
+import {openingInstances,openingTransferables,type StudioOpeningInstances} from './cityStudioOpeningPieces.ts';
 
 /** Glass `seeThrough`: free-face glazing, transparent near the camera (opaque when far). `shell`: unlit vertex-coloured interior boxes. */
 export type DetailMaterial={kind:'wall';color:string;texture:string}|{kind:'painted'}|{kind:'glass';color:string;seeThrough?:boolean}|{kind:'shell'}|{kind:'roof';color:string;texture:string};
 export type DetailBatch={key:string;material:DetailMaterial;positions:Float32Array;normals:Float32Array;uvs:Float32Array;indices:Uint16Array|Uint32Array;distance?:Float32Array;colors?:Float32Array;
  /** Index ranges: near = [0, near), far = [farStart, farStart+far). */near:number;farStart:number;far:number;sphere:[number,number,number,number];owners:{id:string;start:number;count:number}[]};
-export type StudioDetailBatches={batches:DetailBatch[];triangles:{near:number;far:number};vertices:number};
+/** `openings`: instanced opening detail (cityStudioOpeningPieces), not in `batches`; `triangles` counts batches only. */
+export type StudioDetailBatches={batches:DetailBatch[];triangles:{near:number;far:number};vertices:number;openings?:StudioOpeningInstances};
 type Tier=0|1|2;// 0 near-only, 1 both, 2 far-only
 type Piece={owner:string;src:FreeFaceBuffers;ranges:{tier:Tier;start:number;count:number}[];rotation:number;offset:[number,number,number];tint?:[number,number,number]};
 
@@ -65,7 +67,7 @@ export function mergeDetailPieces(material:DetailMaterial,pieces:Piece[]):Detail
  return {key:materialKey(material),material,positions,normals,uvs,indices,...(distance?{distance}:{}),...(colors?{colors}:{}),near:counts[0]+counts[1],farStart:counts[0],far:counts[1]+counts[2],sphere:[center[0],center[1],center[2],radius],owners};
 }
 
-/** All free-face and roof-opening geometry of one building, merged per material. Empty input gives no batches. */
+/** All free-face and roof-opening geometry of one building, merged per material, plus its instanced openings. Empty input gives no batches. */
 export function buildStudioDetailBatches(studio:{freeFaces?:StudioFreeFace[];roofOpenings?:StudioRoofOpeningPart[]}):StudioDetailBatches{
  const groups=new Map<string,{material:DetailMaterial;pieces:Piece[]}>();
  const add=(material:DetailMaterial,piece:Piece)=>{const key=materialKey(material);let g=groups.get(key);if(!g){g={material,pieces:[]};groups.set(key,g);}g.pieces.push(piece);};
@@ -91,12 +93,12 @@ export function buildStudioDetailBatches(studio:{freeFaces?:StudioFreeFace[];roo
   const material=(ch:RoofOpeningChannel):DetailMaterial=>ch==='wall'?{kind:'wall',color:part.wallColor,texture:part.wallTexture??'none'}:ch==='glass'?{kind:'glass',color:STUDIO_FAMILIES[part.family].glass}:ch==='roof'?{kind:'roof',color:roofFinishColor(part),texture:roofFinishTexture(part.finish)}:{kind:'painted'};
   for(const ch of Object.keys(tiers) as RoofOpeningChannel[])add(material(ch),{...frame,src:g[ch],ranges:whole(g[ch],tiers[ch]),...(ch==='flashing'?{tint:flashing}:{})});
  }
- const batches=[...groups.values()].map(g=>mergeDetailPieces(g.material,g.pieces)).filter((b):b is DetailBatch=>!!b);
- return {batches,triangles:{near:batches.reduce((n,b)=>n+b.near/3,0),far:batches.reduce((n,b)=>n+b.far/3,0)},vertices:batches.reduce((n,b)=>n+b.positions.length/3,0)};
+ const batches=[...groups.values()].map(g=>mergeDetailPieces(g.material,g.pieces)).filter((b):b is DetailBatch=>!!b),openings=openingInstances(studio.freeFaces??[]);
+ return {batches,triangles:{near:batches.reduce((n,b)=>n+b.near/3,0),far:batches.reduce((n,b)=>n+b.far/3,0)},vertices:batches.reduce((n,b)=>n+b.positions.length/3,0),...(openings?{openings}:{})};
 }
 /** Unique buffers to pass as the worker's transfer list. */
 export function detailTransferables(d:StudioDetailBatches):ArrayBuffer[]{
- const out=new Set<ArrayBuffer>();for(const b of d.batches)for(const a of [b.positions,b.normals,b.uvs,b.indices,b.distance,b.colors])if(a)out.add(a.buffer as ArrayBuffer);return [...out];
+ const out=new Set<ArrayBuffer>(openingTransferables(d.openings));for(const b of d.batches)for(const a of [b.positions,b.normals,b.uvs,b.indices,b.distance,b.colors])if(a)out.add(a.buffer as ArrayBuffer);return [...out];
 }
 const EMPTY:FreeFaceBuffers={positions:new Float32Array(0),normals:new Float32Array(0),uvs:new Float32Array(0),indices:new Uint32Array(0)};
 /**

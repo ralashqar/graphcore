@@ -151,7 +151,7 @@ try{for(const variant of variants){
   const frames=await stop(),ready=edits.filter(e=>e.state==='ready');
   edit={samples:ready.length,workerMs:pct(ready.map(e=>e.workerMs),.5),frameMsP50:pct(ready.map(e=>e.frameMs),.5),frameMsP95:pct(ready.map(e=>e.frameMs),.95),frameP95:frames.p95,frameP99:frames.p99,frameMax:frames.max,calls:frames.calls};
  }
- const cityInfo=await page.evaluate(()=>{try{return JSON.parse(document.querySelector('canvas')?.dataset.citySculptCity||'null');}catch{return null;}});
+ const cityInfo=await page.evaluate(()=>{try{const c=document.querySelector('canvas')?.dataset;return {...JSON.parse(c?.citySculptCity||'null'),openings:JSON.parse(c?.cityOpenings||'null')};}catch{return null;}});
  const row={label,backend,variant,path,plots:seeded.plots,properties:seeded.properties,background,types:seeded.types,invalid:seeded.invalid,loadMs:{prepared,settled:loaded},mapOverview,mapZoomed,mapPan,driveStanding,driving,studioView,prepare,edit,cityInfo,errors:errors.filter(e=>!/favicon|ResizeObserver/.test(e)).slice(0,10)};
  results=results.filter(r=>!(r.label===label&&r.backend===backend&&r.variant===variant&&r.plots===row.plots&&r.path===path));results.push(row);writeFileSync(file,JSON.stringify(results,null,2));console.log(JSON.stringify(row));await page.close();
 }}finally{await browser.close();}

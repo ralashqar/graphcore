@@ -13,6 +13,9 @@
  *   chunk then leaves out that plot's far detail (index rewrite only). Near overlays are the existing
  *   per-building path, so near visuals are unchanged.
  * - Signs of far plots come from one shared atlas; grounds from one shared preparation.
+ * - Generated openings (frames, glass, leaves) are not in the chunks: every plot's openings are instances of shared
+ *   canonical pieces (CityStudioOpeningInstances), drawn at the far level city-wide and switched off for a plot
+ *   exactly when its chunk leaves out its far detail; its near overlay then draws them at the near level.
  *
  * The edited plot never passes through here (CityLandScene keeps it on CitySculptBuilding), so studio edit
  * latency is unaffected. `?cityGwBatch=0` routes every plot back to CitySculptBuilding.
@@ -42,6 +45,7 @@ import {CityPreparedBuildings} from './CityDesignBuildings';
 import {usePreparedCity} from './usePreparedCity';
 import {sculptSignMaterial} from './CitySculptBuilding';
 import {cityGwStats} from './cityGwStats';
+import {useOpeningStore} from './CityStudioOpeningInstances';
 
 type Entry={plot:LandPlot;draft:LandDraft};
 type Ready={id:string;key:string;plot:LandPlot;draft:LandDraft;transform:CityPlotTransform;studio:StudioResolved;bake:SculptCityBake;kit:KitPlot;/** kit pieces' world bounds (frustum test) */kitBox:Box3};
@@ -74,7 +78,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
  const wantedRef=useRef(wanted);wantedRef.current=wanted;
  const [ready,setReady]=useState<Map<string,Ready>>(()=>new Map());
  const readyRef=useRef(ready);readyRef.current=ready;
- const requested=useRef(new Map<string,string>()),arrived=useRef<Ready[]>([]),started=useRef(performance.now()),timing=useRef({count:0,resolveMs:0,bakeMs:0,roundTripMs:0,loadedMs:0});
+ const requested=useRef(new Map<string,string>()),arrived=useRef<Ready[]>([]),started=useRef(performance.now()),timing=useRef({count:0,requests:0,discarded:0,resolveMs:0,bakeMs:0,roundTripMs:0,loadedMs:0,faceHits:0,faceMisses:0});
  // Request changed plots, nearest chunk first so chunks complete (and merge) one after another.
  useEffect(()=>{
   const todo=[...wanted.values()].filter(w=>requested.current.get(w.entry.plot.id)!==w.key&&readyRef.current.get(w.entry.plot.id)?.key!==w.key);
@@ -82,10 +86,10 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
   todo.sort((a,b)=>band(a.entry.plot)-band(b.entry.plot)||cityChunkKey(a.entry.plot).localeCompare(cityChunkKey(b.entry.plot)));
   for(const w of todo){
    const {plot,draft}=w.entry,key=w.key;if(!draft.sculpt)continue;requested.current.set(plot.id,key);
-   const transform=transformOf(plot),begun=performance.now();
+   const transform=transformOf(plot),begun=performance.now();timing.current.requests++;
    void prepareSculptCity(draft.sculpt,draft.design,transform,draft.name).then(result=>{
-    if(wantedRef.current.get(plot.id)?.key!==key)return;
-    const t=timing.current;t.count++;t.resolveMs+=result.timing.resolveMs;t.bakeMs+=result.timing.bakeMs;t.roundTripMs+=performance.now()-begun;
+    if(wantedRef.current.get(plot.id)?.key!==key){timing.current.discarded++;return;}
+    const t=timing.current;t.count++;t.resolveMs+=result.timing.resolveMs;t.bakeMs+=result.timing.bakeMs;t.roundTripMs+=performance.now()-begun;t.faceHits+=result.timing.faces?.hits??0;t.faceMisses+=result.timing.faces?.misses??0;
     const recipe=draft.sculpt!,version=studioKitVersion(recipe.version===5||recipe.version===6?recipe.studio.catalogue:undefined);
     const kit={id:plot.id,version,pieces:result.studio.pieces,transform};
     arrived.current.push({id:plot.id,key,plot,draft,transform,studio:result.studio,bake:result.bake,kit,kitBox:kitBounds(kit)});
@@ -178,7 +182,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
   if(!import.meta.env.DEV)return;
   const t=timing.current;gl.domElement.dataset.citySculptCity=JSON.stringify({plots:wanted.size,ready:ready.size,chunks:chunks.length,chunkBatches:chunks.reduce((n,c)=>n+new Set(c.plots.flatMap(p=>p.bake.batches.map(b=>b.key))).size,0),near:near.size,overlays:excluded.size,
    triangles:{envelope:Math.round([...ready.values()].reduce((n,r)=>n+r.bake.triangles.envelope,0)),detail:Math.round([...ready.values()].reduce((n,r)=>n+r.bake.triangles.detail,0))},
-   worker:t.count?{plots:t.count,resolveMs:+(t.resolveMs/t.count).toFixed(1),bakeMs:+(t.bakeMs/t.count).toFixed(1),roundTripMs:+(t.roundTripMs/t.count).toFixed(1)}:null,loadedMs:Math.round(t.loadedMs)});
+   worker:t.count?{plots:t.count,requests:t.requests,discarded:t.discarded,resolveMs:+(t.resolveMs/t.count).toFixed(1),bakeMs:+(t.bakeMs/t.count).toFixed(1),roundTripMs:+(t.roundTripMs/t.count).toFixed(1),faceHits:t.faceHits,faceMisses:t.faceMisses}:null,loadedMs:Math.round(t.loadedMs)});
  },[gl,wanted,ready,chunks,near,excluded]);
  useEffect(()=>()=>{delete gl.domElement.dataset.citySculptCity;},[gl]);
  const mounted=useMemo(()=>[...new Set([...near,...leaving,...preload])].map(id=>ready.get(id)).filter((r):r is Ready=>!!r),[near,leaving,preload,ready]);
@@ -187,6 +191,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
   {chunks.map(c=><CitySculptChunk key={c.key} plots={c.plots} excluded={c.plots.filter(p=>excluded.has(p.id)).map(p=>p.id).join('\n')}/>)}
   <CitySculptSharedKit plots={kitPlots} levels={kitLevels}/>
   <CitySculptSigns signs={signs} excluded={excluded}/>
+  <CitySculptOpenings ready={ready} excluded={excluded}/>
   {mounted.map(r=><NearOverlay key={r.id} ready={r} visible={near.has(r.id)||leaving.has(r.id)} onShown={onOverlay}/>)}
  </group>;
 }
@@ -224,6 +229,27 @@ function CitySculptChunk({plots,excluded}:{plots:{id:string;bake:SculptCityBake}
   invalidate();
  },[batches,geometries,excluded,invalidate,shown]);
  return <group name="city-sculpt-chunk">{batches.map((b,i)=><mesh key={b.key} name={`city-sculpt-chunk-${b.kind}`} geometry={geometries[i]} material={materials.get(b.key)} dispose={null}/>)}</group>;
+}
+
+/** Far-level opening instances of every ready plot (world space, from its bake); off while its near overlay shows. */
+function CitySculptOpenings({ready,excluded}:{ready:ReadonlyMap<string,Ready>;excluded:ReadonlySet<string>}){
+ const store=useOpeningStore(),{invalidate,gl}=useThree(),reflection=useCityReflection(),registered=useRef(new Map<string,SculptCityBake>());
+ useLayoutEffect(()=>{
+  const live=registered.current;
+  for(const r of ready.values()){const o=r.bake.openings;if(!o||live.get(r.id)===r.bake)continue;store.setBlock(`city/${r.id}`,o,excluded.has(r.id)?'off':'far',false);live.set(r.id,r.bake);}
+  for(const [id,bake] of [...live])if(ready.get(id)?.bake!==bake){store.removeBlock(`city/${id}`);live.delete(id);}
+  for(const id of live.keys())store.setLevel(`city/${id}`,excluded.has(id)?'off':'far',false);
+  if(store.flush())invalidate();
+ },[ready,excluded,store,invalidate]);
+ useEffect(()=>{store.setReflection(reflection as Texture|null);invalidate();},[store,reflection,invalidate]);
+ useEffect(()=>()=>{for(const id of registered.current.keys())store.removeBlock(`city/${id}`);registered.current.clear();store.flush();},[store]);
+ const report=useRef(0);
+ useFrame(state=>{
+  store.cull(state.camera,state.clock.elapsedTime);if(store.flush())invalidate();
+  if(import.meta.env.DEV&&state.clock.elapsedTime-report.current>.5){report.current=state.clock.elapsedTime;gl.domElement.dataset.cityOpenings=JSON.stringify(store.stats);}
+ });
+ useEffect(()=>()=>{delete gl.domElement.dataset.cityOpenings;},[gl]);
+ return null;
 }
 
 /** Near representation of one plot: its own merged detail batches (full near detail), trims, doors, interior, sign. */

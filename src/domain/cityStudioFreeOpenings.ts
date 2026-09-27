@@ -35,6 +35,7 @@ import type {StudioBay,StudioRecipe} from './cityStudioTypes.ts';
 import {moduleOpeningSpec,type ModuleOpeningKind} from './cityStudioModuleSpec.ts';
 import {curveLength,curveMaxOpening,curveNormal,curvePoint,curveXAt,type FaceCurve} from './cityStudioFaceCurve.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
+import {onFaceCacheClear} from './cityStudioFaceCache.ts';
 
 export const FREE_OPENING_SHAPES=['rect','arch','round','pointed'] as const;
 export const FREE_OPENING_STYLES=['timber','stone','painted'] as const;
@@ -124,10 +125,21 @@ const signedArea=(ring:[number,number][])=>ring.reduce((s,p,i)=>{const q=ring[(i
 const toPolygon=(ring:[number,number][]):Polygon=>[[...ring.map(p=>[p[0],p[1]] as [number,number]),[ring[0][0],ring[0][1]]]];
 const openRing=(ring:[number,number][]):[number,number][]=>{const out=ring.map(p=>[p[0],p[1]] as [number,number]);if(out.length>1&&Math.hypot(out[0][0]-out.at(-1)![0],out[0][1]-out.at(-1)![1])<1e-9)out.pop();return out.filter((p,i)=>Math.hypot(p[0]-out[(i+out.length-1)%out.length][0],p[1]-out[(i+out.length-1)%out.length][1])>1e-6);};
 export const multiArea=(m:MultiPolygon)=>m.reduce((s,poly)=>s+poly.reduce((t,ring,i)=>t+(i?-1:1)*Math.abs(signedArea(openRing(ring as [number,number][]))),0),0);
-/** Union of axis-aligned rectangles (quantised to millimetres so shared bay edges merge cleanly). */
+/** The bounding rectangle when the rectangles cover it completely (most faces: bays tile the whole wall), else null. */
+function coveringRect(rects:FreeRect[]):FreeRect|null{
+ if(!rects.length)return null;
+ const xs=[...new Set(rects.flatMap(r=>[r[0],r[1]]))].sort((a,b)=>a-b),ys=[...new Set(rects.flatMap(r=>[r[2],r[3]]))].sort((a,b)=>a-b),nx=xs.length-1,covered=new Uint8Array(nx*(ys.length-1));
+ for(const r of rects){const i0=xs.indexOf(r[0]),i1=xs.indexOf(r[1]),j0=ys.indexOf(r[2]),j1=ys.indexOf(r[3]);for(let j=j0;j<j1;j++)covered.fill(1,j*nx+i0,j*nx+i1);}
+ return covered.every(v=>v)?[xs[0],xs[nx],ys[0],ys[ys.length-1]]:null;
+}
+/** Union of axis-aligned rectangles (quantised to millimetres so shared bay edges merge cleanly). Memoised by the
+ * quantised rectangles (read-only result): a face's region is needed by its resolver and its geometry. */
+const regionMemo=new Map<string,MultiPolygon>();onFaceCacheClear(()=>regionMemo.clear());
 export function freeRegion(rects:FreeRect[]):MultiPolygon{
- const q=(v:number)=>Math.round(v*1000)/1000,polys=rects.filter(r=>r[1]-r[0]>1e-3&&r[3]-r[2]>1e-3).map(r=>toPolygon([[q(r[0]),q(r[2])],[q(r[1]),q(r[2])],[q(r[1]),q(r[3])],[q(r[0]),q(r[3])]]));
- return polys.length?polygonClipping.union(polys[0],...polys.slice(1)):[];
+ const q=(v:number)=>Math.round(v*1000)/1000,kept=rects.filter(r=>r[1]-r[0]>1e-3&&r[3]-r[2]>1e-3).map(r=>r.map(q) as FreeRect),key=kept.join(';'),known=regionMemo.get(key);
+ if(known){regionMemo.delete(key);regionMemo.set(key,known);return known;}
+ const polys=kept.map(r=>toPolygon([[r[0],r[2]],[r[1],r[2]],[r[1],r[3]],[r[0],r[3]]])),box=coveringRect(kept),out=box?[toPolygon([[box[0],box[2]],[box[1],box[2]],[box[1],box[3]],[box[0],box[3]]])]:polys.length?polygonClipping.union(polys[0],...polys.slice(1)):[];
+ regionMemo.set(key,out);if(regionMemo.size>512)regionMemo.delete(regionMemo.keys().next().value!);return out;
 }
 
 function panelFor(face:FreeFaceSpec,o:FreeFaceOpening):{panel?:FreeOpeningPanel;role?:'window'|'door';reason?:string}{

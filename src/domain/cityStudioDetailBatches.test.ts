@@ -5,6 +5,7 @@ import {resolveSculpt,type SculptVolume} from './citySculpt.ts';
 import {freshStudio,studioFloorCount} from './cityStudio.ts';
 import {editStudioRoof} from './cityStudioRoofEnvelope.ts';
 import {FREE_FACE,type FreeFaceBuffers} from './cityStudioFreeOpeningGeometry.ts';
+import {OPENING_INSTANCING} from './cityStudioOpeningPieces.ts';
 import {buildStudioDetailBatches,detailTransferables,withoutDetailGeometry,type StudioDetailBatches} from './cityStudioDetailBatches.ts';
 import type {StudioFreeFace} from './cityStudioFreeFaces.ts';
 import type {StudioFreeOpening} from './cityStudioFreeOpenings.ts';
@@ -19,7 +20,8 @@ function fixture(){
  r=editStudioRoof(r,['main'],{type:'pitched',settings:{rise:3.8,overhang:.3,ridge:'x'}});
  r.studio.freeOpenings=[free('door','north',.5,0,1.3,2.5,'arch',{style:'timber'}),free('a','north',.15,.9,1,1.6),free('b','north',.85,.9,1,1.6,'arch',{style:'stone'}),free('c','north',.3,4.2,1,1.5,'pointed',{style:'stone'}),free('open','north',.7,4.2,1.1,1.5,'rect',{glazing:false}),free('e','east',.5,.9,1.2,1.5)];
  const design={...newDesign('detail-batches'),groundHeight:3.4,floors:studioFloorCount(r),middleFloors:studioFloorCount(r)-1,crown:'none' as const,roof:'flat' as const};
- return resolveSculpt(r,design).studio!;
+ // The pre-instancing packaging (every opening's detail in its face channels): cityStudioOpeningPieces.test.ts covers the instanced split.
+ OPENING_INSTANCING.enabled=false;try{return resolveSculpt(r,design).studio!;}finally{OPENING_INSTANCING.enabled=true;}
 }
 const sum=<T,>(list:T[],f:(t:T)=>number)=>list.reduce((n,t)=>n+f(t),0);
 const sources=(s:ReturnType<typeof fixture>):FreeFaceBuffers[]=>[...(s.freeFaces??[]).flatMap(f=>[f.geometry.wall,f.geometry.trim,f.geometry.frame,f.geometry.glass,f.geometry.door,...(f.geometry.aperture?[f.geometry.aperture]:[]),...(f.geometry.doorGlass?[f.geometry.doorGlass]:[]),...(f.shell?[f.shell]:[])]),...(s.roofOpenings??[]).flatMap(p=>[p.geometry.wall,p.geometry.trim,p.geometry.frame,p.geometry.glass,p.geometry.roof,p.geometry.flashing])];

@@ -1,6 +1,8 @@
 // Kit-tile building vs its unified-facade conversion (docs/city-unified-facades.md): CPU resolve time, the
 // instanced kit groups (one draw call per module/channel/texture, excluding omitted channels) plus merged
 // detail batches, and triangles (kit pieces from kit.glb + generated walls). Node only: no GPU, no worker.
+// Resolve is measured cold (face cache cleared before every run: what a worker pays for a design it has not seen)
+// and cached (the same design again, e.g. an unchanged face during an edit or a design repeated across plots).
 // Run: node --experimental-strip-types scripts/benchmark-city-unified-facades.mjs
 import {readFileSync} from 'node:fs';
 import {createLandWorld,initialLandDraft} from '../src/domain/cityLand.ts';
@@ -8,6 +10,7 @@ import {nycPreset,NYC_PRESETS} from '../src/domain/cityNycPresets.ts';
 import {resolveSculpt} from '../src/domain/citySculpt.ts';
 import {convertToUnifiedFacade} from '../src/domain/cityStudioUnifiedFacade.ts';
 import {buildStudioDetailBatches} from '../src/domain/cityStudioDetailBatches.ts';
+import {clearFaceCache} from '../src/domain/cityStudioFaceCache.ts';
 
 // Triangles per module and channel from the GLB (same channel naming as CityStudioMeshes.loadStudioKit).
 function kitTriangles(file){
@@ -22,7 +25,7 @@ const median=(f,n=25)=>{const t=[];for(let i=0;i<n+3;i++){const s=performance.no
 const plot=createLandWorld([],72,24).plots[0];
 for(let i=0;i<NYC_PRESETS.length;i++){
  const draft=nycPreset(initialLandDraft(plot),i,24),out=convertToUnifiedFacade(draft.sculpt,draft.design);if('reason' in out)throw Error(out.reason);
- const row=(r)=>{const s=resolveSculpt(r,draft.design).studio,k=pieceStats(s.pieces),d=buildStudioDetailBatches(s);return {ms:median(()=>resolveSculpt(r,draft.design)),calls:k.calls+d.batches.length,kitCalls:k.calls,batches:d.batches.length,triangles:k.triangles+d.triangles.near,pieces:s.pieces.length};};
+ const row=(r)=>{const s=resolveSculpt(r,draft.design).studio,k=pieceStats(s.pieces),d=buildStudioDetailBatches(s);return {ms:median(()=>{clearFaceCache();resolveSculpt(r,draft.design);}),cached:median(()=>resolveSculpt(r,draft.design)),calls:k.calls+d.batches.length+(d.openings?.groups.length??0),kitCalls:k.calls,batches:d.batches.length,triangles:k.triangles+d.triangles.near+(d.openings?.triangles.near??0),pieces:s.pieces.length};};
  const a=row(draft.sculpt),b=row(out.recipe);
- console.log(`${NYC_PRESETS[i].name.padEnd(26)} resolve ${a.ms.toFixed(1)} → ${b.ms.toFixed(1)} ms · draw groups ${a.calls} → ${b.calls} (kit ${b.kitCalls} + ${b.batches} merged) · near triangles ${a.triangles} → ${b.triangles} · pieces ${a.pieces} → ${b.pieces}`);
+ console.log(`${NYC_PRESETS[i].name.padEnd(26)} resolve ${a.ms.toFixed(1)} → ${b.ms.toFixed(1)} ms (cached ${b.cached.toFixed(1)} ms) · draw groups ${a.calls} → ${b.calls} (kit ${b.kitCalls} + ${b.batches} merged) · near triangles ${a.triangles} → ${b.triangles} · pieces ${a.pieces} → ${b.pieces}`);
 }

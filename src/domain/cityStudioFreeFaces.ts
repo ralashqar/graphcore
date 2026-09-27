@@ -6,9 +6,10 @@
  * apertures (addModulePieces), so no kit tile owns a whole wall any more.
  * Bays stay resolved, so picking, paint anchors, parapets and assemblies keep working.
  */
-import {buildFreeOpeningFaceGeometry,DEFAULT_FREE_PALETTE,type FreeFaceBuffers,type FreeFaceGeometry,type FreeFacePalette} from './cityStudioFreeOpeningGeometry.ts';
+import {buildFreeOpeningFaceGeometry,DEFAULT_FREE_PALETTE,OPENING_INSTANCING,type FreeFaceBuffers,type FreeFaceBuildOptions,type FreeFaceGeometry,type FreeFacePalette} from './cityStudioFreeOpeningGeometry.ts';
 import {finishFreeFace} from './cityStudioFreeDoors.ts';
-import {faceS,facePose,resolveStudioFreeFace,studioBayFaceSpans,type FreeModulePlacement,type FreeOpeningGroup,type StudioFaceFrame} from './cityStudioFreeOpenings.ts';
+import {faceCached,InputHash} from './cityStudioFaceCache.ts';
+import {faceS,facePose,resolveStudioFreeFace,studioBayFaceSpans,type FreeModulePlacement,type FreeOpeningGroup,type FreeRect,type StudioFaceFrame} from './cityStudioFreeOpenings.ts';
 import {bendFreeFaceGeometry,bendPose,buildFaceBend,type FreeFaceBend} from './cityStudioCurvedWalls.ts';
 import {curvePoint,type FaceCurve} from './cityStudioFaceCurve.ts';
 import {sculptPrimitiveBoundary} from './citySculpt.ts';
@@ -84,17 +85,36 @@ export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV
   const family=familyOf(shapeId),palette=STUDIO_FAMILIES[family],part={...r.studio.defaults.finishes,...r.studio.parts[shapeId]?.finishes},finishes={...(owned.find(b=>b.anchor.floor===0)??owned[0])?.finishes,wall:part.wall,trim:part.trim};
   const colours:FreeFacePalette={...DEFAULT_FREE_PALETTE,painted:{trim:finishes.trim?.color??palette.trim,frame:finishes.frame?.color??'#f4f0e6'},door:finishes.door?.color??palette.door};
   const paint=studioFacePaint(r,shapeId,side,frame,owned,part,paintRuleFace(r,d,shapeId,side,frame,resolution.groups));
-  const floors=[...new Set(owned.map(b=>b.anchor.floor))].sort((a,b)=>a-b);
+  const floors=[...new Set(owned.map(b=>b.anchor.floor))].sort((a,b)=>a-b),build:FreeFaceBuildOptions=OPENING_INSTANCING.enabled?{instance:{openable:r.version===6}}:{};
+  // Built faces are cached by their inputs (cityStudioFaceCache): opening ids do not change the geometry.
+  const key=faceKey(frame.length,frame.height,face.region,resolution.groups,colours,paint,build);
   if(frame.curve){
    // Curved wall: built in arc-length face space split at the bend's facets, then bent onto the ellipse.
-   const volume=r.volumes.find(v=>v.id===shapeId)!,bend=buildFaceBend(frame.curve,frame.length,resolution.groups,{closed:true,coarse:sculptPrimitiveBoundary(volume)});
-   const flat=buildFreeOpeningFaceGeometry({length:frame.length,height:frame.height,region:face.region,breaks:bend.xs,seam:true},resolution.groups,colours,paint);
-   out.push({id,shapeId,side,origin:frame.origin,rotation:frame.rotation,base:frame.base,length:frame.length,height:frame.height,family,finishes,floors,groups:resolution.groups,geometry:bendFreeFaceGeometry(flat,bend),curve:frame.curve,bend});
-  }else out.push({id,shapeId,side,origin:frame.origin,rotation:frame.rotation,base:frame.base,length:frame.length,height:frame.height,family,finishes,floors,groups:resolution.groups,geometry:buildFreeOpeningFaceGeometry({length:frame.length,height:frame.height,region:face.region},resolution.groups,colours,paint)});
+   const volume=r.volumes.find(v=>v.id===shapeId)!,coarse=sculptPrimitiveBoundary(volume),curve=frame.curve;
+   const {geometry,bend}=faceCached(`curve/${key}/${new InputHash().nums([curve.cx,curve.cz,curve.a,curve.b]).nums(coarse.flat()).key()}`,()=>{
+    const bend=buildFaceBend(curve,frame.length,resolution.groups,{closed:true,coarse});
+    const flat=buildFreeOpeningFaceGeometry({length:frame.length,height:frame.height,region:face.region,breaks:bend.xs,seam:true},resolution.groups,colours,paint,build);
+    return {geometry:bendFreeFaceGeometry(flat,bend),bend};
+   });
+   out.push({id,shapeId,side,origin:frame.origin,rotation:frame.rotation,base:frame.base,length:frame.length,height:frame.height,family,finishes,floors,groups:resolution.groups,geometry,curve:frame.curve,bend});
+  }else{
+   const geometry=faceCached(`flat/${key}`,()=>buildFreeOpeningFaceGeometry({length:frame.length,height:frame.height,region:face.region},resolution.groups,colours,paint,build));
+   out.push({id,shapeId,side,origin:frame.origin,rotation:frame.rotation,base:frame.base,length:frame.length,height:frame.height,family,finishes,floors,groups:resolution.groups,geometry});
+  }
   finishFreeFace(r,d,bays,blockers,out[out.length-1]);
   addModulePieces(r,out[out.length-1],frame,resolution,owned,paint,pieces);
  }
  return out;
+}
+/** Key of everything a face's geometry depends on (not the opening ids: two faces with the same openings share it). */
+function faceKey(length:number,height:number,region:readonly FreeRect[]|undefined,groups:readonly FreeOpeningGroup[],colours:FreeFacePalette,paint:FacePaint|undefined,build:FreeFaceBuildOptions){
+ const h=new InputHash().num(length).num(height).num(region?.length??-1);for(const r of region??[])h.nums(r);
+ h.num(groups.length);
+ for(const g of groups){h.str(g.role).str(g.style).num(g.glazing?1:0).str(g.module).num(g.x0).num(g.x1).num(g.y0).num(g.y1).num(g.spring).num(g.panels.length);
+  for(const p of g.panels)h.str(p.shape).num(p.x0).num(p.x1).num(p.y0).num(p.y1).num(p.rise).num(p.spring);
+  h.num(g.mullions.length);for(const m of g.mullions)h.num(m.x).num(m.y0).num(m.y1);h.num(g.outline.length);for(const [x,y] of g.outline)h.num(x).num(y);}
+ for(const style of ['stone','timber','painted'] as const)h.str(colours[style].trim).str(colours[style].frame);
+ return h.str(colours.door).json(paint).num(build.instance?build.instance.openable?2:1:0).key();
 }
 /** Report id of a derived kit opening: its intent (`kit/<id>`), or the stamp a storefront opening came from. */
 const kitIntentId=(id:string)=>{if(!id.startsWith('kit/'))return id;const intent=id.slice(4),stamp=/^stamp\/(.+?)\/(opening|garage)/.exec(intent);return stamp?stamp[1]:intent;};

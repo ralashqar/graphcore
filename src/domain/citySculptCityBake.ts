@@ -21,6 +21,7 @@ import {FREE_FACE} from './cityStudioFreeOpeningGeometry.ts';
 import type {SculptResolved} from './citySculpt.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import type {DetailBatch,StudioDetailBatches} from './cityStudioDetailBatches.ts';
+import {openingTransferables,transformOpeningInstances,type StudioOpeningInstances} from './cityStudioOpeningPieces.ts';
 
 export type CityBakeKind='wall'|'surface'|'glass';
 export type CityBakeBatch={key:string;kind:CityBakeKind;texture:string;positions:Float32Array;normals:Float32Array;colors:Float32Array;uvs?:Float32Array;distance?:Float32Array;
@@ -29,7 +30,9 @@ export type CityBakeBatch={key:string;kind:CityBakeKind;texture:string;positions
 export type CityPlotTransform={x:number;z:number;rotation:number;scale:number};
 /** Entrance sign in world space (the plane faces `angle`). */
 export type CityBakeSign={x:number;y:number;z:number;angle:number;width:number;height:number};
-export type SculptCityBake={batches:CityBakeBatch[];sign:CityBakeSign|null;sphere:[number,number,number,number];triangles:{envelope:number;detail:number}};
+/** `openings`: the plot's instanced opening pieces in world space (cityStudioOpeningPieces), drawn city-wide; the
+ * far detail in `batches` no longer contains them. */
+export type SculptCityBake={batches:CityBakeBatch[];sign:CityBakeSign|null;sphere:[number,number,number,number];triangles:{envelope:number;detail:number;openings?:number};openings?:StudioOpeningInstances};
 export type CityBakeOptions={design:Pick<CityBuildingDesignV3,'palette'|'roof'|'textures'>;transform:CityPlotTransform;
  /** Roof texture of each sculpt volume (recipe v4-v6), as CitySculptBuilding's volume materials. */volumeRoofTextures?:Record<string,string|undefined>;
  /** Draft name, for the sign's width (the sign itself is drawn from an atlas on the main thread). */signName?:string};
@@ -95,7 +98,7 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
   else add('surface','none',part,'detail');// painted: its own vertex colours
  }
  const plot=new Matrix4().compose(new Vector3(transform.x,0,transform.z),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),transform.rotation),new Vector3(transform.scale,transform.scale,transform.scale));
- const batches:CityBakeBatch[]=[],lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity],triangles={envelope:0,detail:0};
+ const batches:CityBakeBatch[]=[],lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity],triangles:SculptCityBake['triangles']={envelope:0,detail:0};
  for(const [key,g] of groups){
   const parts=[...g.envelope,...g.detail],vertexCount=parts.reduce((n,p)=>n+p.positions.length/3,0),indexCount=parts.reduce((n,p)=>n+(p.indices?p.indices.length:p.positions.length/3),0);
   if(!indexCount)continue;
@@ -128,9 +131,11 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
   const canopy=resolved.decorations.some(d=>d.kind==='canopy'&&d.active),depth=canopy?1:.045,local=new Vector3(entrance.x+Math.sin(entrance.angle)*depth,resolved.floors[0].top-(canopy?.47:.6),entrance.z+Math.cos(entrance.angle)*depth).applyMatrix4(plot);
   sign={x:local.x,y:local.y,z:local.z,angle:entrance.angle+transform.rotation,width:Math.min(canopy?2.2:3.2,Math.max(1.8,(options.signName??'').length*.17))*transform.scale,height:.52*transform.scale};
  }
- return {batches,sign,sphere:[...center,radius],triangles};
+ const openings=details?.openings?transformOpeningInstances(details.openings,plot.elements):undefined;
+ if(openings)triangles.openings=openings.triangles.far;
+ return {batches,sign,sphere:[...center,radius],triangles,...(openings?{openings}:{})};
 }
 /** Unique buffers to pass as the worker's transfer list. */
 export function cityBakeTransferables(bake:SculptCityBake):ArrayBuffer[]{
- const out=new Set<ArrayBuffer>();for(const b of bake.batches)for(const a of [b.positions,b.normals,b.colors,b.uvs,b.distance,b.indices])if(a)out.add(a.buffer as ArrayBuffer);return [...out];
+ const out=new Set<ArrayBuffer>(openingTransferables(bake.openings));for(const b of bake.batches)for(const a of [b.positions,b.normals,b.colors,b.uvs,b.distance,b.indices])if(a)out.add(a.buffer as ArrayBuffer);return [...out];
 }

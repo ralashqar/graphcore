@@ -7,6 +7,7 @@ import {upgradeStudioInterior} from './cityStudioInteriors.ts';
 import {buildStudioDetailBatches,withoutDetailGeometry} from './cityStudioDetailBatches.ts';
 import {FREE_DOOR,freeDoorLeaves,freeDoorPortalId} from './cityStudioFreeDoors.ts';
 import {FREE_FACE} from './cityStudioFreeOpeningGeometry.ts';
+import {OPENING_INSTANCING} from './cityStudioOpeningPieces.ts';
 import {resetStudioDoors,removeStudioDoors,stepStudioDoors,studioDoorTarget,toggleStudioDoor} from './cityStudioDoorState.ts';
 import {StudioWalkingCollision} from './cityStudioCollision.ts';
 import type {StudioFreeOpening} from './cityStudioFreeOpenings.ts';
@@ -19,6 +20,8 @@ const OPENINGS=[free('door',.15,0,1.4,2.4,'arch',{style:'timber'}),free('shop',.
 const recipe=(v6:boolean,openings=OPENINGS):StudioRecipe=>{const r:StudioRecipe={version:5,volumes:[volume()],attachments:[],plotSize:24,studio:{...freshStudio(),freeOpenings:openings}};return v6?upgradeStudioInterior(r):r;};
 const resolve=(r:StudioRecipe)=>resolveSculpt(r,{...newDesign('free-doors'),groundHeight:3.2,floors:studioFloorCount(r),middleFloors:studioFloorCount(r)-1,crown:'none',roof:'flat'}).studio!;
 const close=(a:number,b:number,e=1e-6)=>Math.abs(a-b)<e;
+/** The pre-instancing packaging (every opening's detail in its face channels); the instanced pieces are covered by cityStudioOpeningPieces.test.ts. */
+const legacy=<T,>(f:()=>T):T=>{OPENING_INSTANCING.enabled=false;try{return f();}finally{OPENING_INSTANCING.enabled=true;}};
 
 test('free door groups become exterior portals on v6 buildings; stone arcades stay open',()=>{
  const out=resolve(recipe(true)),face=out.freeFaces![0],ids=(out.portals??[]).filter(p=>p.id.startsWith('exterior/free/')).map(p=>p.id).sort();
@@ -41,7 +44,7 @@ test('free door groups become exterior portals on v6 buildings; stone arcades st
 });
 
 test('static leaves are not duplicated near the camera when a portal takes over',()=>{
- const out=resolve(recipe(true)),face=out.freeFaces![0];assert.ok(face.geometry.door.indices.length>0&&face.geometry.doorGlass!.indices.length>0);
+ const out=legacy(()=>resolve(recipe(true))),face=out.freeFaces![0];assert.ok(face.geometry.door.indices.length>0&&face.geometry.doorGlass!.indices.length>0);
  const openable=buildStudioDetailBatches({freeFaces:[face]}),closed=buildStudioDetailBatches({freeFaces:[{...face,openable:false}]});
  const painted=(d:typeof openable)=>d.batches.find(b=>b.material.kind==='painted')!,glass=(d:typeof openable)=>d.batches.find(b=>b.material.kind==='glass')!;
  assert.equal(painted(closed).near-painted(openable).near,face.geometry.door.indices.length,'leaf, rail, bar and handle leave the near range');
@@ -52,7 +55,7 @@ test('static leaves are not duplicated near the camera when a portal takes over'
 });
 
 test('free-face glazing is see-through; roof and far fills keep opaque glass keys',()=>{
- const out=resolve(recipe(false)),d=buildStudioDetailBatches(out),glass=d.batches.filter(b=>b.material.kind==='glass');
+ const out=legacy(()=>resolve(recipe(false))),d=buildStudioDetailBatches(out),glass=d.batches.filter(b=>b.material.kind==='glass');
  assert.equal(glass.length,1);assert.ok(glass[0].material.kind==='glass'&&glass[0].material.seeThrough===true);assert.match(glass[0].key,/\|see$/);
  assert.ok(glass[0].far>0,'aperture fills and glass remain in the far range (drawn opaque there)');
  const shell=d.batches.find(b=>b.material.kind==='shell')!;assert.ok(shell.near>0);assert.equal(shell.far,0,'window shells are near-only');

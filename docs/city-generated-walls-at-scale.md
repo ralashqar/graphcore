@@ -283,3 +283,184 @@ run and the 396-plot WebGL2 run compare the same camera.
   shared workers instead of one per plot, but a grounds-only preparation would load faster.
 - The old per-building path remains for the edited plot, non-studio sculpt recipes and `?cityGwBatch=0`.
 - Physical-mobile validation is pending.
+
+## Instanced openings and cached faces (September 2026)
+
+Two follow-ups for the generated walls themselves: identical openings are no longer built and stored once per
+opening, and resolving a building no longer rebuilds faces whose inputs did not change. Local studio plots only: no
+recipe, schema, validator, backend or provider change; version-1 rhythm hashes are unchanged.
+
+### Instanced openings
+
+An opening's own detail (surround, frame, mullions, sill, glass or dark aperture fill, glazing bars, static door leaf,
+rail, bar and handle) depends only on its shape, not on where it stands. It is now a canonical piece
+(`src/domain/cityStudioOpeningPieces.ts`) placed by a matrix:
+
+- **Key.** The group relative to its origin (x0, and y0 for windows; doors keep face heights because rail and handle
+  heights are measured from the base), quantised to 0.1 mm, plus style, glazing, openable (v6), surround and wall
+  thickness, hashed. The size thresholds of the detail (vertical bar on panels wider than 0.85 m, transom bar, arched
+  leaf, wide door) are decided on the group as built and are part of the key, so a rhythm panel of exactly 0.85 m
+  keeps whichever bar it had (float noise decided that before, and still does per opening).
+- **Piece.** Built once per thread into two tiered geometries, indices `[near-only, both, far-only]` like the detail
+  batches: `painted` (trim and frame near only; door leaf, rail, bar and handle in both, or far only on openable v6
+  faces) and `glass` (glazing and glazed leaves in both, dark aperture fills far only). Painted vertices carry a tint
+  slot (trim, frame, door leaf, or their own colour for the brass handle).
+- **Instance.** A building-local matrix and four tints (trim paint region, frame, door leaf, glass). Straight faces
+  rotate and translate; curved faces map onto the opening's flat chord plane (`planePoint`), which stretches x by
+  chord/arc width, a few per cent at most (the instance shader corrects the normals for it; the old bend did not).
+  On curved faces the surround follows the arc and stays merged in the face; everything else is instanced.
+- **Wall.** The wall with its cut holes, reveals, paint and wear band stays merged per building, unchanged.
+- **Worker.** Faces built with `instance` list their openings instead of emitting that detail
+  (`buildFreeOpeningFaceGeometry(..., {instance})`); `buildStudioDetailBatches` returns `openings` (instances per key)
+  next to the batches; the city bake carries them in world space (`bake.openings`), so the chunks' far detail no longer
+  contains opening glass and leaves. Each worker sends a piece to the main thread once; the main thread keeps one
+  registry (`cityStudioOpeningRegistry.ts`, dependency-free), and a key is the same geometry wherever it was built.
+
+Rendering (`src/features/city/CityStudioOpeningInstances.tsx`): one store per scene. Buildings register their
+instances as blocks in world space with a level; the store draws one `InstancedMesh` per piece key and variant for the
+whole scene: `painted-near`, `painted-far`, `glass-see` (near, see-through), `glass-near` (near, opaque where nothing
+is behind the glass) and `glass-far`. Tints are instanced vertex attributes read by three shared node materials (the
+detail batches' painted, see-through and opaque glass shading), so every finish shares one draw per piece. Far glass
+of rectangular windows (5,809 of 8,065 openings in the benchmark city) does not use its key's far variant: it is one
+shared unit rectangle, scaled per instance (`unitRectPiece`), so rectangular windows of every size draw far in one
+glass and one aperture draw.
+
+- **Levels are the batches' levels.** `CityStudioDetailBatches` (edited plot, near overlays, per-building path)
+  registers its building at its own LOD (near/far, see-through as before, owners hidden by floor slicing left out,
+  off while any ancestor is hidden, so a preloaded overlay draws nothing). `CitySculptCity` registers every ready plot
+  at the far level from its bake and turns it off exactly when its chunk leaves out that plot's far detail (overlay
+  shown); the overlay then draws it at the near level. During the 0.6 s leave both draw, as the chunk and overlay did.
+- Blocks outside the frustum are left out (bounds of their instances, tested at most every 0.15 s); a change rewrites
+  only the instance buffers of the keys it touches, grown by powers of two. The instanced materials are compiled once
+  through the existing warm-up. `canvas.dataset.cityOpenings` (DEV) reports keys, meshes, drawn meshes and instances.
+- Switch for measurements: `?cityOpenings=0` builds every opening into the merged batches as before (the worker gets
+  the flag with each request; `OPENING_INSTANCING` in Node).
+
+Share instanced (`node --experimental-strip-types scripts/city-opening-stats.mjs`, the 396 benchmark buildings, all
+counted as if near):
+
+| | |
+|---|---|
+| Generated openings (shaped groups; New York kit apertures are kit pieces already) | 8,065 in 198 buildings |
+| Distinct pieces | 72 (35 rectangular: far through the unit rectangle) |
+| Opening-detail triangles instanced | near 86.6 % (the rest are curved surrounds), far 100 % |
+| Stored for that detail | 139.3 MB merged before; 21.6 MB now (19.5 MB curved surrounds and roof openings still merged, 0.9 MB instances, 1.2 MB pieces) |
+| Chunk far detail | 1,185,884 → 1,055,488 triangles |
+
+Equivalence: `cityStudioOpeningPieces.test.ts` expands the instances and compares them with the merged detail
+(instancing off) for free openings (v5 and v6 openable doors), a townhouse rhythm and a curved tower with a rhythm:
+same triangle counts per tier and material, area, centroid and colour; every rhythm style (two seeds each) matches in
+triangle counts; unit rectangles match their pieces' far range.
+
+### Face cache and faster faces
+
+- **Face cache** (`src/domain/cityStudioFaceCache.ts`). A built face (hole cutting, triangulation, wear distances, paint
+  split, bend) is cached per thread under a 106-bit hash of its inputs: dimensions, exposed region, groups (not their
+  ids), palette, paint and build options, plus the curve and its coarse ring for curved faces. The key hashes float
+  bits directly (`InputHash`): building it with `JSON.stringify` was most of a cached face's cost. LRU, 32 MB per
+  thread; results are shared and read-only (nothing downstream mutates them; transfers use fresh merged copies). An
+  edit rebuilds only the faces it changes; a design repeated on other plots (or rotated) resolves from the cache.
+  Each worker reply reports its hits and misses (`timing.faces`; `citySculptCity.worker.faceHits/faceMisses` in DEV).
+  `?cityFaceCache=0` / `FACE_CACHE.enabled=false` turns it off.
+- **Carving.** The far field and near band are now two clipping sweeps instead of five (unions of bands and holes
+  were redundant). Kit apertures get no wear band (they never had wear), so a face with only kit pieces is the
+  region minus holes, and holes that are axis-aligned rectangles strictly inside the region are simply added as hole
+  rings (no sweep); doors at the base and abutting tiles are still clipped. Shaped faces produce byte-identical
+  geometry; New York faces keep the same wall area (checked on 320 faces, largest relative difference 1e-15) with
+  slightly fewer triangles.
+- **Regions.** The exposed-region union is memoised, and bays that tile the whole wall (87 % of faces) give the
+  rectangle directly. Colour parsing in the face builder is memoised.
+- **City pool.** Not routed by design: each of the three city workers builds a face once and then hits its own
+  cache (79 % hits over the 396-plot load, 1,248 of 1,585 faces).
+
+### Results
+
+Resolve, Node, quiet machine, median of 25 (`scripts/benchmark-city-unified-facades.mjs`; cold clears the face cache
+before every run, cached is the same design again). Before: `HEAD` 7c91b7d.
+
+| Preset | Kit | Unified before | Unified now, cold | Cached |
+|---|---|---|---|---|
+| Corner deli | 3.4 ms | 17.8 ms | **8.7 ms** | 4.8 ms |
+| Neighborhood café | 1.9 ms | 10.4 ms | **5.3 ms** | 2.9 ms |
+| SoHo cast-iron loft | 3.2 ms | 17.5 ms | **7.5 ms** | 4.0 ms |
+| Garage workshop loft | 1.9 ms | 13.0 ms | **4.8 ms** | 2.9 ms |
+| Balcony apartments | 3.0 ms | 17.7 ms | **7.1 ms** | 3.6 ms |
+| Ornate commercial corner | 4.2 ms | 24.2 ms | **8.5 ms** | 5.4 ms |
+
+The 396 benchmark buildings in one thread (`scripts/profile-city-resolve.mjs`; `SRC=<dir>` runs another copy of
+`src/domain`, here `git archive HEAD`):
+
+| | Before | Now |
+|---|---|---|
+| Cold, per building: New York / rhythm / curved | 17.9 / 47.2 / 51.1 ms | 6.6 / 35.4 / 49.2 ms |
+| In plot order (one worker's view), total | 12.5 s | **5.0 s** (face cache 88 % hits, 32 MB) |
+| Resolve and detail merge, total | 13.5 s | **4.6 s** |
+| Studio examples (`scripts/benchmark-city-studio.mjs`, median) | 2.4 / 8.2 / 4.9 ms | 2.2 / 7.7 / 5.1 ms |
+
+396 unified buildings in the browser (native WebGPU, `scripts/city-generated-walls-benchmark.mjs`, one run each,
+back to back). Before: `?cityOpenings=0&cityFaceCache=0` (instancing and the face cache off; the carving and region
+speedups cannot be switched off and are in both, so the Node table above is the before/after for them). Frames p50 /
+p95 in ms (rAF intervals); another agent's browser benchmarks shared the machine earlier in the session.
+
+| View | Draw calls | Triangles | GPU MB | Frames |
+|---|---|---|---|---|
+| Map | 177 → 200 | 1.221M → 1.215M | 142.5 → 141.3 | 33/50 → 17/50 |
+| Map zoomed | 138 → 161 | 710k → 707k | 156.8 → 154.9 | 17/33 → 17/33 |
+| Map pan | 147 → 166 | 767k → 763k | 156.8 → 154.9 | 17/33 → 17/33 |
+| Drive, standing | 236 → 250 | 977k → 978k | 225.2 → 219.3 | 17/17 → 17/33 |
+| Driving | 227 → 240 | 897k → 899k | 231.3 → 228.2 | 17/33 → 17/33 |
+| Studio over its neighbours | 303 → 328 | 1.246M → 1.245M | 264.7 → 259.9 | 17/50 → 17/50 |
+
+| | Before | Now |
+|---|---|---|
+| All plots prepared (page load to last result) | 13.2 s | **11.0 s** |
+| City loaded (`citySculptCity.loadedMs`) | 10.4 s | **8.0 s** |
+| Worker per plot, city pool: resolve + bake | 54.4 + 10.5 ms | **34.6 + 6.1 ms** |
+| Worker round trip, background lane, cache-busted | 105 ms | 90 ms |
+| JS heap (map … studio) | 633–694 MB | 612–656 MB |
+| Studio edit, preview to frame p50 / p95 | 214 / 920 ms | 243 / 1,058 ms |
+
+- Draw calls rise by 14–25: the instanced openings draw one mesh per piece and variant (52 in the final studio
+  frame; 72 pieces city-wide), while the chunks lose their glass batches (375 → 285 chunk batches). The unit rectangle
+  keeps this small; without it the map was at 229 draws. The count is per distinct piece, not per building, so it
+  does not grow with the city; a 40-plot city pays about the same absolute cost (147 → 174 on the map).
+- Load: the pool resolves each plot 36 % faster and bakes 42 % faster; page load to all plots prepared falls 17 %.
+  The 12.5 s of the table above (earlier session) measured the same thing on a different machine state; this table's
+  before and after ran back to back.
+- Edit latency: a single run each on a busy machine; the worker part (145 → 160 ms) dominates and varies run to run.
+  The 40-plot runs measured 146/655 ms before and 117/639 ms after. The edited face is rebuilt as before; the
+  unchanged faces now come from the cache.
+
+### Parity
+
+`node scripts/city-generated-walls-parity.mjs obefore oafter`: map 0.00 % / 0.00, map zoomed 0.00 % / 0.01, drive
+0.00 % / 0.00, studio 0.05 % / 0.17, studio all far 0.05 % / 0.17 (pixels changed by more than 40/255 / mean
+difference). Diff images: `output/city-gw-diff-obefore-oafter-*.png`, shots `output/city-gw-o{before,after}-unified-*.png`.
+`scripts/city-studio-unified-facade-browser.mjs` (converted Corner deli, same camera): 0.87 % / 1.35 (was 0.73–0.82 %).
+
+**WebGL2 was not checked** (`CITY_BACKEND=webgl` benchmarks, parity and browser suites were skipped on request).
+
+### Verification
+
+- `npx tsc --noEmit`: no errors in these files; at the time of the final check it failed only on
+  `src/features/city/studioSelection.ts` (another change in progress), so `npm run build` stopped at `tsc`;
+  `npx vite build` alone succeeds.
+- Unit tests (272): the suites listed above, including new `cityStudioOpeningPieces.test.ts` (equivalence, sharing,
+  tiers, openable leaves, world transform and transfer, unit rectangles) and `cityStudioFaceCache.test.ts` (reuse,
+  single-face rebuild, ids ignored, cache off, a preset on another plot, hash, kit carving area, every rhythm style).
+  Tests of the old packaging run with instancing off.
+- Browser suites, native WebGPU (dev server on port 5192): every `scripts/city-studio-*-browser.mjs`,
+  `city-furniture-browser.mjs`, `city-variation-studio-browser.mjs` and `city-nyc-browser.mjs` pass; rhythm rules,
+  unified facade and NYC needed their one retry.
+
+### Limits and risks
+
+- More draw calls (above) for fewer bytes and less work: instancing trades per-building merges for per-piece draws.
+  Rare pieces (one or two instances in view) would be cheaper merged; not done.
+- Trims (Blender trim parts) stay merged per building on the main thread; curved surrounds, roof openings and
+  interior shells stay merged in the batches.
+- The see-through near glass of all near buildings is one transparent mesh per piece, sorted as one object.
+- Each sculpt worker may hold up to 32 MB of cached faces (five workers: two studio lanes, three city).
+- A new far-level instance rewrite touches every block using the key (and every far rectangle when a block with
+  rectangular windows changes): about a millisecond at 396 plots, measured only indirectly.
+- Physical-mobile validation is pending; WebGL2 not checked in this round.
