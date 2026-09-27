@@ -2,9 +2,12 @@
  * Kit pieces of every finished studio plot in the city, drawn as shared instanced meshes (one per module ×
  * channel × texture across all buildings, docs/city-generated-walls-at-scale.md) instead of per building.
  *
- * Per-plot levels (CitySculptCity decides them from the camera, several times a second):
+ * Per-plot levels (CitySculptCity decides them from the camera, several times a second; this component refines
+ * `full` into `medium` by distance):
  *   near   every piece, including `minDetail: near` modules (as CityStudioMeshes within 120 m)
  *   full   the kit pieces without near-only modules
+ *   medium the same pieces from the prepared medium kit (kit-medium.glb: bevels, small parts and hidden faces
+ *          removed; frames, mullions, sills, lintels, shutters and cornice profiles kept), beyond KIT_MEDIUM
  *   proxy  far proxies: the kit wall channel as boxes around the aperture (kit tiles only) and a recessed glass
  *          pane, other modules as one box (the business buildings' far representation)
  *   hidden outside the view frustum
@@ -20,19 +23,22 @@ import type {StudioChannel,StudioPiece} from '../../domain/cityStudioTypes';
 import type {CityPlotTransform} from '../../domain/citySculptCityBake';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
-import {loadStudioKit} from './CityStudioMeshes';
+import {KIT_MEDIUM,loadStudioKit,type StudioKitDetail} from './CityStudioMeshes';
+export {KIT_MEDIUM};
+import {viewDistance} from './CityStudioDetailBatches';
 import {cityGwStats} from './cityGwStats';
 
-export type KitLevel='hidden'|'proxy'|'full'|'near';
+export type KitLevel='hidden'|'proxy'|'medium'|'full'|'near';
 export type KitLevels={revision:number;levels:Map<string,KitLevel>};
 export type KitPlot={id:string;version:2|3|4|5;pieces:StudioPiece[];transform:CityPlotTransform};
-type Tier='full'|'near'|'proxy';
+type Tier='full'|'near'|'medium'|'proxy';
 type Pack=Map<string,{geometry:BufferGeometry;channel:string}[]>;
+const kitStats=new Map<string,{tier:Tier;triangles:number;instances:number}>();
 type Block={plot:string;matrices:Float32Array;colors:Float32Array;count:number};
 type GroupSource={geometry:BufferGeometry;channel:string;texture?:string;tier:Tier};
 type Group=GroupSource&{key:string;blocks:Block[];total:number};
 
-const shows=(tier:Tier,level:KitLevel|undefined)=>tier==='proxy'?level==='proxy':tier==='near'?level==='near':level==='full'||level==='near';
+const shows=(tier:Tier,level:KitLevel|undefined)=>tier==='proxy'?level==='proxy':tier==='medium'?level==='medium':tier==='near'?level==='near':level==='full'||level==='near';
 const materials=new Map<string,{material:Material;users:number}>();
 function acquire(glass:boolean,texture?:string){const key=`${glass}|${texture??''}`;let e=materials.get(key);if(!e){e={material:citySurfaceMaterial(glass,texture as CityTextureId),users:0};materials.set(key,e);}e.users++;return e.material;}
 function release(glass:boolean,texture?:string){const key=`${glass}|${texture??''}`,e=materials.get(key);if(!e||--e.users>0)return;materials.delete(key);e.material.dispose();}
@@ -51,7 +57,7 @@ export function studioPieceProxies(p:StudioPiece):{key:string;channel:string;tex
 }
 const plotMatrix=(t:CityPlotTransform)=>new Matrix4().compose(new Vector3(t.x,0,t.z),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),t.rotation),new Vector3(t.scale,t.scale,t.scale));
 /** One plot's instance blocks per group key (world-space matrices, channel colours). Cached per plot object. */
-function plotBlocks(plot:KitPlot,pack:Pack){
+function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
  const sources=new Map<string,GroupSource&{placements:StudioPiece[]}>(),world=plotMatrix(plot.transform);
  const push=(key:string,source:GroupSource,p:StudioPiece)=>{let s=sources.get(key);if(!s){s={...source,placements:[]};sources.set(key,s);}s.placements.push(p);};
  for(const p of plot.pieces){
@@ -61,6 +67,12 @@ function plotBlocks(plot:KitPlot,pack:Pack){
    if(p.omit?.includes(piece.channel))continue;
    const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,tier:Tier=near?'near':'full';
    push(`${plot.version}/${p.module}/${i}/${texture??''}/${tier}`,{geometry:piece.geometry,channel:piece.channel,texture,tier},p);
+  }
+  // Medium kit: the same modules and channels (near-only modules stay out, as at the full level).
+  if(medium&&!near)for(const piece of medium.get(p.module)??[]){
+   if(p.omit?.includes(piece.channel))continue;
+   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture;
+   push(`${plot.version}/${p.module}/medium:${piece.channel}/${texture??''}/medium`,{geometry:piece.geometry,channel:piece.channel,texture,tier:'medium'},p);
   }
   for(const x of studioPieceProxies(p))push(`proxy/${x.key}`,{geometry:x.geometry,channel:x.channel,texture:x.texture,tier:'proxy'},p);
  }
@@ -85,33 +97,68 @@ export function kitBounds(plot:KitPlot):Box3{
  }
  return box;
 }
-const blockCache=new WeakMap<KitPlot,{pack:Pack;blocks:ReturnType<typeof plotBlocks>}>();
+const blockCache=new WeakMap<KitPlot,{pack:Pack;medium:Pack|undefined;blocks:ReturnType<typeof plotBlocks>}>();
 const capacityFor=(n:number)=>Math.max(64,2**Math.ceil(Math.log2(Math.max(1,n))));
+
+const packKey=(version:number,detail:StudioKitDetail)=>`${version}/${detail}`;
+type Force={kit?:KitLevel};
+const testForce=():Force|undefined=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('cityStudioTest')?(window as unknown as {__cityGwForce?:Force}).__cityGwForce:undefined;
 
 export function CitySculptSharedKit({plots,levels}:{plots:KitPlot[];levels:MutableRefObject<KitLevels>}){
  const invalidate=useThree(s=>s.invalidate);
  const versions=useMemo(()=>[...new Set(plots.map(p=>p.version))].sort().join(','),[plots]);
- const [packs,setPacks]=useState<Map<number,Pack>>(new Map());
- useEffect(()=>{let live=true;for(const v of versions.split(',').filter(Boolean).map(Number) as (2|3|4|5)[]){if(packs.has(v))continue;loadStudioKit(v).then(pack=>{if(live){setPacks(old=>new Map(old).set(v,pack));invalidate();}}).catch(()=>{});}return()=>{live=false;};},[versions]);// eslint-disable-line react-hooks/exhaustive-deps
+ const [packs,setPacks]=useState<Map<string,Pack>>(new Map());
+ useEffect(()=>{let live=true;for(const v of versions.split(',').filter(Boolean).map(Number) as (2|3|4|5)[])for(const detail of (KIT_MEDIUM?['full','medium']:['full']) as StudioKitDetail[]){const key=packKey(v,detail);if(packs.has(key))continue;loadStudioKit(v,detail).then(pack=>{if(live){setPacks(old=>new Map(old).set(key,pack));invalidate();}}).catch(()=>{});}return()=>{live=false;};},[versions]);// eslint-disable-line react-hooks/exhaustive-deps
  const groups=useMemo(()=>{
   const out=new Map<string,Group>();
   for(const plot of plots){
-   const pack=packs.get(plot.version);if(!pack)continue;
-   let cached=blockCache.get(plot);if(!cached||cached.pack!==pack){cached={pack,blocks:plotBlocks(plot,pack)};blockCache.set(plot,cached);}
+   const pack=packs.get(packKey(plot.version,'full')),medium=packs.get(packKey(plot.version,'medium'));if(!pack)continue;
+   let cached=blockCache.get(plot);if(!cached||cached.pack!==pack||cached.medium!==medium){cached={pack,medium,blocks:plotBlocks(plot,pack,medium)};blockCache.set(plot,cached);}
    for(const [key,s] of cached.blocks){let g=out.get(key);if(!g){g={key,geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,blocks:[],total:0};out.set(key,g);}g.blocks.push(s.block);g.total+=s.block.count;}
   }
   return [...out.values()];
  },[plots,packs]);
  useEffect(()=>{const canvas=document.querySelector('canvas');if(canvas&&import.meta.env.DEV)canvas.dataset.citySculptKit=JSON.stringify({groups:groups.length,instances:groups.reduce((n,g)=>n+g.total,0),packs:[...packs.keys()]});},[groups,packs]);
- return <group name="city-sculpt-shared-kit">{groups.map(g=><KitGroup key={`${g.key}|${capacityFor(g.total)}`} group={g} capacity={capacityFor(g.total)} levels={levels}/>)}</group>;
+ useEffect(()=>{const live=new Set(groups.map(g=>g.key));for(const key of [...kitStats.keys()])if(!live.has(key))kitStats.delete(key);},[groups]);
+
+ // The levels the groups draw: CitySculptCity's, with `full` refined into `medium` far from the camera (only once the
+ // plot's medium kit has loaded). Runs before the groups' frame callbacks, on upstream changes and five times a second.
+ const effective=useRef<KitLevels>({revision:0,levels:new Map()});
+ const refine=useRef({upstream:-1,at:-1,plots,packs});refine.current.plots=plots;refine.current.packs=packs;
+ useFrame(({camera,size,clock})=>{
+  const r=refine.current,up=levels.current;
+  if(r.upstream===up.revision&&clock.elapsedTime-r.at<.2)return;
+  r.upstream=up.revision;r.at=clock.elapsedTime;
+  const out=effective.current.levels,forced=!!testForce()?.kit;let changed=false;
+  for(const plot of r.plots){
+   const upstream=up.levels.get(plot.id),old=out.get(plot.id);let level=upstream;
+   if(upstream==='full'&&KIT_MEDIUM&&!forced&&r.packs.has(packKey(plot.version,'medium'))){
+    const d=viewDistance(camera,size.height,plot.transform.x,plot.transform.z);
+    if(d>=(old==='medium'?KIT_MEDIUM.leave:KIT_MEDIUM.enter))level='medium';
+   }
+   if(level===undefined){if(out.delete(plot.id))changed=true;}else if(old!==level){out.set(plot.id,level);changed=true;}
+  }
+  if(out.size>r.plots.length){const ids=new Set(r.plots.map(p=>p.id));for(const id of [...out.keys()])if(!ids.has(id)){out.delete(id);changed=true;}}
+  if(changed){effective.current.revision++;invalidate();const h:Record<string,number>={};for(const l of out.values())h[l]=(h[l]??0)+1;(cityGwStats as {kitLevels?:string}).kitLevels=JSON.stringify(h);}
+  if(import.meta.env.DEV){const t:Record<string,number>={};for(const s of kitStats.values())t[s.tier]=(t[s.tier]??0)+s.triangles;(cityGwStats as {kit?:string}).kit=JSON.stringify(t);}
+ },-1);
+ return <group name="city-sculpt-shared-kit">{groups.map(g=><KitGroup key={`${g.key}|${capacityFor(g.total)}`} group={g} capacity={capacityFor(g.total)} levels={effective}/>)}</group>;
 }
+
+const triangles=(g:BufferGeometry)=>(g.index?g.index.count:g.getAttribute('position').count)/3;
+/** Development: kit triangles drawn per tier and per module (window.__cityKitStats()). */
+if(typeof window!=='undefined'&&import.meta.env?.DEV)(window as unknown as {__cityKitStats?:()=>unknown}).__cityKitStats=()=>{
+ const tiers:Record<string,number>={},modules:Record<string,number>={};
+ for(const [key,s] of kitStats){tiers[s.tier]=(tiers[s.tier]??0)+s.triangles;const m=key.split('/').slice(0,2).join('/')+'/'+s.tier;modules[m]=(modules[m]??0)+s.triangles;}
+ return {tiers,modules:Object.entries(modules).sort((a,b)=>b[1]-a[1]).slice(0,60)};
+};
 
 function KitGroup({group,capacity,levels}:{group:Group;capacity:number;levels:MutableRefObject<KitLevels>}){
  const glass=group.channel==='glass';
  const material=useMemo(()=>acquire(glass,group.texture),[glass,group.texture]);
  useEffect(()=>()=>release(glass,group.texture),[glass,group.texture]);
  const mesh=useMemo(()=>{const m=new InstancedMesh(group.geometry,material,capacity);m.instanceColor=new InstancedBufferAttribute(new Float32Array(capacity*3),3);m.count=0;m.visible=false;m.frustumCulled=false;m.name=`city-sculpt-kit-${group.tier}`;return m;},[group.geometry,material,capacity]);
- useEffect(()=>()=>{mesh.dispose();},[mesh]);
+ useEffect(()=>()=>{mesh.dispose();kitStats.delete(group.key);},[mesh,group.key]);
  const applied=useRef<{revision:number;group:Group|null;included:string}>({revision:-1,group:null,included:''});
  const invalidate=useThree(s=>s.invalidate);
  const update=()=>{
@@ -121,6 +168,7 @@ function KitGroup({group,capacity,levels}:{group:Group;capacity:number;levels:Mu
   let count=0;const matrices=mesh.instanceMatrix.array as Float32Array,colors=mesh.instanceColor!.array as Float32Array;
   group.blocks.forEach((b,i)=>{if(included[i]!=='1')return;matrices.set(b.matrices,count*16);colors.set(b.colors,count*3);count+=b.count;});
   mesh.count=count;mesh.visible=count>0;cityGwStats.kitUploads++;cityGwStats.kitInstancesCopied+=count;
+  if(import.meta.env.DEV)kitStats.set(group.key,{tier:group.tier,triangles:count*triangles(group.geometry),instances:count});
   mesh.instanceMatrix.clearUpdateRanges();mesh.instanceMatrix.addUpdateRange(0,count*16);mesh.instanceMatrix.needsUpdate=true;
   mesh.instanceColor!.clearUpdateRanges();mesh.instanceColor!.addUpdateRange(0,count*3);mesh.instanceColor!.needsUpdate=true;
   invalidate();

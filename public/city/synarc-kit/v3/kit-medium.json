@@ -1,0 +1,589 @@
+{
+ "rules": "kit-medium-2",
+ "version": 3,
+ "source": "kit.glb",
+ "sourceSha256": "b69fe400fdcd0d08f58b86e8ec56bedf056a8ca0d2ec5cf9bf71e696c44ca245",
+ "glbSha256": "b96f97c5bc9cfc6bf843b6d5d0811f2781ace71910e72f53815d031c135e72cf",
+ "triangles": {
+  "full": 11108,
+  "medium": 4793
+ },
+ "modules": [
+  {
+   "id": "address-plaque",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-bracket",
+   "full": 32,
+   "medium": 31,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-centre",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-corner",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-inner",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-left",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "balcony-right",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "canopy-awning",
+   "full": 148,
+   "medium": 132,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "canopy-centre",
+   "full": 52,
+   "medium": 52,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "canopy-corner",
+   "full": 56,
+   "medium": 36,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 12
+  },
+  {
+   "id": "canopy-end-left",
+   "full": 44,
+   "medium": 42,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "canopy-end-right",
+   "full": 44,
+   "medium": 42,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "canopy-glass",
+   "full": 52,
+   "medium": 52,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "canopy-metal",
+   "full": 52,
+   "medium": 52,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "capital",
+   "full": 36,
+   "medium": 36,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "corner-concave",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "corner-convex",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "cornice",
+   "full": 132,
+   "medium": 36,
+   "unbevelled": 0,
+   "dropped": 8,
+   "facesRemoved": 0
+  },
+  {
+   "id": "door-arched",
+   "full": 432,
+   "medium": 376,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 30
+  },
+  {
+   "id": "door-balcony",
+   "full": 168,
+   "medium": 118,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 25
+  },
+  {
+   "id": "door-double",
+   "full": 168,
+   "medium": 118,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 25
+  },
+  {
+   "id": "door-lobby",
+   "full": 204,
+   "medium": 148,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 28
+  },
+  {
+   "id": "door-panelled",
+   "full": 192,
+   "medium": 140,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 26
+  },
+  {
+   "id": "door-shop",
+   "full": 168,
+   "medium": 118,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 25
+  },
+  {
+   "id": "floral-relief",
+   "full": 1932,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 96,
+   "facesRemoved": 1
+  },
+  {
+   "id": "iron-scroll",
+   "full": 1932,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 96,
+   "facesRemoved": 1
+  },
+  {
+   "id": "keystone",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "pediment",
+   "full": 132,
+   "medium": 36,
+   "unbevelled": 0,
+   "dropped": 8,
+   "facesRemoved": 0
+  },
+  {
+   "id": "pilaster",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "plinth",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "rail-centre",
+   "full": 464,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 16,
+   "facesRemoved": 8
+  },
+  {
+   "id": "rail-corner",
+   "full": 464,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 16,
+   "facesRemoved": 8
+  },
+  {
+   "id": "rail-inner",
+   "full": 464,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 16,
+   "facesRemoved": 8
+  },
+  {
+   "id": "rail-left",
+   "full": 144,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "rail-right",
+   "full": 144,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "rail-short",
+   "full": 96,
+   "medium": 88,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "sill",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "stair-balcony-link",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "stair-flight",
+   "full": 108,
+   "medium": 108,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-foot",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-landing",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-rail",
+   "full": 128,
+   "medium": 120,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "stair-return",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-return-guard",
+   "full": 60,
+   "medium": 54,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 3
+  },
+  {
+   "id": "stair-return-rail",
+   "full": 128,
+   "medium": 120,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "stair-step",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-storey",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-stringer-left",
+   "full": 32,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-stringer-right",
+   "full": 32,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-support",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-top",
+   "full": 12,
+   "medium": 12,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "stair-top-threshold",
+   "full": 24,
+   "medium": 22,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "string-course",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "trim-concave",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "trim-corner",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "trim-end",
+   "full": 36,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "wall-curve",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "wall-full",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "wall-half",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "wall-lamp",
+   "full": 60,
+   "medium": 54,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 3
+  },
+  {
+   "id": "wall-panel",
+   "full": 120,
+   "medium": 100,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 10
+  },
+  {
+   "id": "wall-quarter",
+   "full": 12,
+   "medium": 10,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "wall-rusticated",
+   "full": 72,
+   "medium": 60,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 6
+  },
+  {
+   "id": "window-arched",
+   "full": 420,
+   "medium": 352,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 36
+  },
+  {
+   "id": "window-box",
+   "full": 72,
+   "medium": 60,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 6
+  },
+  {
+   "id": "window-french",
+   "full": 180,
+   "medium": 116,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 32
+  },
+  {
+   "id": "window-mullioned",
+   "full": 204,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 38
+  },
+  {
+   "id": "window-narrow",
+   "full": 168,
+   "medium": 108,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 30
+  },
+  {
+   "id": "window-paired",
+   "full": 180,
+   "medium": 116,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 32
+  },
+  {
+   "id": "window-sash",
+   "full": 204,
+   "medium": 128,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 38
+  },
+  {
+   "id": "window-shop",
+   "full": 168,
+   "medium": 110,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 29
+  },
+  {
+   "id": "window-shuttered",
+   "full": 420,
+   "medium": 140,
+   "unbevelled": 0,
+   "dropped": 18,
+   "facesRemoved": 32
+  }
+ ]
+}

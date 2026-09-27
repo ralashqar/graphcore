@@ -26,7 +26,8 @@ per-building path is unchanged and still draws the edited plot; `?cityGwBatch=0`
 | Near overlay | inside 55 m (leave at 65 m), as before | the plot's per-building near detail; its chunk leaves out that plot's far detail (index rewrite in place, draw range, no new buffers) |
 | Chunk far | everywhere else | the generated walls' existing far representation (outer skin with real holes, reveals, glass, dark aperture fills; see `docs/city-free-faces-performance.md`), roofs, edges, flashing, path |
 | Kit near | 3D camera distance under 120 m | all kit pieces, including `minDetail: near` modules (as before) |
-| Kit full | up to 400 m equivalent distance (leave at 448 m) | kit pieces without near-only modules (as before) |
+| Kit full | from 120 m to 135 m equivalent distance | kit pieces without near-only modules (as before) |
+| Kit medium | 135 m (leave at 121.5 m) to 400 m (leave at 448 m) | the same pieces from the prepared medium kit (see "Medium kit" below) |
 | Kit proxy | beyond | business-style far proxies: the kit wall channel as boxes around the aperture, a recessed glass pane, other modules as one box |
 | Hidden | outside the view frustum (bounds of the plot's kit pieces) | kit instances compacted away; chunks are frustum-culled per mesh |
 
@@ -36,8 +37,101 @@ and when a plot leaves the near radius the chunk takes it back while the overlay
 
 The proxy threshold is deliberately far. A 150 m switch cut the map view from 3.3M to 0.86M triangles and its
 p50 from 67 to 17 ms, but changed 9.4 % of map pixels (window frames, sills, balconies and cornices become boxes),
-so it is not the default. `?cityGwKitFar=<m>` moves the switch for measurements. A cheaper far kit that keeps
-frames would need prepared low-detail kit meshes (vertex clustering at 3–10 cm only halves NYC windows).
+so it is not the default. `?cityGwKitFar=<m>` moves the switch for measurements. The medium kit (below) takes most
+of that saving without the change in look.
+
+### Medium kit (September 2026)
+
+Kit window triangles dominated the zoomed-out map (about 2.6M of 3.1M for 396 unified buildings, 3.7M of 4.0M as
+kit tiles). The medium kit is a prepared low-detail copy of each kit, drawn between the full kit and the proxies.
+
+**Asset pipeline.** `scripts/build-city-kit-medium.py` (Blender 5.0, headless, deterministic) reads the shipped
+`public/city/synarc-kit/v{2,3,4,5}/kit.glb` and writes `kit-medium.glb` and `kit-medium.json` (source and output
+SHA-256, per-module triangles and what was removed) next to it:
+
+```
+"C:/Program Files/Blender Foundation/Blender 5.0/blender.exe" --background --factory-startup --python scripts/build-city-kit-medium.py [-- 2 3 4 5]
+```
+
+The kit modules are boxes (bevelled with one segment in the New York and collection modules), six-sided rods and a
+few cones. Per module, in module space:
+
+- Bevels: a convex bevelled box (at least 80 % of its bounding box volume, faces on all six sides) becomes its
+  bounding box. Bevels only cut corners, so each part keeps its outer extents: a 44-triangle frame, sill, jamb or
+  cornice step becomes 12 triangles or fewer.
+- Small parts: islands under 10 cm in every direction (knobs, dentils), and strips under 4.5 cm across and 30 cm
+  long (handles, shutter louvres). Scroll ornaments are made of such short rods, so rail scrolls go too.
+- Hidden faces: faces facing into the wall at or behind the wall front of window, door, trim and ornament modules;
+  wall-channel faces resting on the module below; faces inside or against another box of the same module. Walls,
+  parapets, cornices and other crowns keep their back faces (they can stand above a roof edge; plain walls are also
+  terrace parapets). A first version without that exception lost the parapets' inner faces (3.5 % of kit-tile map
+  pixels).
+- Kept: window frames, mullions, transoms, glazing bars, reveals, sills, lintels, keystones, jambs, piers, shutter
+  panels, awning stripes, cornice steps and brackets, balusters and rails, water tanks and roof items.
+
+Output normals are flat and there are no UVs (the city surface material is triplanar in world space). Root names and
+material names match the kit, so `loadStudioKit(version, 'medium')` reads it like the kit. The assets are derived
+from the self-authored CC0 kit only. `src/domain/cityStudioKitMedium.test.ts` checks that each medium file was built
+from the current `kit.glb` (rebuild after any kit change), has the same modules, never adds a channel, keeps geometry
+for every module drawn beyond 120 m, and stays under 60 % of the kit's triangles.
+
+| Kit | Full triangles | Medium | Example |
+|---|---|---|---|
+| v2 | 10,792 | 4,515 (42 %) | |
+| v3 | 11,108 | 4,793 (43 %) | window-sash 204 → 128 |
+| v4 (New York) | 21,286 | 8,901 (42 %) | window-nyc-sash 576 → 116, nyc-cornice 528 → 122 |
+| v5 | 28,414 | 14,024 (49 %) | |
+
+Near-only modules (scrolls, rosettes) are never drawn at the medium level; their medium entries are placeholders.
+
+**Runtime.** `CitySculptSharedKit` loads both kits per version and refines CitySculptCity's `full` level into
+`medium` from 135 m equivalent distance (back to full inside 121.5 m), five times a second and on every level change,
+only once that version's medium kit has loaded. Medium groups are their own instanced meshes (one per module ×
+channel × texture, like the other levels); a level change only recompacts the affected plots' blocks, so there is no
+remount and no gap. `?cityGwKitMedium=<m>` moves the switch and `?cityGwKitMedium=0` turns the level off; a forced
+kit level (`__cityGwForce={kit:…}`, which now also accepts `medium`) disables the refinement. Kit-tile (legacy)
+buildings go through the same shared kit and get the same level. The per-building path (`CityStudioMeshes`: the
+edited plot, `?cityGwBatch=0`) swaps a studio building's kit to the medium kit beyond the same distance; business
+buildings keep CityVisibility's full/proxy switch at 55/65 m. In development `window.__cityKitStats()` and
+`__cityGwStats.kit` report kit triangles per level.
+
+**Results** (`scripts/city-generated-walls-benchmark.mjs`, 396 plots, the same code with `?cityGwKitMedium=0` as
+"full"; generated-wall changes from concurrent work were live in both runs, so draw calls differ from the tables
+below). Triangles are the renderer's per-frame mean; "kit" is the shared kit's own share.
+
+Native WebGPU, `pfull` against `pmed`:
+
+| View | Unified: triangles (kit) | Unified: calls | Kit tiles: triangles (kit) | Kit tiles: calls |
+|---|---|---|---|---|
+| Map (zoomed out) | 3.10M → **1.22M** (2.56M → 0.67M) | 227 → 229 | 4.00M → **1.38M** (3.67M → 1.06M) | 150 → 150 |
+| Map zoomed | 1.46M → **0.71M** (1.03M → 0.28M) | 182 → 182 | 1.90M → **0.79M** (1.66M → 0.56M) | 128 → 128 |
+| Drive, standing | 1.81M → **0.98M** | 235 → 275 | 2.44M → **1.27M** | 169 → 223 |
+| Driving | 1.68M → **0.89M** | 227 → 265 | 2.35M → **1.15M** | 166 → 216 |
+| Studio over its neighbours | 1.92M → **1.24M** | 310 → 357 | 2.37M → **1.41M** | 225 → 291 |
+
+The zoomed-out map drops by 61 % (unified) and 65 % (kit tiles); the kit itself by 74 % and 71 %. GPU memory
+(renderer estimate) is unchanged on the map (137–150 MB) and 20–60 MB higher in drive and studio views, where both the
+full and the medium kit are in frame (their instance buffers and a second geometry set). JS heap is within run-to-run
+noise (unified 0.58–0.64 GB, kit tiles 0.33–0.39 GB). Load to settled: 59 s → 48 s (unified), 75 s → 58 s (kit
+tiles); both kits load in parallel (the medium files are 0.3–1.0 MB). Studio edit preview-to-frame p50 was 224 → 173
+ms (unified) and 132 → 152 ms (kit tiles): unchanged within noise, since the edited plot is always near.
+
+Frame times on this machine were shared with other browser benchmarks during these runs and are not a reliable
+comparison; triangles, draw calls and memory are.
+
+Parity (`node scripts/city-generated-walls-parity.mjs <full> <medium> <variant> [-webgl]`, share of pixels changed
+by more than 40/255 / mean difference):
+
+| Variant (native) | Map | Map zoomed | Drive | Studio | Studio, all far |
+|---|---|---|---|---|---|
+| 396 unified (`pfull`/`pmed`) | 0.12 % / 0.59 | 0.08 % / 0.35 | 0.02 % / 0.20 | 0.21 % / 1.79 | 0.21 % / 1.79 |
+| 396 kit tiles (`pfull`/`pmed`) | 0.12 % / 0.64 | 0.09 % / 0.40 | 0.03 % / 0.25 | 0.10 % / 1.21 | 0.10 % / 1.21 |
+
+WebGL2 (`CITY_BACKEND=webgl`) was not measured for the medium kit.
+
+The remaining differences are single pixels on frame and sill edges where a bevel's shading is gone. Screenshots:
+`output/city-gw-{pfull,pmed}-{unified,kit}-{map,map-zoomed,drive,studio}.png`; diffs
+`output/city-gw-diff-pfull-pmed-*.png` (kit tiles) and `output/city-gw-diff-pfull-pmed-unified-{map,drive}.png`.
 
 ### Edited plot and edit latency
 
@@ -175,9 +269,12 @@ run and the 396-plot WebGL2 run compare the same camera.
 
 ## Limits
 
-- Triangles, not draw calls, now bound the zoomed-out map on this GPU: 396 buildings with full New York kit windows
-  are about 3M triangles (the old path drew 2.8M). Far kit proxies cut that to a quarter but change the look; see
-  above.
+- Triangles, not draw calls, bound the zoomed-out map on this GPU. With the medium kit, 396 unified buildings are
+  about 1.2M triangles (3.1M with the full kit); proxies would cut further but change the look.
+- The medium kit adds instanced meshes: a plot switching between full and medium kit uploads its instance blocks to
+  the other level's meshes (as the proxy switch does), and drive views with both levels in frame draw about 40 more
+  calls and hold 20–60 MB more instance memory. Rebuild `kit-medium.glb` whenever a `kit.glb` changes (the unit test
+  fails until then).
 - The near overlay re-resolves the plot on the background lane when it first approaches (about 100 ms, off-thread);
   trims are still fitted on the main thread when an overlay mounts (hidden, before it is needed).
 - Chunks keep their merged arrays on the CPU (needed to rebuild without one plot); the far detail and envelope

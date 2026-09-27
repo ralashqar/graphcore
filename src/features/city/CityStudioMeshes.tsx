@@ -9,10 +9,18 @@ import {STUDIO_FAMILIES,STUDIO_MODULE_MAP,studioModules} from '../../domain/city
 import type {StudioPiece,StudioChannel} from '../../domain/cityStudioTypes';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
+import {viewDistance} from './CityStudioDetailBatches';
 
 type Piece={geometry:BufferGeometry;channel:string};
-const pending=new Map<2|3|4|5,Promise<Map<string,Piece[]>>>();
-export function loadStudioKit(version:2|3|4|5=2){const previous=pending.get(version);if(previous)return previous;const loading=new GLTFLoader().loadAsync(`/city/synarc-kit/v${version}/kit.glb`).then(gltf=>{
+/** Kit detail levels: `full` is the authored kit; `medium` is the prepared far kit (kit-medium.glb, built by
+ * scripts/build-city-kit-medium.py: bevels, small parts and hidden faces removed; docs/city-generated-walls-at-scale.md). */
+export type StudioKitDetail='full'|'medium';
+/** Medium kit switch (equivalent distance, as the other kit levels): the medium kit from `enter` m, back to the full
+ * kit inside `leave` m. `?cityGwKitMedium=<m>` moves it, `?cityGwKitMedium=0` turns the level off (measurements). */
+const mediumParam=typeof window!=='undefined'?new URLSearchParams(window.location.search).get('cityGwKitMedium'):null;
+export const KIT_MEDIUM=mediumParam==='0'?null:{enter:Number(mediumParam)||135,leave:(Number(mediumParam)||135)*.9} as const;
+const pending=new Map<string,Promise<Map<string,Piece[]>>>();
+export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full'){const id=`${version}/${detail}`,previous=pending.get(id);if(previous)return previous;const loading=new GLTFLoader().loadAsync(`/city/synarc-kit/v${version}/${detail==='medium'?'kit-medium':'kit'}.glb`).then(gltf=>{
  const pack=new Map<string,Piece[]>();gltf.scene.updateMatrixWorld(true);
  for(const root of gltf.scene.children){const groups=new Map<string,BufferGeometry[]>();root.traverse(child=>{
   if(!(child instanceof Mesh)||Array.isArray(child.material))return;
@@ -24,7 +32,7 @@ export function loadStudioKit(version:2|3|4|5=2){const previous=pending.get(vers
  pack.set(String(root.userData.name??root.name).replace(/^v[345]\//,''),[...groups].flatMap(([channel,geometries])=>{const geometry=geometries.length===1?geometries[0]:mergeGeometries(geometries);if(!geometry)return geometries.map(geometry=>({geometry,channel}));if(geometries.length>1)geometries.forEach(g=>g.dispose());return [{geometry,channel}];}));}
  gltf.scene.traverse(child=>{if(child instanceof Mesh){child.geometry.dispose();(Array.isArray(child.material)?child.material:[child.material]).forEach((m:Material)=>m.dispose());}});
  if(pack.size!==studioModules(version).length||!pack.has('wall-full')||version>=3&&!pack.has('stair-top-threshold'))throw Error('The architectural kit is incomplete.');return pack;
-}).catch(e=>{pending.delete(version);throw e;});pending.set(version,loading);return loading;}
+}).catch(e=>{pending.delete(id);throw e;});pending.set(id,loading);return loading;}
 
 export function StudioInstances({geometry,channel,placements,texture,onSelect,representation}:{geometry:BufferGeometry;channel:string;placements:StudioPiece[];texture?:string;onSelect?:(p:StudioPiece)=>void;representation?:'full'|'simple'}){
  const visibility=useCityVisibility(),revision=useRef(-1),visibleIndices=useRef<number[]>([]),ref=useRef<InstancedMesh>(null),invalidate=useThree(s=>s.invalidate);
@@ -37,19 +45,26 @@ export function StudioInstances({geometry,channel,placements,texture,onSelect,re
 
 export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];version?:2|3|4|5}){
  const visibility=useCityVisibility(),proxyOnly=!!visibility&&CITY_LIGHT_MODE;
- const root=useRef<Group>(null),point=useMemo(()=>new Vector3(),[]),sample=useRef(0);const [near,setNear]=useState(true);
- useFrame(({camera,clock})=>{if(clock.elapsedTime-sample.current<.5||!root.current)return;sample.current=clock.elapsedTime;root.current.getWorldPosition(point);const next=camera.position.distanceToSquared(point)<14400;setNear(old=>old===next?old:next);});
+ // Business pieces (propertyId) follow CityVisibility and its proxies; a studio building's own kit goes medium far away.
+ const business=useMemo(()=>pieces.some(p=>p.propertyId),[pieces]);
+ const root=useRef<Group>(null),point=useMemo(()=>new Vector3(),[]),sample=useRef(0);const [near,setNear]=useState(true),[medium,setMedium]=useState(false);
+ useFrame(({camera,clock,size})=>{if(clock.elapsedTime-sample.current<.5||!root.current)return;sample.current=clock.elapsedTime;root.current.getWorldPosition(point);const next=camera.position.distanceToSquared(point)<14400;setNear(old=>old===next?old:next);
+  const far=!!KIT_MEDIUM&&!business&&!next&&viewDistance(camera,size.height,point.x,point.z)>=(medium?KIT_MEDIUM.leave:KIT_MEDIUM.enter);if(far!==medium)setMedium(far);});
+ const [mediumPack,setMediumPack]=useState<Map<string,Piece[]>|null>(null);
+ useEffect(()=>{if(!medium||mediumPack)return;let live=true;loadStudioKit(version,'medium').then(p=>{if(live){setMediumPack(p);invalidate();}}).catch(()=>{});return()=>{live=false;};},[medium,version]);// eslint-disable-line react-hooks/exhaustive-deps
+ useEffect(()=>setMediumPack(null),[version]);
  const [pack,setPack]=useState<Map<string,Piece[]>|null>(null),[retry,setRetry]=useState(0),{gl,invalidate}=useThree();
  useEffect(()=>{let live=true;setPack(null);if(proxyOnly){gl.domElement.dataset.cityStudioKit='proxy';invalidate();return;}loadStudioKit(version).then(pack=>{if(live){setPack(pack);gl.domElement.dataset.cityStudioKit='ready';invalidate();}}).catch(()=>{if(live)gl.domElement.dataset.cityStudioKit='fallback';});return()=>{live=false;};},[retry,gl,invalidate,version,proxyOnly]);
  useEffect(()=>{const retry=()=>setRetry(n=>n+1);window.addEventListener('online',retry);return()=>window.removeEventListener('online',retry);},[]);
  const groups=useMemo(()=>{const out=new Map<string,{piece:Piece;placements:StudioPiece[];texture?:string}>();
   if(!pack)return out;
-  for(const p of pieces.filter(p=>p.propertyId||near||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near'))for(const [i,piece] of (pack.get(p.module)??[]).entries()){
+  const kit=medium&&mediumPack?mediumPack:pack;
+  for(const p of pieces.filter(p=>p.propertyId||near||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near'))for(const [i,piece] of (kit.get(p.module)??[]).entries()){
    // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
    if(p.omit?.includes(piece.channel))continue;
-   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,key=`${p.module}/${i}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture};group.placements.push(p);out.set(key,group);
+   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,key=`${p.module}/${kit===pack?i:'medium:'+piece.channel}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture};group.placements.push(p);out.set(key,group);
   }return out;
- },[pieces,pack,near]);
+ },[pieces,pack,near,medium,mediumPack]);
  const fallbackCube=useMemo(()=>new BoxGeometry(1,1,1),[]);
  useEffect(()=>()=>fallbackCube.dispose(),[fallbackCube]);
  const fallback=useMemo(()=>{
