@@ -8,6 +8,7 @@ import { freshLiving, storefrontVisual } from "../../domain/cityLiving";
 import type { CityProperty } from "../../domain/city";
 import { BUILDING_RECIPES } from "../../domain/cityLayout";
 import { cityNavigate } from "./api";
+import { studioIsolate } from "./cityStudioIsolate";
 export function CityStreetActivity(
   { properties, reduced, paused }: {
     properties: CityProperty[];
@@ -63,7 +64,7 @@ export function CityStreetActivity(
     }
     if (!bodies.current || !heads.current) return;
     let count = 0;
-    if (!paused && document.visibilityState === "visible") {
+    if (!paused && !studioIsolate().on && document.visibilityState === "visible") {
       const nearby = entries.filter(({ p, state }) => {
         projection.set(plotAxis(p.x), 2, plotAxis(p.z)).project(camera);
         return state.band !== "quiet" && !!freshLiving(state) &&

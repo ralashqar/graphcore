@@ -1,4 +1,5 @@
 import { Html } from "@react-three/drei";
+import { studioIsolate } from "./cityStudioIsolate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Group, InstancedMesh, Object3D, Vector3 } from "three";
@@ -57,7 +58,7 @@ export function CityLaunchPlaza(
     let count = 0, properties = 0;
     const reduced =
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (active && document.visibilityState === "visible") {
+    if (active && document.visibilityState === "visible" && !studioIsolate().on) {
       for (let i = 0; i < items.length && properties < 8; i++) {
         const item = items[i];
         if (

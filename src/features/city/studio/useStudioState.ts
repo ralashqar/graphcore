@@ -18,7 +18,8 @@ import {STUDIO_COLORS,STUDIO_FAMILIES,STUDIO_MODULE_MAP,studioKitVersion} from '
 import {applyComposition} from '../../../domain/cityBuildingV3';
 import {studioExample} from '../../../domain/cityStudioExamples';
 import {createFootState,type ExplorationSession} from '../../../domain/cityExploration';
-import {landEntrance} from '../../../domain/cityLand';
+import {landEntrance,landPosition} from '../../../domain/cityLand';
+import {ISOLATE_OFF,isolatePreference,saveIsolatePreference,setStudioIsolate} from '../cityStudioIsolate';
 import type {SculptVolume} from '../../../domain/citySculpt';
 import type {StudioAnchor,StudioAssemblyKind,StudioBay,StudioChannel,StudioFurnitureKind,StudioRecipe,StudioRoom,StudioRoomFinish} from '../../../domain/cityStudioTypes';
 import {useStudioInteraction,studioOutlineHandles,type StudioPick,type StudioTool} from '../useStudioInteraction';
@@ -38,7 +39,7 @@ import {onStudioAudioMuted,playStudioCue,studioAudioMuted} from '../studioAudio'
 import {studioDeleteTarget,studioDuplicateTarget} from '../studioKeys';
 import {STUDIO_DICE_KEY,studioFloorStep} from '../studioTools';
 import type {PaintRingChoice} from '../CityStudioPaintRing';
-import {STUDIO_FOCUS_KEY,STUDIO_HELP_KEY,brushSizesFor,cycleSelectLevel,drillSelectLevel,studioCategoryFor,studioRailForKey,type StudioBrushSize,type StudioBrushTarget,type StudioRailTool,type StudioSelectLevel} from '../studioRail';
+import {STUDIO_FOCUS_KEY,STUDIO_HELP_KEY,STUDIO_ISOLATE_KEY,brushSizesFor,cycleSelectLevel,drillSelectLevel,studioCategoryFor,studioRailForKey,type StudioBrushSize,type StudioBrushTarget,type StudioRailTool,type StudioSelectLevel} from '../studioRail';
 import {NO_SELECTION,assembliesAt,eraseStudioItems,kitOpeningAt,removeStudioOpenings,sameOpening,sameWall,selectionPart,stepUpSelection,toggleIn,ERASE_LABELS,type StudioEraseWhat,type StudioOpeningRef,type StudioSelection,type WallRef} from '../studioSelection';
 import {useStudioCamera,type StudioViewKind} from './useStudioCamera';
 import type {StudioStyleFilter} from './studioStyles';
@@ -329,9 +330,16 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
 
  // ---- Camera, walking and keys ---------------------------------------------------------------------------------
  const view=(kind:StudioViewKind)=>cam.view(kind,{selected,interior,floor});
+ // Isolate (docs/city-studio-ui-v2.md): remembered per device, on by default on the low-power path. Published to the
+ // renderer store while building (not while walking through); leaving the studio restores the normal city.
+ const [isolate,setIsolate]=useState(()=>isolatePreference());
+ const isolateRef=useRef(isolate);isolateRef.current=isolate;
+ const toggleIsolate=()=>{const next=!isolateRef.current;isolateRef.current=next;saveIsolatePreference(next);setIsolate(next);playStudioCue('tick');};
+ useEffect(()=>{const c=landPosition(plot);setStudioIsolate(isolate&&!walking?{on:true,plotId:plot.id,x:c.x,z:c.z,size:plot.size}:ISOLATE_OFF);},[isolate,walking,plot.id,plot.x,plot.z,plot.size]);// eslint-disable-line react-hooks/exhaustive-deps
+ useEffect(()=>()=>setStudioIsolate(ISOLATE_OFF),[]);
  const walk=()=>{if(land.previewStatus.pending||land.previewStatus.error)return;const ready=preparedStudioPlot(plot.id);if(!ready){interaction.setIssue('Your building is still preparing.');return;}cam.saveForWalk();const entry=landEntrance(plot);Object.assign(session.foot,createFootState(entry.x,entry.z,entry.heading));session.mode='on-foot';land.setPhase('walkthrough');};
  function onEscape(){if(help){setHelp(false);return true;}if(themeGallery){setThemeGallery(null);return true;}if(parts||starters){setParts(false);setStarters(false);return true;}if(rail==='rooms'||rail==='furnish')return false;if(rail!=='select'){chooseRail('select');return true;}return stepUp();}
- const keyState={walking,category,rail,level,selection,selectedFurnitureId,selectedId:selected?.id??null,remove,removeFurniture,deleteSelection,duplicate,chooseRail,toggleErase,chooseFloor,floor,highestStorey,view,dice:tryAnotherLook,openRing,ringAllowed:rail==='paint'&&target==='material'&&!!interaction.hover&&!ring,diceReady,busy:interaction.active,stepUp,setLevel:setLevelState,useSlot:(i:number)=>{const item=hotbar.items[i];if(item)useHotbar(item);},help:()=>setHelp(h=>!h)};
+ const keyState={walking,category,rail,level,selection,selectedFurnitureId,selectedId:selected?.id??null,remove,removeFurniture,deleteSelection,duplicate,chooseRail,toggleErase,chooseFloor,floor,highestStorey,view,dice:tryAnotherLook,toggleIsolate,openRing,ringAllowed:rail==='paint'&&target==='material'&&!!interaction.hover&&!ring,diceReady,busy:interaction.active,stepUp,setLevel:setLevelState,useSlot:(i:number)=>{const item=hotbar.items[i];if(item)useHotbar(item);},help:()=>setHelp(h=>!h)};
  const keyActions=useRef(keyState);keyActions.current=keyState;
  // Clicking the world returns keyboard focus to it (pointer events suppress the usual blur), so Tab, Delete and
  // letter keys act on the building instead of the last panel button.
@@ -343,6 +351,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
    if(e.ctrlKey||e.metaKey||e.altKey||k.busy)return;
    if(e.key==='Tab'){const focus=document.activeElement;if(focus instanceof HTMLElement&&focus.closest('.city-studio'))return;e.preventDefault();if(k.rail!=='select')k.chooseRail('select');k.setLevel(cycleSelectLevel(k.level,e.shiftKey?-1:1));return;}
    if(e.key===STUDIO_HELP_KEY){e.preventDefault();k.help();return;}
+   if(e.key.toLowerCase()===STUDIO_ISOLATE_KEY&&!e.repeat){e.preventDefault();k.toggleIsolate();return;}
    if(e.key.toLowerCase()==='c'&&k.ringAllowed){e.preventDefault();k.openRing();return;}
    if(/^[1-9]$/.test(e.key)){e.preventDefault();k.useSlot(Number(e.key)-1);return;}
    const railTool=studioRailForKey(e.key);if(railTool){e.preventDefault();if(railTool==='erase')k.toggleErase();else k.chooseRail(railTool);return;}
@@ -363,7 +372,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const rhythmMarks=rhythmOpen?rhythmPanel.highlight(interaction.bays,effectiveTool==='rhythm-face'?interaction.hover:null):null;
  const placedStairs=recipe?.studio.assemblies.filter(a=>a.kind==='stair')??[];
 
- return {land,plot,draft,recipe,walking,camera,reduced,cam,kitVersion,unified,unifiedFacade,interaction,commit,
+ return {land,plot,draft,recipe,walking,camera,reduced,cam,kitVersion,unified,unifiedFacade,interaction,commit,isolate,toggleIsolate,
   rail,chooseRail,toggleErase,level,setLevel,selection,select,goTo,stepUp,deleteSelection,target,chooseTarget,size:brushSize,sizes,chooseSize,category,interior,tool,effectiveTool,erase,scope,
   buildShape,setBuildShape,openingGroup,setOpeningGroup,openingKind,freePresetId,kitModule,stampId,trimKind,decorKind,roofMode,setRoofMode,roomsTool,setRoomsTool,furnishTool,
   chooseColor,chooseTexture,chooseFreePreset,chooseKitModule,chooseStamp,chooseTrim,chooseDecor,chooseRoofOpening,chooseRoofDetail,useHotbar,hotbar,

@@ -1,4 +1,5 @@
 import {useCityLand} from './useCityLand';
+import { setCityLowPower } from "./cityStudioIsolate";
 import {CityLandScene} from './CityLandScene';
 import {createCityRenderer,cityGpu,useCityRendererEpoch} from "./cityRenderer";
 import { CityEnvironment } from "./CityEnvironment";
@@ -527,6 +528,7 @@ function CitySceneContent({
             )
           ) {
             setSoftwareRenderer(true);
+            setCityLowPower(true);
           }
         }}
       >

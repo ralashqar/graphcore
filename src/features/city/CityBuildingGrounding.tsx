@@ -8,10 +8,17 @@ import type {CityProperty} from "../../domain/city";
 import {Batch,type Instance} from "./CityInstances";
 import {useCityMapLayout} from "./CityMapLayout";
 import {useCityLook} from "./CityLook";
+import {useStudioIsolate} from "./cityStudioIsolate";
 
-/** Footprint-derived grounding and bounded low-detail shadow casters. No per-window shadow pass. */
+/** Development telemetry: contact marks per property id (browser suites read window.__cityGrounding). */
+const groundingStats:Record<string,number>={};
+if(typeof window!=="undefined"&&import.meta.env?.DEV)(window as unknown as {__cityGrounding?:typeof groundingStats}).__cityGrounding=groundingStats;
+
+/** Footprint-derived grounding and bounded low-detail shadow casters. No per-window shadow pass. Studio buildings
+ * carry their parts' footprint (`groundFootprint`, empty for an empty plot); presets use their design masses. While
+ * the studio isolates a plot, only that plot casts. */
 export function CityBuildingGrounding({properties,center,reduced=true}:{properties:CityProperty[];center?:{x:number;z:number};reduced?:boolean}){
- const {quality}=useCityLook(),{plotAxis,plotSize}=useCityMapLayout();
+ const {quality}=useCityLook(),{plotAxis,plotSize}=useCityMapLayout(),isolate=useStudioIsolate();
  const [focus,setFocus]=useState({x:0,z:0});
  const scratch=useRef(new Vector3()),elapsed=useRef(0);
  // Driving keeps buildings resident. Refresh only the small caster selection as the camera travels.
@@ -28,19 +35,24 @@ export function CityBuildingGrounding({properties,center,reduced=true}:{properti
  }),[]);
  useEffect(()=>()=>Object.values(resources).forEach(r=>r.dispose()),[resources]);
  const data=useMemo(()=>{
-   const contacts:Instance[]=[],proxies:Instance[]=[],roundProxies:Instance[]=[];
+   const contacts:Instance[]=[],proxies:Instance[]=[],roundProxies:Instance[]=[],marksById=new Map<string,number>();
    const nearest=new Set([...properties].sort((a,b)=>Math.hypot(plotAxis(a.x)-focus.x,plotAxis(a.z)-focus.z)-Math.hypot(plotAxis(b.x)-focus.x,plotAxis(b.z)-focus.z)).slice(0,24).map(p=>p.id));
    for(const p of properties){
      const d=p.profile.buildingDesign;if(!d||p.profile.buildingArt)continue;
-     const masses=buildingMasses(d),base=Math.min(...masses.map(m=>m.y)),scale=plotSize/24,angle=d.rotation*Math.PI/2,c=Math.cos(angle),s=Math.sin(angle);
+     const footprint=p.groundFootprint;
+     const masses=footprint?footprint.map(f=>({x:f.x,z:f.z,width:f.width,depth:f.depth,y:f.bottom,height:f.top-f.bottom,round:!!f.round})):buildingMasses(d).map(m=>({...m,round:d.version===3&&["round-tower","ellipse-tower"].includes(d.archetype||"")}));
+     const base=footprint?Math.min(...footprint.map(f=>f.bottom),.7):Math.min(...masses.map(m=>m.y)),scale=plotSize/24,angle=d.rotation*Math.PI/2,c=Math.cos(angle),s=Math.sin(angle);
+     const casts=quality==="high"&&(isolate.on?isolate.plotId===p.id:nearest.has(p.id));let marks=0;
      masses.forEach((m,i)=>{
        const item={key:`ground:${p.id}:${i}`,property:p,x:plotAxis(p.x)+(m.x*c+m.z*s)*scale,z:plotAxis(p.z)+(m.z*c-m.x*s)*scale,rotation:angle};
-       if(m.y===base)contacts.push({...item,y:.312*scale,scale:[(m.width+1.1)*scale,1,(m.depth+1.1)*scale]});
-       if(quality==="high"&&nearest.has(p.id))(d.version===3 && ["round-tower","ellipse-tower"].includes(d.archetype || "") ? roundProxies : proxies).push({...item,key:`shadow:${p.id}:${i}`,y:(m.y+m.height/2)*scale,scale:[Math.max(.1,m.width-.25)*scale,m.height*scale,Math.max(.1,m.depth-.25)*scale]});
+       if(m.y<=base+.001){contacts.push({...item,y:.312*scale,scale:[(m.width+1.1)*scale,1,(m.depth+1.1)*scale]});marks++;}
+       if(casts)(m.round ? roundProxies : proxies).push({...item,key:`shadow:${p.id}:${i}`,y:(m.y+m.height/2)*scale,scale:[Math.max(.1,m.width-.25)*scale,m.height*scale,Math.max(.1,m.depth-.25)*scale]});
      });
+     marksById.set(p.id,marks);
    }
-   return {contacts,proxies,roundProxies};
- },[properties,focus,plotAxis,plotSize,quality]);
+   return {contacts,proxies,roundProxies,marksById};
+ },[properties,focus,plotAxis,plotSize,quality,isolate.on,isolate.plotId]);
+ useEffect(()=>{if(!import.meta.env.DEV)return;for(const [id,n] of data.marksById)groundingStats[id]=n;return()=>{for(const id of data.marksById.keys())if(groundingStats[id]===data.marksById.get(id))delete groundingStats[id];};},[data]);
  if(quality==="fast")return null;
  return <>
    <Batch pieces={[{geometry:resources.plane,material:resources.contact}]} instances={data.contacts} animate reduced={reduced}/>

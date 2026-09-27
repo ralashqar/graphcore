@@ -5,6 +5,7 @@ import {Box3,Frustum,Matrix4,Vector3, type OrthographicCamera, type PerspectiveC
 import type {CityProperty} from "../../domain/city";
 import {useCityMapLayout} from "./CityMapLayout";
 import {cityRepresentation,type CityRepresentation} from "../../domain/cityStreaming";
+import {studioIsolate} from "./cityStudioIsolate";
 type Visibility = {revision:number; levels:Map<string,CityRepresentation>};
 const Context=createContext<Visibility | null>(null);
 export const useCityVisibility=()=>useContext(Context);
@@ -22,7 +23,7 @@ export function CityVisibility({properties,enabled,simpleOnly=false,children}:{p
   elapsed.current+=delta;if(elapsed.current<.15)return;elapsed.current=0;
   scratch.matrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
   scratch.frustum.setFromProjectionMatrix(scratch.matrix,camera.coordinateSystem);
-  let changed=false;
+  let changed=false;const isolating=studioIsolate().on;
   for(const item of bounds){
    const old=state.current.levels.get(item.id);
    const ortho=camera as OrthographicCamera;
@@ -33,7 +34,8 @@ export function CityVisibility({properties,enabled,simpleOnly=false,children}:{p
    const moving=playback && performance.now()-playback.started<3100 && playback.event.moves.some(move=>move.id===item.id);
    const chosen=cityRepresentation(remembered.current.get(item.id),pixels,scratch.frustum.intersectsBox(item.box),!!moving);
    const farModular=item.modular&&Math.hypot(camera.position.x-item.center.x,camera.position.z-item.center.z)>(old==="full"?65:55);
-   const next=(simpleOnly||farModular) && chosen!=="hidden" ? "simple" : chosen;
+   // Studio Isolate: every business building draws its simple representation around the edited plot.
+   const next=(simpleOnly||farModular||isolating) && chosen!=="hidden" ? "simple" : chosen;
    if(next!=="hidden")remembered.current.set(item.id,next);
    if(old!==next){state.current.levels.set(item.id,next);changed=true;}
   }

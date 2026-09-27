@@ -68,6 +68,8 @@ export function studioCategoryFor(rail:StudioRailTool,target:StudioBrushTarget):
 /** Keys outside the rail: frame the selection, open the shortcut sheet. */
 export const STUDIO_FOCUS_KEY='z';
 export const STUDIO_HELP_KEY='?';
+/** Isolate: frame the edited building and simplify the rest of the city (docs/city-studio-ui-v2.md). */
+export const STUDIO_ISOLATE_KEY='o';
 
 export type StudioShortcut={keys:string;action:string};
 export const STUDIO_SHORTCUTS:readonly {group:string;items:readonly StudioShortcut[]}[]=[
@@ -75,7 +77,7 @@ export const STUDIO_SHORTCUTS:readonly {group:string;items:readonly StudioShortc
  {group:'Selecting',items:[{keys:'Tab / Shift Tab',action:'Cycle Part, Wall, Tile, Opening, Object'},{keys:'Double-click',action:'Drill down (Part → Wall → Tile)'},{keys:'Shift click',action:'Add walls, tiles or openings to the selection'},{keys:'Esc / Backspace',action:'Step up the breadcrumb'},{keys:'Delete',action:'Delete the selection at its level'},{keys:'Ctrl D',action:'Duplicate the selected part'},{keys:'Z',action:'Frame the selection'}]},
  {group:'Brush',items:[{keys:'1 – 9',action:'Quick slots in the hotbar'},{keys:'C',action:'Quick paint ring (Paint → Material)'},{keys:'Alt click',action:'Sample a finish'},{keys:'E',action:'Toggle erase mode'},{keys:'Space',action:'New look (style dice)'}]},
  {group:'Building',items:[{keys:'PgUp / PgDn',action:'Change storey'},{keys:'R',action:'Turn furniture or a roof detail while placing'},{keys:'Ctrl Z / Ctrl Shift Z',action:'Undo / redo'},{keys:'?',action:'This sheet'}]},
- {group:'Camera',items:[{keys:'Right drag',action:'Orbit'},{keys:'Middle drag',action:'Pan'},{keys:'Wheel',action:'Zoom'},{keys:'Two fingers',action:'Move the camera on touch'}]},
+ {group:'Camera',items:[{keys:'O',action:'Isolate: focus on this building'},{keys:'Right drag',action:'Orbit'},{keys:'Middle drag',action:'Pan'},{keys:'Wheel',action:'Zoom'},{keys:'Two fingers',action:'Move the camera on touch'}]},
 ];
 
 /** A hotbar quick slot: one brush item (colour, material, opening, stamp, trim, decoration or roof detail). */

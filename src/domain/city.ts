@@ -34,8 +34,12 @@ export type CityProfile = {
     url: string;
   };
 };
+/** Client-only ground contact footprint of a studio (sculpt) building, in 24 m plot units: one entry per added part.
+ * Grounding and shadow casters use it instead of the preset design's masses (docs/city-scene-lighting.md). */
+export type CityGroundFootprint = { x: number; z: number; width: number; depth: number; bottom: number; top: number; round?: boolean };
 export type CityProperty = {
   hasDeal?: boolean;
+  groundFootprint?: CityGroundFootprint[];
   id: string;
   slug: string;
   profile: CityProfile;

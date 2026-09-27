@@ -17,14 +17,15 @@
  *      city), CITY_BENCH_BACKGROUND (fixture businesses in a ring outside them, default 0), CITY_BENCH_PATH (batched|building: sets
  *      ?cityGwBatch=0 for the per-building path), CITY_BENCH_QUERY (extra URL parameters, e.g. &cityGwKitFar=100000),
  *      CITY_BENCH_SHOTS=1, CITY_BENCH_EDIT=0 to skip the studio (edit test and studio shots), CITY_BENCH_FORCE (JSON for
- *      window.__cityGwForce, e.g. {"overlay":"far"}), CITY_BENCH_VERBOSE=1 (log the settle samples).
+ *      window.__cityGwForce, e.g. {"overlay":"far"}), CITY_BENCH_VERBOSE=1 (log the settle samples), CITY_BENCH_ISOLATE=1
+ *      (studio view with Isolate on, then off again: row.studioIsolate, output/isolate-bench-{on,off}.png).
  * Writes output/city-generated-walls-benchmark.json (rows replaced per label/backend/variant/plots/path).
  */
 import {chromium} from 'playwright';
 import {existsSync,readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 const origin=process.env.CITY_TEST_ORIGIN||'http://localhost:5180',backend=process.env.CITY_BACKEND==='webgl'?'webgl':'native',label=process.env.CITY_BENCH_LABEL||'current';
 const plotsWanted=process.env.CITY_BENCH_PLOTS&&process.env.CITY_BENCH_PLOTS!=='all'?Number(process.env.CITY_BENCH_PLOTS):Infinity,background=Number(process.env.CITY_BENCH_BACKGROUND??0);
-const variants=(process.env.CITY_BENCH_VARIANTS||'unified,kit').split(','),path=process.env.CITY_BENCH_PATH||'default',shots=!!process.env.CITY_BENCH_SHOTS,editTest=process.env.CITY_BENCH_EDIT!=='0';
+const variants=(process.env.CITY_BENCH_VARIANTS||'unified,kit').split(','),path=process.env.CITY_BENCH_PATH||'default',shots=!!process.env.CITY_BENCH_SHOTS,editTest=process.env.CITY_BENCH_EDIT!=='0',isolateTest=!!process.env.CITY_BENCH_ISOLATE;
 const file='output/city-generated-walls-benchmark.json';mkdirSync('output',{recursive:true});
 let results=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):[];
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-angle=d3d11','--enable-precise-memory-info']});
@@ -94,7 +95,9 @@ try{for(const variant of variants){
  if(seeded.errors.length)console.warn(`seed errors (${variant}):`,seeded.errors.slice(0,5));
  const t0=Date.now();await page.reload();await page.locator('canvas').first().waitFor();
  // Loaded: every seeded plot has published its prepared studio result, then render stats stop changing.
- const published=()=>page.evaluate(async()=>{const {subscribeStudioPlots}=await import('/src/features/city/cityStudioRegistry.ts');let count=0;const stop=subscribeStudioPlots(()=>{count++;});stop();return count;});
+ // The registry import can resolve to a second module instance after dev-server HMR updates (`?t=` URLs), so the
+ // batched city's own ready count (DEV dataset) is the fallback.
+ const published=()=>page.evaluate(async()=>{const {subscribeStudioPlots}=await import('/src/features/city/cityStudioRegistry.ts');let count=0;const stop=subscribeStudioPlots(()=>{count++;});stop();let ready=0;try{ready=JSON.parse(document.querySelector('canvas')?.dataset.citySculptCity||'{}').ready??0;}catch{/* none yet */}return Math.max(count,ready);});
  for(let n=0;(n=await published())<seeded.plots;){if(Date.now()-t0>600000)throw Error(`only ${n} of ${seeded.plots} plots prepared`);await page.waitForTimeout(500);}
  const prepared=Date.now()-t0;
  // Settled: draw calls and triangles unchanged for four one-second samples while frames keep arriving (a blocked
@@ -128,7 +131,7 @@ try{for(const variant of variants){
    let t=performance.now();const out=await prepareSculpt(r,p.finished.design,false);round.push(performance.now()-t);if(out.timing){worker.push(out.timing.resolveMs);merge.push(out.timing.mergeMs);}t=performance.now();resolveSculpt(r,p.finished.design);page.push(performance.now()-t);}
   const avg=a=>a.length?+(a.reduce((x,y)=>x+y,0)/a.length).toFixed(1):null;return {roundTripMs:avg(round),roundTripMax:+Math.max(...round).toFixed(1),pageResolveMs:avg(page),workerResolveMs:avg(worker),workerMergeMs:avg(merge)};
  });
- let edit=null,studioView=null;
+ let edit=null,studioView=null,studioIsolate=null;
  if(editTest){
   await page.getByRole('button',{name:'Visit test plot'}).click({timeout:300000});await page.getByRole('region',{name:'Construction studio'}).waitFor({timeout:120000});
   await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:120000});await page.waitForTimeout(3000);
@@ -136,6 +139,13 @@ try{for(const variant of variants){
   await page.getByRole('button',{name:'Orbit view',exact:true}).click().catch(()=>{});await page.waitForTimeout(1200);// Paced wheel steps: each zoom glide finishes before the next, so slow and fast pages end on the same camera.
   for(let i=0;i<6;i++){await page.mouse.move(640,300);await page.mouse.wheel(0,400);await page.waitForTimeout(1200);}await page.mouse.move(640,120);await page.waitForTimeout(2500);await settle(60000);await page.waitForTimeout(3000);
   studioView=await measure();await shot('studio');
+  // Studio Isolate (docs/city-studio-ui-v2.md) on and off again from the same camera: CITY_BENCH_ISOLATE=1.
+  if(isolateTest){const button=page.getByRole('button',{name:'Isolate building',exact:true});
+   await page.screenshot({path:`output/isolate-bench-off${suffix}.png`});
+   await button.click();await page.mouse.move(640,120);await page.waitForTimeout(1500);await settle(60000);await page.waitForTimeout(2000);
+   studioIsolate={on:await measure(),levels:await page.evaluate(()=>window.__cityGwStats?.levels??'')};await page.screenshot({path:`output/isolate-bench-on${suffix}.png`});
+   await button.click();await page.mouse.move(640,120);await page.waitForTimeout(1500);await settle(60000);await page.waitForTimeout(2000);
+   studioIsolate.off=await measure();studioIsolate.offLevels=await page.evaluate(()=>window.__cityGwStats?.levels??'');}
   // Every unedited plot pinned to its far representation (per-building path: __cityStudioDetailForce; batched: __cityGwForce).
   if(shots){await page.evaluate(()=>{window.__cityGwForce={overlay:'far'};window.__cityStudioDetailForce='far';});await page.waitForTimeout(2000);await shot('studio-far');await page.evaluate(()=>{delete window.__cityGwForce;delete window.__cityStudioDetailForce;});await page.waitForTimeout(2000);}
   await record();
@@ -152,6 +162,6 @@ try{for(const variant of variants){
   edit={samples:ready.length,workerMs:pct(ready.map(e=>e.workerMs),.5),frameMsP50:pct(ready.map(e=>e.frameMs),.5),frameMsP95:pct(ready.map(e=>e.frameMs),.95),frameP95:frames.p95,frameP99:frames.p99,frameMax:frames.max,calls:frames.calls};
  }
  const cityInfo=await page.evaluate(()=>{try{const c=document.querySelector('canvas')?.dataset;return {...JSON.parse(c?.citySculptCity||'null'),openings:JSON.parse(c?.cityOpenings||'null')};}catch{return null;}});
- const row={label,backend,variant,path,plots:seeded.plots,properties:seeded.properties,background,types:seeded.types,invalid:seeded.invalid,loadMs:{prepared,settled:loaded},mapOverview,mapZoomed,mapPan,driveStanding,driving,studioView,prepare,edit,cityInfo,errors:errors.filter(e=>!/favicon|ResizeObserver/.test(e)).slice(0,10)};
+ const row={label,backend,variant,path,plots:seeded.plots,properties:seeded.properties,background,types:seeded.types,invalid:seeded.invalid,loadMs:{prepared,settled:loaded},mapOverview,mapZoomed,mapPan,driveStanding,driving,studioView,studioIsolate,prepare,edit,cityInfo,errors:errors.filter(e=>!/favicon|ResizeObserver/.test(e)).slice(0,10)};
  results=results.filter(r=>!(r.label===label&&r.backend===backend&&r.variant===variant&&r.plots===row.plots&&r.path===path));results.push(row);writeFileSync(file,JSON.stringify(results,null,2));console.log(JSON.stringify(row));await page.close();
 }}finally{await browser.close();}

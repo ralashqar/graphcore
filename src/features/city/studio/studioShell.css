@@ -10,6 +10,7 @@
 /* Top bar */
 .studio-shell>.studio-header{grid-area:top;position:relative;inset:auto}
 .studio-v2 .studio-history{gap:2px}
+.studio-v2 .studio-history .studio-isolate[aria-pressed=true]{background:#2f4636;color:#fffdf2}
 .studio-header-divider{width:1px;align-self:stretch;margin:6px 3px;background:var(--studio-line)}
 
 /* Left: rail and flyout palette */

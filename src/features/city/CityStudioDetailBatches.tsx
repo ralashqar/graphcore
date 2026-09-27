@@ -5,6 +5,7 @@
  * the same buffers (see cityStudioDetailBatches). `full` pins near detail (the plot being edited); near-only
  * extras (trims) are passed as children. `hidden` owners (floor slicing) draw from a subset index.
  */
+import {studioIsolate} from './cityStudioIsolate';
 import {useEffect,useLayoutEffect,useMemo,useRef,type ReactNode} from 'react';
 import {useFrame,useThree} from '@react-three/fiber';
 import {BufferAttribute,BufferGeometry,Group,Mesh,Sphere,Vector3,type Camera,type Material,type OrthographicCamera,type PerspectiveCamera,type Texture} from 'three';
@@ -89,7 +90,7 @@ export function CityStudioDetailBatches({details,center,full,pinNear=false,hidde
   if(nearGroup.current)nearGroup.current.visible=next==='near';
   openings.setLevel(blockId,openingLevel(),next==='near'&&clear.current);
  };
- const decide=()=>{if(full||pinNear||subsets)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
+ const decide=()=>{if(full||subsets)return 'near' as const;if(studioIsolate().on)return 'far' as const;if(pinNear)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
  useLayoutEffect(()=>{placeOpenings();apply(decide());if(openings.flush())invalidate();});
  useEffect(()=>{warmHiddenMaterials(gl,root.current,camera,scene);},[geometries,materials,gl,camera,scene]);
  useFrame((state)=>{

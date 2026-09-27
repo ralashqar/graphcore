@@ -1,4 +1,5 @@
 import {useEffect,useMemo,useRef,useState,type RefObject} from "react";
+import {studioIsolate} from './cityStudioIsolate';
 import {useFrame,useThree} from "@react-three/fiber";
 import {Box3,Group,Mesh,MeshStandardMaterial,Vector3} from "three";
 import {GLTFLoader,type GLTF} from "three/addons/loaders/GLTFLoader.js";
@@ -29,7 +30,9 @@ export function CityDriveCar({motion,reduced,active=true}:{motion:RefObject<Driv
  useEffect(()=>()=>{model?.materials.forEach(m=>m.dispose());},[model]);
  useEffect(()=>{gl.domElement.dataset.cityCar=model?'kenney-hatchback':'fallback';if(model)gl.domElement.dataset.cityCarDetails=JSON.stringify({wheels:model.wheels.length,textured:model.materials.every(m=>!!m.map),length:DRIVE_PROFILE.carLength});return()=>{delete gl.domElement.dataset.cityCar;delete gl.domElement.dataset.cityCarDetails;};},[model,gl]);
  useFrame((_,dt)=>{
-  if(!model||!active||document.hidden)return;const s=motion.current;if(!s)return;const d=Math.min(dt,.04),sn=Math.sin(s.heading),cs=Math.cos(s.heading);
+  // Studio Isolate: the parked car pauses and stops casting (only the edited building casts).
+  const isolating=studioIsolate().on;if(model&&model.root.userData.isolating!==isolating){model.root.userData.isolating=isolating;model.root.traverse(o=>{if(o instanceof Mesh)o.castShadow=!isolating;});}
+  if(!model||!active||document.hidden||isolating)return;const s=motion.current;if(!s)return;const d=Math.min(dt,.04),sn=Math.sin(s.heading),cs=Math.cos(s.heading);
   const pitch=reduced?0:Math.max(-.065,Math.min(.065,-s.acceleration*.004+s.impact*.003));
   if(reduced){bodyPitch.current=0;bodyRoll.current=0;pitchV.current=0;rollV.current=0;}
   const roll=reduced?0:Math.max(-.085,Math.min(.085,s.speed*s.yawRate*.004));

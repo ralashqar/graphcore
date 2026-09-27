@@ -1,7 +1,7 @@
 // Studio UI v2 shell (docs/city-studio-ui-v2.md): a CSS grid of top bar / tool rail + palette / stage / inspector /
 // hotbar laid over the canvas. Only the panels take pointer events; the stage passes clicks through to the building.
 import {useEffect,useState} from 'react';
-import {ArrowUUpLeft,ArrowUUpRight,ArrowsOut,Check,Compass,Eye,House,Keyboard,Palette,Plus,SpeakerHigh,SpeakerSlash,Trash,X} from '@phosphor-icons/react';
+import {ArrowUUpLeft,ArrowUUpRight,ArrowsOut,Check,Compass,Eye,FrameCorners,House,Keyboard,Palette,Plus,SpeakerHigh,SpeakerSlash,Trash,X} from '@phosphor-icons/react';
 import {STUDIO_EXAMPLES,TOKYO_EXAMPLE_START} from '../../../domain/cityStudioExamples';
 import {StyleFilter,exampleStyle,styleMatches} from './studioStyles';
 import {COMPOSITIONS} from '../../../domain/cityBuildingV3';
@@ -64,6 +64,7 @@ function StudioTopBar({st}:{st:StudioState}){
    <button title="Redo · Ctrl Shift Z" aria-label="Redo" disabled={!land.future.length||interaction.active} onClick={land.redo}><ArrowUUpRight/></button>
    <span className="studio-header-divider" aria-hidden="true"/>
    <button aria-label={muted?'Turn sound on':'Mute sound'} title={muted?'Sound off':'Sound on'} aria-pressed={!muted} onClick={()=>{setStudioAudioMuted(!muted);if(muted)playStudioCue('chime');}}>{muted?<SpeakerSlash/>:<SpeakerHigh/>}</button>
+   <button className="studio-isolate" aria-label="Isolate building" title={st.isolate?'Isolate on: the rest of the city is simplified and faded · O':'Isolate: focus on this building · O'} aria-pressed={st.isolate} onClick={st.toggleIsolate}><FrameCorners weight={st.isolate?'fill':'regular'}/></button>
    <button aria-label="Keyboard shortcuts and help" title="Shortcuts and help · ?" aria-pressed={st.help} onClick={()=>st.setHelp(!st.help)}><Keyboard/></button>
   </div>
   <div className="studio-complete"><button disabled={!recipe||land.previewStatus.pending||!!land.previewStatus.error} onClick={st.walk}><Eye/> <span>Walk around</span></button><button className="studio-primary" disabled={interaction.active||land.previewStatus.pending||!!land.previewStatus.error||land.saving} onClick={()=>void land.finish()}><Check/> Done</button><button aria-label="Exit construction" title="Exit" onClick={()=>void land.close()}><X/></button></div>

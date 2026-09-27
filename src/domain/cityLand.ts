@@ -1,7 +1,7 @@
-import {cityPlots, emptyCityProfile, type CityProperty} from './city.ts';
+import {cityPlots, emptyCityProfile, type CityGroundFootprint, type CityProperty} from './city.ts';
 import {estatePlotAxis, plotAxis, frontage} from './cityLayout.ts';
 import {newDesign, normalizeV3, identitySeed, type CityBuildingDesignV3} from './cityBuildingV3.ts';
-import {effectiveSculptShapes,resolveSculptDecorations,sculptFootprint,validateSculpt,type SculptRecipe} from './citySculpt.ts';
+import {effectiveSculptShapes,resolveSculptDecorations,sculptFloorBottom,sculptFloorTop,sculptFootprint,sculptPrimitiveBoundary,validateSculpt,type SculptRecipe} from './citySculpt.ts';
 
 export type LandNature={style:'minimal'|'garden'|'wooded';density:number;seed:number};
 export type LandDraft={design:CityBuildingDesignV3;name:string;color:string;nature:LandNature;builderMode?:'preset'|'sculpt';sculpt?:SculptRecipe};
@@ -27,7 +27,16 @@ export function fitLandDesign(d:CityBuildingDesignV3,rotation:number){
  return normalizeV3({...d,rotation,finish:'procedural',width:Math.max(8,Math.min(18,Math.round(finite(d.width,16)*2)/2)),depth:Math.max(8,Math.min(18,Math.round(finite(d.depth,12)*2)/2)),middleFloors:Math.max(0,Math.min(7-crown,Math.round(finite(d.middleFloors,2)))),enclosure:d.enclosure||'garden-wall'});
 }
 export function initialLandDraft(p:LandPlot):LandDraft{return {name:'My place',color:'#54796b',nature:{style:'garden',density:3,seed:p.vegetationSeed},design:fitLandDesign({...newDesign(p.id),grounds:'minimal',slots:{'brand.entrance':'brand'},enclosure:'garden-wall'},p.rotation)};}
-export function landProperty(p:LandPlot,d:LandDraft):CityProperty{return {id:p.id,slug:p.id,x:p.x,z:p.z,rank:9999,landValue:0,tier:2,saves:0,claims:0,profile:{...emptyCityProfile(),name:d.name,color:d.color,buildingDesign:fitLandDesign(d.design,p.rotation)}};}
+export function landProperty(p:LandPlot,d:LandDraft):CityProperty{const property:CityProperty={id:p.id,slug:p.id,x:p.x,z:p.z,rank:9999,landValue:0,tier:2,saves:0,claims:0,profile:{...emptyCityProfile(),name:d.name,color:d.color,buildingDesign:fitLandDesign(d.design,p.rotation)}};const footprint=landGroundFootprint(d);if(footprint)property.groundFootprint=footprint;return property;}
+/** Ground contact of a studio building: the bounds of each added part (empty for an empty plot). Preset buildings
+ * return null and keep their design masses. `recipe` overrides the draft's (live drag previews). */
+export function landGroundFootprint(d:Pick<LandDraft,'builderMode'|'sculpt'|'design'>,recipe:SculptRecipe|null|undefined=d.sculpt):CityGroundFootprint[]|null{
+ if(d.builderMode!=='sculpt'||!recipe||(recipe.version!==4&&recipe.version!==5&&recipe.version!==6))return null;
+ const gh=d.design.groundHeight,uh=d.design.upperHeight;
+ return recipe.volumes.filter(v=>v.operation==='add').flatMap(v=>{const ring=sculptPrimitiveBoundary(v);if(ring.length<3)return [];
+  const xs=ring.map(q=>q[0]),zs=ring.map(q=>q[1]),x0=Math.min(...xs),x1=Math.max(...xs),z0=Math.min(...zs),z1=Math.max(...zs);
+  return [{x:(x0+x1)/2,z:(z0+z1)/2,width:x1-x0,depth:z1-z0,bottom:sculptFloorBottom(v.startFloor,gh,uh),top:sculptFloorTop(v.startFloor+v.spanFloors-1,gh,uh),...(v.kind==='ellipse'?{round:true}:{})}];});
+}
 /** Keep procedural planting out of the full route along an authored exterior stair wall. */
 export function studioStairPlantClearance(draft:LandDraft|null,x:number,z:number){
  const sculpt=draft?.sculpt;if(sculpt?.version!==5)return false;

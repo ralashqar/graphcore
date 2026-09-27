@@ -1,4 +1,5 @@
 import {useEffect,useMemo,useRef,useState,type RefObject} from 'react';
+import {studioIsolate} from './cityStudioIsolate';
 import {useFrame,useThree} from '@react-three/fiber';
 import {AnimationMixer,LoopOnce,Mesh,MeshStandardMaterial,Group,type AnimationAction} from 'three';
 import {GLTFLoader,type GLTF} from 'three/addons/loaders/GLTFLoader.js';
@@ -30,8 +31,10 @@ export function CityCharacter({motion,active,onStatus,retry,skin='ranger'}:{moti
  useEffect(()=>{if(model)for(const m of model.materials){m.envMap=reflection;m.envMapIntensity=.2;m.needsUpdate=true;}},[model,reflection]);
  useEffect(()=>()=>{model?.mixer.stopAllAction();if(model)model.mixer.uncacheRoot(model.scene);model?.materials.forEach(m=>m.dispose());},[model]);
  const current=useRef('');
- useFrame((_,dt)=>{
-  if(!model||!active||document.hidden)return;const s=motion.current,d=Math.min(dt,.1);
+ const reported=useRef(0);
+ useFrame((state,dt)=>{
+  // Studio Isolate pauses the character (the mixer keeps its pose).
+  if(!model||!active||document.hidden||studioIsolate().on)return;const s=motion.current,d=Math.min(dt,.1);
   const action=!s.grounded?(s.airTime<.13?'jump':'airborne'):s.land>0?'land':s.wave>0?'wave':'locomotion';
   if(action!==current.current){if(action!=='locomotion')model.actions[action]?.reset().play();current.current=action;gl.domElement.dataset.cityCharacterAnimation=action;}
   const moving=Math.min(1,s.speed/.3),running=Math.max(0,Math.min(1,(s.speed-2.2)/(5.5-2.2)));
@@ -43,6 +46,7 @@ export function CityCharacter({motion,active,onStatus,retry,skin='ranger'}:{moti
   }
   if(action==='jump'||action==='land'){const a=model.actions[action];a.paused=true;a.time=Math.min(1,action==='jump'?s.airTime/.13:(.15-s.land)/.15)*a.getClip().duration;}
   model.mixer.update(d);
+  if(import.meta.env.DEV&&state.clock.elapsedTime-reported.current>.25){reported.current=state.clock.elapsedTime;gl.domElement.dataset.cityCharacterTime=model.mixer.time.toFixed(3);}
  });
  useEffect(()=>{gl.domElement.dataset.cityCharacter=asset?skin:'loading';return()=>{delete gl.domElement.dataset.cityCharacter;delete gl.domElement.dataset.cityCharacterAnimation;};},[asset,skin,gl]);
  return model?<primitive object={model.root} dispose={null}/>:null;

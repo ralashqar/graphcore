@@ -46,6 +46,7 @@ import {usePreparedCity} from './usePreparedCity';
 import {sculptSignMaterial} from './CitySculptBuilding';
 import {cityGwStats} from './cityGwStats';
 import {useOpeningStore} from './CityStudioOpeningInstances';
+import {studioIsolate,subscribeStudioIsolate} from './cityStudioIsolate';
 
 type Entry={plot:LandPlot;draft:LandDraft};
 type Ready={id:string;key:string;plot:LandPlot;draft:LandDraft;transform:CityPlotTransform;studio:StudioResolved;bake:SculptCityBake;kit:KitPlot;/** kit pieces' world bounds (frustum test) */kitBox:Box3};
@@ -132,7 +133,8 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
  const nearRef=useRef(near);nearRef.current=near;
  const scratch=useMemo(()=>({frustum:new Frustum(),matrix:new Matrix4(),check:-1}),[]);
  const decide=useCallback((force=false)=>{
-  const s=scratch,f=testForce();
+  // Studio Isolate pins every plot here (none is the edited one) to far chunks and kit proxies: no overlays or preloads.
+  const s=scratch,isolating=studioIsolate().on,f:Force|undefined=isolating?{overlay:'far'}:testForce();
   s.matrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);s.frustum.setFromProjectionMatrix(s.matrix,camera.coordinateSystem);
   const levels=kitLevels.current.levels,nextNear=new Set<string>(),nextPreload=new Set<string>();let changed=false;
   for(const r of readyRef.current.values()){
@@ -141,7 +143,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
    if(f?.overlay?f.overlay==='near':d<(preloadRef.current.has(r.id)?PRELOAD.leave:PRELOAD.enter))nextPreload.add(r.id);
    // Kit visibility: the bounds of the plot's own kit pieces (as tight as the per-building instanced meshes were).
    const old=levels.get(r.id),visible=!r.kitBox.isEmpty()&&s.frustum.intersectsBox(r.kitBox);
-   const level:KitLevel=f?.kit??(!visible?'hidden':Math.hypot(camera.position.x-x,camera.position.y,camera.position.z-z)<KIT_FULL.nearOnly?'near':d<((old==='full'||old==='near')?KIT_FULL.leave:KIT_FULL.enter)?'full':'proxy');
+   const level:KitLevel=isolating?(visible?'proxy':'hidden'):f?.kit??(!visible?'hidden':Math.hypot(camera.position.x-x,camera.position.y,camera.position.z-z)<KIT_FULL.nearOnly?'near':d<((old==='full'||old==='near')?KIT_FULL.leave:KIT_FULL.enter)?'full':'proxy');
    if(old!==level){levels.set(r.id,level);changed=true;}
   }
   for(const id of [...levels.keys()])if(!readyRef.current.has(id)){levels.delete(id);changed=true;}
@@ -155,6 +157,8 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
   }
  },[camera,size.height,scratch,invalidate]);
  useLayoutEffect(()=>{decide(true);},[ready,decide]);
+ // Isolate on/off switches levels on the same frame (no remount: the chunks only rewrite their index lists).
+ useEffect(()=>subscribeStudioIsolate(()=>{decide(true);invalidate();}),[decide,invalidate]);
  useFrame(state=>{if(state.clock.elapsedTime-scratch.check<.2)return;scratch.check=state.clock.elapsedTime;decide();});
 
  // Overlays report when their own near detail is on screen; only then does the chunk drop that plot's far detail.
@@ -197,7 +201,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
 }
 /** Grounds (paving, lawns, enclosure) of a group of finished plots, as each CitySculptBuilding drew its own. */
 function CitySculptGrounds({properties}:{properties:CityProperty[]}){
- const key=JSON.stringify(properties.map(p=>[p.id,p.profile.buildingDesign,p.profile.color])),stable=useMemo(()=>properties,[key]);// eslint-disable-line react-hooks/exhaustive-deps
+ const key=JSON.stringify(properties.map(p=>[p.id,p.profile.buildingDesign,p.profile.color,p.groundFootprint])),stable=useMemo(()=>properties,[key]);// eslint-disable-line react-hooks/exhaustive-deps
  const grounds=usePreparedCity(stable,true,true,true);
  return <CityPreparedBuildings properties={grounds} layer="grounds" reduced/>;
 }

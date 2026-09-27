@@ -15,7 +15,7 @@ A CSS grid shell (`.studio-shell` in `src/features/city/studio/studioShell.css`)
 └──────┴─────────┴───────────────────────────────────────┴─────────────────────┴───────────┘
 ```
 
-- **Top bar:** building name and save state, undo/redo, sound, the shortcut sheet (`?`), Walk around, Done, Exit.
+- **Top bar:** building name and save state, undo/redo, sound, Isolate (`O`), the shortcut sheet (`?`), Walk around, Done, Exit.
 - **Tool rail (left):** Select `V`, Build `B`, Paint `P`, Erase `E`, Roof `R`, Garden `G`, then Rooms `I` and Furnish `F`. Icon, hotkey badge and a tooltip with the hint. The chevron hides the palette.
 - **Palette (flyout next to the rail):** content per tool, icons and thumbnails first, search on long kit lists, and a style filter (All / Tokyo / New York / Classic) wherever kit pieces or ideas are listed.
 - **Stage:** camera views (Orbit, Top, Front, Frame selection) and the storey rail (add floor, floors, walls views All/Cut/Floor, slab) on its top-right edge; the status line, storefront unpack hint, roof notes and the "details need a little space" list on its bottom edge.
@@ -87,9 +87,33 @@ Placing with a stroke tool (openings, decorations, storefronts) keeps the tool a
 | C, Alt click | quick paint ring, sample a finish |
 | Space | New look |
 | Z | frame the selection (was F, which is now Furnish) |
+| O | Isolate on/off |
 | PgUp / PgDn | storey |
 | R | turn furniture or a roof detail while placing |
 | ? | shortcut sheet |
+
+## Isolate
+
+The frame button in the top bar, or `O`, turns **Isolate** on and off. The edited building renders as usual. The rest of the scene gets cheaper and steps back:
+
+- Every other studio plot is pinned to its far chunk and kit proxies (`CitySculptCity`): no near overlays, no medium/full kit, no free-door leaves and no shop interiors. The per-building path (`?cityGwBatch=0`) pins its detail batches far and drops interiors. Business buildings draw their simple representation (`CityVisibility`).
+- Sun shadows (High quality) come only from the edited building. The shadow camera is fitted to the plot, and the parked car stops casting.
+- Street figures, the car, the character's animation and launch-plaza motion pause.
+- Beyond 40 m of the plot centre (62 m fully; more on larger plots) the city fades to a light, desaturated silhouette. The plot and its grounds stay fully visible. The fade is part of the canvas's fog node and is driven by uniforms, so toggling compiles no shaders.
+
+The choice is remembered per device (`localStorage` `city-studio-isolate-v1`, guarded). Without a stored choice, Isolate is on for the existing low-power path (software-renderer detection; `?cityLowPower=1` in tests) and off elsewhere. Turning it off restores everything on the next frames without remounting the canvas. Walk around, Done and Exit restore the normal city. State: `src/features/city/cityStudioIsolate.ts`, a module store read by the renderer without scene re-renders. Development telemetry: `canvas.dataset.cityIsolate` (plot, fade radii, shadow radius) and `window.__cityGwStats.levels`.
+
+Measured on the 396-plot unified benchmark city (`CITY_BENCH_ISOLATE=1 CITY_BENCH_VARIANTS=unified node scripts/city-generated-walls-benchmark.mjs`), native WebGPU, headless Edge, 1280 × 800, Balanced quality, from the studio view pulled back over its neighbours. The same camera was measured with Isolate on, then off again:
+
+| Studio view | Off | On |
+|---|---:|---:|
+| Draw calls | 333 | 226 |
+| Triangles | 1,200,594 | 813,694 |
+| Frame p50 / p95 | 116.5 / 166.6 ms | 100.0 / 150.1 ms |
+| Kit levels (plots) | near 2, full/medium 23, proxy 64 | proxy 89 |
+| Textures | 28 | 22 |
+
+The frame times come from a busy headless machine and are only comparable within the run. Screenshots: `output/isolate-bench-off.png` and `output/isolate-bench-on.png`. The benchmark's load check also reads the batched city's ready count, because a dynamic import of the registry can resolve to a second module instance after dev-server HMR.
 
 ## Old → new control map
 
@@ -138,6 +162,7 @@ Every control of the belt UI is still reachable.
 ## Verification
 
 - `npx tsc --noEmit`; `node --experimental-strip-types --test src/domain/cityStudio*.test.ts src/features/city/studio*.test.ts` (includes `studioRail.test.ts`, `studioSelection.test.ts`, `studioKeys.test.ts`).
+- `scripts/city-studio-isolate-browser.mjs`: Isolate by button and `O`; neighbour levels (only `proxy`/`hidden`, no overlays), fade and shadow telemetry, lower draw calls and triangles, character paused and resumed, no canvas remount, per-device memory, restoration after Done, the low-power default; a fresh empty plot with no contact mark, one after drawing a block and none after undo, also in the city after Done. Screenshots: `output/isolate-on.png`, `output/isolate-off.png`, `output/empty-plot.png`, `output/empty-plot-block.png`.
 - `scripts/city-studio-ui-v2-browser.mjs`: rail hotkeys and each palette, Part/Wall/Tile/Opening/Object selection with hover and breadcrumb, double-click drill and Esc, Tab, level-aware Delete, inspector duplicate and Paint this wall, brush colour on a wall, brushed openings, target-filtered erase, bulk erase with one-step undo, Box and Oval blocks, phone layout. Screenshots: `output/ui-v2-*.png`: desktop `select`, `build`, `paint`, `erase`, `roof`, `garden`, `rooms`, `furnish`, `shortcuts`, `inspector-part`, `inspector-wall`, `inspector-tile`, `inspector-object`, `inspector-opening`, `brush-paint`, `brush-opening`, `erase-hover`; phone `mobile-select`, `mobile-paint`, `mobile-erase`, `mobile-build`, `mobile-roof`, `mobile-garden`, `mobile-rooms`, `mobile-furnish`, `mobile-inspector`.
 - The studio overlay is a drei `Html` root, separate from the scene's React root, so a panel click reaches the scene a tick later; the helpers wait for the canvas telemetry (`rail`, `target`, `level`) before clicking the building.
 - The older suites drive the new UI through `scripts/city-studio-ui.mjs` (rail, brush target and size, opening group, Select level, inspector, visible-bay helpers) and keep their behavioural assertions.

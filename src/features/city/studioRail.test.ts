@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {BRUSH_TARGETS,STUDIO_FOCUS_KEY,STUDIO_RAIL,brushSizesFor,cycleSelectLevel,drillSelectLevel,nextBrushSize,pushHotbar,studioCategoryFor,studioRailForKey} from './studioRail.ts';
+import {BRUSH_TARGETS,STUDIO_FOCUS_KEY,STUDIO_ISOLATE_KEY,STUDIO_RAIL,brushSizesFor,cycleSelectLevel,drillSelectLevel,nextBrushSize,pushHotbar,studioCategoryFor,studioRailForKey} from './studioRail.ts';
 import {STUDIO_DICE_KEY} from './studioTools.ts';
 
 test('rail tools have unique letter hotkeys that do not clash with other studio keys',()=>{
  const keys=STUDIO_RAIL.map(t=>t.hotkey);
  assert.equal(new Set(keys).size,keys.length);
- for(const reserved of [STUDIO_DICE_KEY,'C',STUDIO_FOCUS_KEY.toUpperCase(),'1','9'])assert.ok(!keys.includes(String(reserved)),String(reserved));
+ for(const reserved of [STUDIO_DICE_KEY,'C',STUDIO_FOCUS_KEY.toUpperCase(),STUDIO_ISOLATE_KEY.toUpperCase(),'1','9'])assert.ok(!keys.includes(String(reserved)),String(reserved));
  assert.deepEqual(keys,['V','B','P','E','R','G','I','F']);
  assert.equal(new Set(STUDIO_RAIL.map(t=>t.label)).size,STUDIO_RAIL.length,'labels are unique button names');
 });
