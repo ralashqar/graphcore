@@ -31,6 +31,32 @@ function offsetRing(ring:Point[],e:number):Point[]{
  });
 }
 function footprint(v:SculptVolume,e=0):Point[]{return offsetRing(sculptPrimitiveBoundary(v),e);}
+/** Direction of each named wall of an unturned box (its loop runs counter-clockwise from the minimum corner). */
+const WALL_TURN:[string,number][]=[['south',0],['east',Math.PI/2],['north',Math.PI],['west',-Math.PI/2]];
+/** Turn (radians, mod 90°) of the smallest box around a loop; unturned wins ties so drawn square-ish outlines stay aligned. */
+function smallestBoxAngle(loop:Point[]){
+ const area=(angle:number)=>{const c=Math.cos(angle),s=Math.sin(angle);let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;for(const [x,z] of loop){const u=x*c+z*s,w=-x*s+z*c;x0=Math.min(x0,u);x1=Math.max(x1,u);z0=Math.min(z0,w);z1=Math.max(z1,w);}return (x1-x0)*(z1-z0);};
+ let best=0,bestArea=area(0)*.995;
+ for(let i=0;i<loop.length;i++){const a=loop[i],b=loop[(i+1)%loop.length],angle=Math.atan2(b[1]-a[1],b[0]-a[0])%(Math.PI/2),next=area(angle);if(next<bestArea-1e-9){best=angle;bestArea=next;}}
+ return best;
+}
+/**
+ * The part's own frame for its roof. Turning a part bakes the turn into its outline (cityStudioRotate) but its named
+ * walls travel with their edges, so the south wall still says which way the building faces: roofs are built in that
+ * frame (ridges, hips and lean-tos turn with the part). Outlines without named walls use the smallest enclosing box.
+ * Unturned parts keep their original centre and size, so their roofs are unchanged.
+ */
+export function roofFrame(v:SculptVolume):{angle:number;x:number;z:number;width:number;depth:number}{
+ const plain={angle:0,x:v.x,z:v.z,width:v.width,depth:v.depth};
+ if(v.kind!=='polygon'||!v.vertices||v.vertices.length<3)return plain;
+ const loop=sculptPrimitiveBoundary(v) as Point[],ids=v.edgeIds??[];let angle:number|undefined;
+ for(const [id,turn] of WALL_TURN){const i=ids.indexOf(id as never);if(i<0)continue;const a=loop[i],b=loop[(i+1)%loop.length];if(Math.hypot(b[0]-a[0],b[1]-a[1])<1e-6)continue;angle=Math.atan2(b[1]-a[1],b[0]-a[0])-turn;break;}
+ angle=angle??smallestBoxAngle(loop);angle=Math.atan2(Math.sin(angle),Math.cos(angle));
+ if(Math.abs(angle)<1e-6)return plain;
+ const c=Math.cos(angle),s=Math.sin(angle);let x0=Infinity,x1=-Infinity,z0=Infinity,z1=-Infinity;
+ for(const [x,z] of loop){const u=x*c+z*s,w=-x*s+z*c;x0=Math.min(x0,u);x1=Math.max(x1,u);z0=Math.min(z0,w);z1=Math.max(z1,w);}
+ const u=(x0+x1)/2,w=(z0+z1)/2;return {angle,x:u*c-w*s,z:u*s+w*c,width:x1-x0,depth:z1-z0};
+}
 /** Offset the final union, including inward facing courtyard rings, without losing wall facets. */
 function wallTileEnvelope(polygons:MultiPolygon):MultiPolygon{
  return polygons.reduce<MultiPolygon>((result,polygon)=>{
@@ -48,19 +74,22 @@ function cachedWallTileEnvelope(polygons:MultiPolygon):MultiPolygon{
 }
 function plane3(a:[number,number,number],b:[number,number,number],c:[number,number,number]):Plane{const dx=b[0]-a[0],dz=b[2]-a[2],ex=c[0]-a[0],ez=c[2]-a[2],det=dx*ez-ex*dz;const x=((b[1]-a[1])*ez-(c[1]-a[1])*dz)/det,z=(dx*(c[1]-a[1])-ex*(b[1]-a[1]))/det;return [x,z,a[1]-x*a[0]-z*a[2]];}
 function candidates(r:StudioRecipe,v:SculptVolume,d:CityBuildingDesignV3,notes:string[]):StudioRoofFace[]{
- const {type,settings:s}=roofChoice(r,v.id),base=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight),e=type==='flat'||type==='terrace'?0:s.overhang,w=v.width/2+e,h=v.depth/2+e,rise=s.rise,domain=footprint(v,s.connection==='separate'?-.035:e);let profile=type;
+ const {type,settings:s}=roofChoice(r,v.id),base=sculptFloorTop(v.startFloor+v.spanFloors-1,d.groundHeight,d.upperHeight),e=type==='flat'||type==='terrace'?0:s.overhang,f=roofFrame(v),w=f.width/2+e,h=f.depth/2+e,rise=s.rise,domain=footprint(v,s.connection==='separate'?-.035:e);let profile=type;
+ // Planes are written in the part's frame (origin at its centre, x/z along its own walls) and turned into plot space.
+ const fc=Math.cos(f.angle),fs=Math.sin(f.angle),world=(p:Plane):Plane=>{const a=p[0]*fc-p[1]*fs,b=p[0]*fs+p[1]*fc;return [a,b,p[2]-a*f.x-b*f.z];};
  if(v.kind==='ellipse'&&!['flat','terrace','cone'].includes(profile)){profile='flat';notes.push('This round part keeps a flat roof. Choose Conical for a pointed roof.');}
  if(profile==='cone'&&v.kind!=='ellipse')notes.push('Conical roofs follow rectangular parts as pyramidal caps. Use a round part for a circular cone.');
  if(profile==='cone')return domain.map((a,i)=>{const b=domain[(i+1)%domain.length];return {partId:v.id,base,polygon:[[a,b,[v.x,v.z]]],plane:plane3([a[0],base,a[1]],[b[0],base,b[1]],[v.x,base+rise,v.z])};});
- const pair=(axis:'x'|'z',slope:number,peak:number):Plane[]=>axis==='x'?[[slope,0,peak-slope*v.x],[-slope,0,peak+slope*v.x]]:[[0,slope,peak-slope*v.z],[0,-slope,peak+slope*v.z]];
+ const pair=(axis:'x'|'z',slope:number,peak:number):Plane[]=>axis==='x'?[[slope,0,peak],[-slope,0,peak]]:[[0,slope,peak],[0,-slope,peak]];
  const cross=s.ridge==='z'?'x':'z',span=cross==='x'?w:h,min=Math.min(w,h);let planes:Plane[];
  if(profile==='flat'||profile==='terrace')planes=[[0,0,base+.02]];
- else if(profile==='shed'){const k=(s.flip?-1:1)*rise/(2*span);planes=cross==='x'?[[k,0,base+rise/2-k*v.x]]:[[0,k,base+rise/2-k*v.z]];}
+ else if(profile==='shed'){const k=(s.flip?-1:1)*rise/(2*span);planes=cross==='x'?[[k,0,base+rise/2]]:[[0,k,base+rise/2]];}
  else if(profile==='mansard')planes=[...pair('x',rise/(min*(1-s.crown)),base+rise*w/(min*(1-s.crown))),...pair('z',rise/(min*(1-s.crown)),base+rise*h/(min*(1-s.crown))),[0,0,base+rise]];
  else if(profile==='gambrel')planes=[...pair(cross,rise*s.shoulder/(span*(1-s.crown)),base+rise*s.shoulder/(1-s.crown)),...pair(cross,rise*(1-s.shoulder)/(span*s.crown),base+rise)];
  else if(profile==='hip')planes=[...pair(cross,rise/span,base+rise),...pair(cross==='x'?'z':'x',rise/((cross==='x'?h:w)*(1-s.crown)),base+rise/(1-s.crown))];
  else if(profile==='pyramid')planes=[...pair('x',rise/w,base+rise),...pair('z',rise/h,base+rise)];
  else {planes=pair(cross,rise/span,base+rise);if(profile==='half-hip')planes.push(...pair(cross==='x'?'z':'x',rise/span,base+rise*s.shoulder+rise*(cross==='x'?h:w)/span));}
+ planes=planes.map(world);
  const concave=domain.some((p,i)=>{const a=domain[(i+domain.length-1)%domain.length],b=domain[(i+1)%domain.length];return (p[0]-a[0])*(b[1]-p[1])-(p[1]-a[1])*(b[0]-p[0])<-.00001;});
  if(!concave)return planes.flatMap(plane=>{let poly=domain;for(const other of planes)if(other!==plane)poly=clip(poly,[other[0]-plane[0],other[1]-plane[1],other[2]-plane[2]]);return poly.length>=3?[{partId:v.id,base,plane,polygon:[poly]}]:[];});
  // A single roof plane (flat/terrace) needs no clipping: detailed studio outlines (more than the 12 corners

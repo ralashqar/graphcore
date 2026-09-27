@@ -139,3 +139,15 @@ test('wall flashing shares mitred corner sections rather than overlapping indepe
  const corner=[];for(let i=0;i<vertices.length;i+=3)if(Math.abs(vertices[i]-2)<.2&&Math.abs(vertices[i+2])<.2)corner.push(vertices.slice(i,i+3).map(n=>n.toFixed(6)).join('/'));
  assert.equal(new Set(corner).size,4,'both strips must use the same four corner vertices');
 });
+
+import {rotateStudioVolume} from './cityStudioRotate.ts';
+test('roofs turn with their part: a turned box gets the same roof turned, not a plot-aligned one',()=>{
+ const slopes=(r:StudioRecipe)=>resolve(r).roofFaces!.filter(f=>f.partId==='wing'&&Math.hypot(f.plane[0],f.plane[1])>1e-6).map(f=>[f.plane[0],f.plane[1]] as const);
+ const key=(list:readonly (readonly [number,number])[])=>list.map(([a,b])=>`${a.toFixed(3)},${b.toFixed(3)}`).sort();
+ for(const type of ['pitched','hip','shed','mansard','gambrel','half-hip','pyramid'] as const)for(const angle of [Math.PI/4,Math.PI/2,Math.PI/6]){
+  const flat=editStudioRoof(recipe(),['wing'],{type}),turned=structuredClone(flat);turned.volumes[0]=rotateStudioVolume(turned.volumes[0],angle)!;
+  const c=Math.cos(angle),s=Math.sin(angle),expected=slopes(flat).map(([a,b])=>[a*c-b*s,a*s+b*c] as const);
+  assert.deepEqual(key(slopes(turned)),key(expected),`${type} at ${Math.round(angle*180/Math.PI)} degrees`);
+  assert.ok(Math.abs(area(turned,'wing')-area(flat,'wing'))<.05,`${type} keeps its roof area when turned`);
+ }
+});

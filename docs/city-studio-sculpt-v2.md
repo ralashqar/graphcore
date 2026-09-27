@@ -102,3 +102,15 @@ Flat roofs over detailed concave outlines were dominated by per-triangle roof cl
 - Pitched roofs over outlines with many concave corners are slow to prepare (see Limits).
 - Roof openings and details are not re-fitted (the roof resolver may mark them inactive).
 - Touch: corner selection and push/pull work with a finger, but Shift multi-select and Alt/Ctrl modifiers need a keyboard; physical touch devices are unverified.
+
+## Roofs on turned and reshaped parts
+
+Turning a part bakes the turn into its outline, so roofs used to be built along the plot's X/Z axes from the outline's
+axis-aligned bounding box: a part turned 45° kept a plot-aligned ridge sized to that box. Roofs now use the part's own
+frame (`roofFrame` in `src/domain/cityStudioRoofEnvelope.ts`). Named walls travel with their edges, so the direction
+of the south wall (or east/north/west, offset by quarter turns) gives the building's heading; outlines without named
+walls use the smallest enclosing box, preferring the unturned frame on ties. Gable, hip, half-hip, gambrel, mansard,
+lean-to and pyramid planes are written in that frame and turned back to plot space, and the ridge setting ("along
+x/z") refers to the part's own axes. Unturned parts keep their original centre and size, so their roofs are
+unchanged. A reshaped outline follows its south wall's direction, so tilting that wall also tilts the roof frame.
+`cityStudioRoofs.test.ts` checks that a turned box gets the unturned roof turned (30°, 45°, 90°) with the same area.
