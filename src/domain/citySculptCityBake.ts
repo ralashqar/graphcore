@@ -88,9 +88,9 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
   const length=Math.hypot(entrance.x,10.4-entrance.z),rotation=Math.atan2(-entrance.x,10.4-entrance.z);
   if(length>1e-6)add('surface','none',{...box(),color:rgb(PATH),matrix:new Matrix4().compose(new Vector3(entrance.x/2,.31,(10.4+entrance.z)/2),new Quaternion().setFromAxisAngle(new Vector3(0,1,0),rotation),new Vector3(1.8,.05,length))},'envelope');
  }
- // Far detail: the far index range of every merged detail batch (near-only shells never draw far).
+ // Far detail: the far index range of every merged detail batch.
  for(const b of details?.batches??[]){
-  const m=b.material;if(m.kind==='shell')continue;
+  const m=b.material;
   const part=detailRange(b,b.farStart,b.far);if(!part)continue;
   if(m.kind==='wall')add('wall',textureOf(m.texture),{...part,color:rgb(m.color)},'detail');
   else if(m.kind==='glass')add('glass','none',{...part,color:rgb(m.color)},'detail');

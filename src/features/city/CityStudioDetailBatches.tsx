@@ -14,7 +14,6 @@ import {useCityReflection} from './cityReflections';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import {warmHiddenMaterials} from './cityStudioWarmup';
 import {freeWallMaterial} from './CityStudioFreeOpeningFace';
-import {interiorShellMaterial} from './cityInteriorShellMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import type {DetailBatch,DetailMaterial,StudioDetailBatches} from '../../domain/cityStudioDetailBatches';
 
@@ -25,7 +24,6 @@ function createMaterial(m:DetailMaterial):Material{
  if(m.kind==='wall')return freeWallMaterial(m.color,m.texture as CityTextureId);
  if(m.kind==='painted'){const p=citySurfaceMaterial();p.vertexColors=true;return p;}
  if(m.kind==='glass'){const g=citySurfaceMaterial(true);g.color.set(m.color);if(m.seeThrough)seeThroughGlass(g);return g;}
- if(m.kind==='shell')return interiorShellMaterial();
  const r=citySurfaceMaterial(false,m.texture as CityTextureId);r.color.set(m.color);return r;
 }
 /** Far and interior-less views keep the opaque reflective glass (same colour), swapped in without new buffers. */
@@ -55,7 +53,7 @@ export function viewDistance(camera:Camera,height:number,x:number,z:number){
 let blockSequence=0;
 /** Test hook (?cityStudioTest): window.__cityStudioDetailForce = 'near' | 'far' pins every unedited building. */
 const testForce=()=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('cityStudioTest')?(window as unknown as {__cityStudioDetailForce?:'near'|'far'}).__cityStudioDetailForce:undefined;
-/** `seeThrough`: near glazing may be transparent (something is behind it: interiors in view or window shells). */
+/** `seeThrough`: near glazing may be transparent (authored interiors are in view behind it). */
 export function CityStudioDetailBatches({details,center,full,pinNear=false,hidden,seeThrough=true,children}:{details:StudioDetailBatches;center:{x:number;z:number};full:boolean;/** Near detail without being the edited plot (CitySculptCity near overlays). */pinNear?:boolean;hidden?:ReadonlySet<string>|null;seeThrough?:boolean;children?:ReactNode}){
  const {camera,size,invalidate,gl,scene}=useThree();
  const geometries=useMemo(()=>details.batches.map(b=>batchGeometry(b)),[details]);

@@ -10,7 +10,7 @@ import {VARIATION_LAYERS} from './cityVariationTypes.ts';
 import {unpackStorefront} from './cityStorefrontStamps.ts';
 const design=(i=8)=>createModularDesign(newDesign('variation-test'),i);
 test('all 24 templates resolve identically through the business and studio paths',()=>{
- for(let i=0;i<24;i++){const d=design(i),r=d.modular!.recipe;assert.equal(validateModularDesign(d),null,String(i));const original=JSON.stringify(r),a=resolveV3(d,'#aaaaaa').studioAssembly!,b=resolveSculpt(r,d).studio!;assert.deepEqual(a,b);assert.equal(JSON.stringify(r),original);assert.deepEqual(resolveV3(JSON.parse(JSON.stringify(d)),'#aaaaaa').studioAssembly,a);assert.equal(a.bays.filter(b=>b.entrance).length,1);assert.ok(a.pieces.length>20);}
+ for(let i=0;i<24;i++){const d=design(i),r=d.modular!.recipe;assert.equal(validateModularDesign(d),null,String(i));const original=JSON.stringify(r),a=resolveV3(d,'#aaaaaa').studioAssembly!,b=resolveSculpt(r,d,{doors:false}).studio!;assert.deepEqual(a,b);assert.equal(JSON.stringify(r),original);assert.deepEqual(resolveV3(JSON.parse(JSON.stringify(d)),'#aaaaaa').studioAssembly,a);assert.equal(a.bays.filter(b=>b.entrance).length,1);assert.ok(a.pieces.length>20);}
 });
 test('manual opening, paint and primary entrance survive independent shuffles',()=>{
  const d=design(),r=d.modular!.recipe,v=r.studio.variation!,bay=studioBays(r,d).find(b=>b.anchor.floor===1)!;

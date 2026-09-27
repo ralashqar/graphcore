@@ -5,6 +5,8 @@ import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,type SculptPolygon,type SculptResolved} from './citySculpt.ts';
 import {STUDIO_FURNITURE,FURNITURE_LIMIT,furniturePlacementIssue} from './cityStudioFurniture.ts';
 import {freeDoorClearZones,freeDoorRamps,studioFreeDoorPortals} from './cityStudioFreeDoors.ts';
+import {cutBlockerForPassage,kitDoorMotion,kitDoorPassage,kitDoorPortals} from './cityStudioDoorMotion.ts';
+import {studioKitVersion} from './cityStudioCatalog.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import type {StudioBay,StudioDeck,StudioInteriorBlock,StudioInteriorLevel,StudioRecipe,StudioResolved,StudioInteriorStair,StudioRoom} from './cityStudioTypes.ts';
 
@@ -60,25 +62,38 @@ function fitStair(stair:StudioInteriorStair,base:SculptResolved,d:CityBuildingDe
  const cut=footprints.length===1?footprints[0]:polygonClipping.union(footprints[0],footprints[1]);return {void:cut,decks,blocks};
 }
 
-export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:CityBuildingDesignV3,base:SculptResolved,studio:StudioResolved,bays:StudioBay[]):StudioResolved{
+/**
+ * Interior levels, portals and their collision. `implicit` (recipe v5): the building has no authored interior, so the
+ * levels are empty floors resolved only so that every door leads somewhere (no rooms, nothing saved).
+ */
+export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:CityBuildingDesignV3,base:SculptResolved,studio:StudioResolved,bays:StudioBay[],implicit=false):StudioResolved{
  const portals=[...(studio.portals??[])],inactive=[...studio.inactive],blockers=[...studio.blockers],decks=[...studio.decks];
  const levelCount=Math.max(1,...r.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors)),levels:StudioInteriorLevel[]=Array.from({length:levelCount},(_,floor)=>({floor,slab:[],underside:[],blocks:[],rooms:[],roomSurfaces:[],furniture:[]}));
  const openFloors=new Set(r.interior.openFloors??[]);
  for(let floor=0;floor<levelCount;floor++){
   const footprint=base.floors[floor]?.polygons??[],walls=r.interior.partitions.filter(p=>p.floor===floor&&insideSegment(footprint,p.a,p.b));
-  levels[floor].rooms=roomRegions(footprint,walls,floor,r);
+  if(!implicit)levels[floor].rooms=roomRegions(footprint,walls,floor,r);
  }
  for(const intent of r.interior.roomFinishes??[])if(intent.floor>=levelCount||!levels[intent.floor]?.rooms.some(room=>room.id===intent.id))inactive.push({id:intent.id,reason:'The original room no longer exists at this location.'});
- // Free faces own their wall: kit door bays there are gone, and each free door leaf becomes an exterior portal.
+ // Free faces own their wall: kit door bays there are gone, and each generated free door leaf becomes an exterior portal.
  const freeFaces=studio.freeFaces??[],freeOwned=new Set(freeFaces.map(f=>f.id)),doorZones:MultiPolygon[]=[];
  for(const face of freeFaces){portals.push(...studioFreeDoorPortals(face));decks.push(...freeDoorRamps(face));for(const z of freeDoorClearZones(face))doorZones.push(rectangle(z.x,z.z,z.width,z.depth,z.rotation));}
  const blocksDoor=(shape:MultiPolygon)=>doorZones.some(zone=>multiArea(polygonClipping.intersection(zone,shape))>.02);
- for(const bay of bays.filter(b=>b.module.startsWith('door-')&&!freeOwned.has(`${b.anchor.shapeId}/${b.anchor.side}`))){
-  const openingWidth=Math.min(1.3,bay.width-.3),openingHeight=Math.min(2.3,bay.height-.2),sideWidth=(bay.width-openingWidth)/2,baseY=bay.y,frame=(id:string,u:number,width:number,low:number,high:number,kind:StudioInteriorBlock['kind'])=>{if(width<.025||high-low<.025)return;const p=shift(bay.x,bay.z,bay.rotation,u,0),piece=block(`${bay.id}/${id}`,bay.anchor.floor,kind,p.x,p.z,(low+high)/2,width,high-low,.22,bay.rotation);levels[bay.anchor.floor]?.blocks.push(piece);blockers.push(piece);};
-  frame('left',-(bay.width+openingWidth)/4,sideWidth,baseY,baseY+bay.height,'wall');frame('right',(bay.width+openingWidth)/4,sideWidth,baseY,baseY+bay.height,'wall');frame('header',0,openingWidth,baseY+openingHeight,baseY+bay.height,'wall');
-  frame('jamb-left',-openingWidth/2,.08,baseY,baseY+openingHeight,'frame');frame('jamb-right',openingWidth/2,.08,baseY,baseY+openingHeight,'frame');frame('lintel',0,openingWidth,baseY+openingHeight-.08,baseY+openingHeight,'frame');
-  portals.push({id:`exterior/${bay.id}`,floor:bay.anchor.floor,x:bay.x,y:baseY,z:bay.z,width:openingWidth,height:openingHeight,rotation:bay.rotation,hinge:'left',style:bay.module.includes('glass')?'glazed':'panelled'});
-  if(bay.entrance){const approach=shift(bay.x,bay.z,bay.rotation,0,.42);decks.push({id:`entry/${bay.id}`,x:approach.x,z:approach.z,y:.18,width:Math.min(1.2,openingWidth),depth:1.55,rotation:bay.rotation+Math.PI,rise:baseY+.04-.18});}
+ // Kit doors (tiles, and kit pieces in generated walls): their leaves are portals moving as the module's design says
+ // (cityStudioDoorMotion). A tile's wall blocker opens around the passage; generated walls already leave doorways
+ // open (resolveStudioFreeFaces). Leafless fronts (fly curtains, open stalls) are passable; on buildings without
+ // interiors they stay closed recesses (the tile blocker, or recessBlockers on generated walls).
+ const version=studioKitVersion(r.studio.catalogue),tileBays=new Map(bays.filter(b=>!freeOwned.has(`${b.anchor.shapeId}/${b.anchor.side}`)).map(b=>[b.id,b]));
+ for(const piece of studio.pieces){
+  const spec=kitDoorMotion(version,piece.module);if(!spec)continue;
+  const bay=tileBays.get(piece.id);if(!bay&&!piece.id.startsWith('free/'))continue;
+  if(spec.kind==='open'&&implicit)continue;
+  if(bay){const i=blockers.findIndex(b=>b.id===bay.id),pass=kitDoorPassage(piece,spec);if(i>=0)blockers.splice(i,1,...cutBlockerForPassage(blockers[i],piece.x,piece.z,pass.x0,pass.x1,pass.top));
+   // Ground-floor doors get a level doorstep and a ramp from the pavement, like generated doors (freeDoorRamps).
+   const top=bay.y+.04,rise=top-.18;if(bay.anchor.floor===0&&rise>.02){const width=Math.min(2.4,pass.x1-pass.x0+.3),m=(pass.x0+pass.x1)/2,step=shift(piece.x,piece.z,bay.rotation,m,.75/2-.05),ramp=shift(piece.x,piece.z,bay.rotation,m,.75-.05+1.55/2);
+    decks.push({id:`entry/${bay.id}/landing`,x:step.x,z:step.z,y:top,width,depth:.75,rotation:bay.rotation,rise:0},{id:`entry/${bay.id}`,x:ramp.x,z:ramp.z,y:.18,width,depth:1.55,rotation:bay.rotation+Math.PI,rise});}}
+  if(!spec.leaves.length)continue;
+  portals.push(...kitDoorPortals(piece,bay?.anchor.floor??0,spec));piece.portal=true;
  }
  const voids=new Map<number,MultiPolygon[]>();
  for(const intent of r.interior.stairs){
@@ -136,7 +151,7 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   const reason=furniturePlacementIssue(item,level,decks,portals);if(reason){inactive.push({id:item.id,reason});continue;}
   level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;if(spec.blocking)blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
  }
- return {...studio,portals,interiorLevels:levels,blockers,decks,inactive};
+ return {...studio,portals,interiorLevels:levels,blockers,decks,inactive,...(implicit?{implicitInterior:true}:{})};
 }
 
 

@@ -1,6 +1,7 @@
 import {DriveWorld, pavementHeight} from './cityDriveWorld.ts';
 import type {StudioResolved, StudioBox, StudioDeck} from './cityStudioTypes.ts';
 import {studioDoorAngle} from './cityStudioDoorState.ts';
+import {doorClearance,portalLeafBox} from './cityStudioDoorMotion.ts';
 
 export type StudioCollisionPlot={id:string;x:number;z:number;rotation:number;scale:number;result:StudioResolved};
 type Prepared=StudioCollisionPlot&{boxes:{box:StudioBox;world:DriveWorld}[];doors:{id:string;world:DriveWorld}[]};
@@ -17,9 +18,10 @@ export class StudioWalkingCollision {
  readonly ignored=new Set<string>();
  set(plot:StudioCollisionPlot){this.ignored.add(plot.id);this.plots.set(plot.id,{...plot,boxes:plot.result.blockers.map(box=>{const world=new DriveWorld(1e8);world.sync([{id:box.id,minX:-box.width/2,maxX:box.width/2,minZ:-box.depth/2,maxZ:box.depth/2}]);return {box,world};}),doors:(plot.result.portals??[]).map(portal=>{const world=new DriveWorld(1e8);world.sync([{id:portal.id,minX:-portal.width/2,maxX:portal.width/2,minZ:-.05,maxZ:.05}]);return {id:portal.id,world};})});}
  remove(id:string){this.ignored.delete(id);this.plots.delete(id);}
- private boxes(p:Prepared){const dynamic=p.doors.map(item=>{const door=p.result.portals!.find(d=>d.id===item.id)!,fraction=studioDoorAngle(p.id,door.id),side=door.hinge==='left'?1:-1,angle=door.rotation+side*fraction*Math.PI/2,c=Math.cos(door.rotation),s=Math.sin(door.rotation),hingeX=door.x-side*c*door.width/2,hingeZ=door.z+side*s*door.width/2;return {world:item.world,box:{id:door.id,x:hingeX+side*Math.cos(angle)*door.width/2,z:hingeZ-side*Math.sin(angle)*door.width/2,y:door.y+door.height/2,width:door.width,height:door.height,depth:.1,rotation:angle}};});return [...p.boxes,...dynamic];}
+ // Leaves swing, slide or roll with their door state (portalLeafBox): closed they block, open they clear the passage.
+ private boxes(p:Prepared){const dynamic=p.doors.map(item=>{const door=p.result.portals!.find(d=>d.id===item.id)!;return {world:item.world,box:portalLeafBox(door,studioDoorAngle(p.id,door.id))};});return [...p.boxes,...dynamic];}
  nearestDoor(x:number,y:number,z:number,maxDistance=1.8){let found:{plotId:string;doorId:string;distance:number}|null=null;for(const p of this.plots.values()){const point=local(p,x,z);for(const door of p.result.portals??[]){const distance=Math.hypot(point.x-door.x,point.z-door.z)*p.scale;if(distance>maxDistance||y<door.y*p.scale-.2||y>(door.y+door.height)*p.scale+.2||found&&distance>=found.distance)continue;found={plotId:p.id,doorId:door.id,distance};}}return found;}
- doorClear(plotId:string,doorId:string,x:number,z:number){const p=this.plots.get(plotId),door=p?.result.portals?.find(d=>d.id===doorId);if(!p||!door)return false;const point=local(p,x,z);return Math.hypot(point.x-door.x,point.z-door.z)*p.scale>.8;}
+ doorClear(plotId:string,doorId:string,x:number,z:number){const p=this.plots.get(plotId),door=p?.result.portals?.find(d=>d.id===doorId);if(!p||!door)return false;const point=local(p,x,z);return Math.hypot(point.x-door.x,point.z-door.z)*p.scale>doorClearance(door);}
  clear(x:number,y:number,z:number,r:number,height=1.8){
   for(const p of this.plots.values()){const v=local(p,x,z);for(const {box:b,world} of this.boxes(p)){if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}}return true;
  }

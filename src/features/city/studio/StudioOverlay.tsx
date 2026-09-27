@@ -1,7 +1,7 @@
 // Studio UI v2 shell (docs/city-studio-ui-v2.md): a CSS grid of top bar / tool rail + palette / stage / inspector /
 // hotbar laid over the canvas. Only the panels take pointer events; the stage passes clicks through to the building.
 import {useEffect,useState} from 'react';
-import {ArrowUUpLeft,ArrowUUpRight,ArrowsOut,Check,Compass,Eye,House,Keyboard,Plus,SpeakerHigh,SpeakerSlash,Trash,X} from '@phosphor-icons/react';
+import {ArrowUUpLeft,ArrowUUpRight,ArrowsOut,Check,Compass,Eye,House,Keyboard,Palette,Plus,SpeakerHigh,SpeakerSlash,Trash,X} from '@phosphor-icons/react';
 import {STUDIO_EXAMPLES,TOKYO_EXAMPLE_START} from '../../../domain/cityStudioExamples';
 import {StyleFilter,exampleStyle,styleMatches} from './studioStyles';
 import {COMPOSITIONS} from '../../../domain/cityBuildingV3';
@@ -16,6 +16,7 @@ import {CityStudioFloorRail} from '../CityStudioFloorRail';
 import {CityPresetCollection} from '../CityPresetCollection';
 import {StudioToolRail} from './StudioToolRail';
 import {StudioPalette} from './StudioPalette';
+import {ThemeGallery} from './StudioThemes';
 import {StudioInspector} from './StudioInspector';
 import {StudioHotbar} from './StudioHotbar';
 import {StudioShortcutSheet} from './StudioShortcutSheet';
@@ -45,6 +46,7 @@ export function StudioOverlay({st}:{st:StudioState}){
   </>}
   </div>
   {recipe&&st.starters&&<StudioStarters st={st}/>}
+  {recipe&&st.themeGallery&&<ThemeGallery st={st}/>}
   {st.help&&<StudioShortcutSheet close={()=>st.setHelp(false)}/>}
   {st.replace!==null&&<div className="studio-confirm" role="dialog" aria-label="Replace building"><h2>Start a new shape?</h2><p>You can undo this and return to your current building.</p><button onClick={()=>st.setReplace(null)}>Keep building</button><button className="studio-primary" onClick={()=>{if(st.replace===-1){st.empty();st.setReplace(null);}else st.starter(st.replace!);}}>Replace building</button></div>}
   {interaction.touchPending&&<div className="studio-touch-confirm"><button onClick={interaction.cancel}>Cancel</button><button className="studio-primary" onClick={interaction.confirm}><Check/> Place</button></div>}
@@ -100,6 +102,6 @@ function StudioStarters({st}:{st:StudioState}){
  const recipe=st.recipe!,kitVersion=st.kitVersion,choose=(i:number)=>recipe.volumes.length?st.setReplace(i):i===-1?st.empty():st.starter(i);
  return <aside className="studio-starters-sheet" aria-label={st.collection?'Blender collection':'Starting ideas'}>
   <header><strong>{st.collection?'Blender collection':'Starting ideas'}</strong><button aria-label="Close starting ideas" onClick={()=>st.setStarters(false)}><X size={16}/></button></header>
-  {st.collection?<CityPresetCollection choose={i=>choose(-i-2)}/>:<><StyleFilter value={st.styleFilter} onChange={st.setStyleFilter} label="Idea style"/><div className="studio-tray studio-starters">{STUDIO_EXAMPLES.map((example,i)=>example.preview?.includes('/v5/')||!styleMatches(st.styleFilter,exampleStyle(i,example.preview))?null:<button className="studio-tile" key={example.name} onClick={()=>choose(-i-2)}><img src={example.preview??`/city/synarc-kit/v${i>=TOKYO_EXAMPLE_START?5:kitVersion}/thumbnails/${example.thumbnail}.png`} alt=""/><span>{example.name}</span></button>)}{st.styleFilter==='all'&&<button className="studio-tile" onClick={()=>choose(-1)}><Plus size={30}/><span>Empty plot</span></button>}{(st.styleFilter==='all'||st.styleFilter==='classic')&&COMPOSITIONS.filter(p=>!['twin-tower','atrium-campus'].includes(p.patch.archetype??'')).map(p=>{const index=COMPOSITIONS.indexOf(p);return <button key={p.name} className="studio-tile" onClick={()=>choose(index)}><img src={`/city/presets/${p.name.toLowerCase().replaceAll(' ','-')}.webp`} alt=""/><span>{p.name}</span></button>;})}</div></>}
+  {st.collection?<CityPresetCollection choose={i=>choose(-i-2)}/>:<><StyleFilter value={st.styleFilter} onChange={st.setStyleFilter} label="Idea style"/><div className="studio-tray studio-starters">{STUDIO_EXAMPLES.map((example,i)=>example.preview?.includes('/v5/')||!styleMatches(st.styleFilter,exampleStyle(i,example.preview))?null:<button className="studio-tile" key={example.name} onClick={()=>choose(-i-2)}><img src={example.preview??`/city/synarc-kit/v${i>=TOKYO_EXAMPLE_START?5:kitVersion}/thumbnails/${example.thumbnail}.png`} alt=""/><span>{example.name}</span></button>)}<button className="studio-tile" aria-label="Start from a theme" onClick={()=>{st.setStarters(false);st.setThemeGallery({scope:'starter'});}}><Palette size={30} weight="duotone"/><span>Themes…</span></button>{st.styleFilter==='all'&&<button className="studio-tile" onClick={()=>choose(-1)}><Plus size={30}/><span>Empty plot</span></button>}{(st.styleFilter==='all'||st.styleFilter==='classic')&&COMPOSITIONS.filter(p=>!['twin-tower','atrium-campus'].includes(p.patch.archetype??'')).map(p=>{const index=COMPOSITIONS.indexOf(p);return <button key={p.name} className="studio-tile" onClick={()=>choose(index)}><img src={`/city/presets/${p.name.toLowerCase().replaceAll(' ','-')}.webp`} alt=""/><span>{p.name}</span></button>;})}</div></>}
  </aside>;
 }

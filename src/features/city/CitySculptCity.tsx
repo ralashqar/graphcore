@@ -35,7 +35,7 @@ import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {prepareSculpt,prepareSculptCity,type PreparedSculpt} from './citySculptService';
 import {preparedStudioPlot,publishStudioPlot,removeStudioPlot} from './cityStudioRegistry';
 import {CityStudioDetailBatches,STUDIO_DETAIL_LOD,viewDistance} from './CityStudioDetailBatches';
-import {CityStudioFreeDoorLeaves,CityStudioInteriorMeshes} from './CityStudioInteriorMeshes';
+import {CityStudioFreeDoorLeaves,CityStudioInteriorMeshes,CityStudioEntryRamps,IMPLICIT_FINISH,ImplicitInteriorGate} from './CityStudioInteriorMeshes';
 import {CityStudioTrimParts} from './CityStudioTrimParts';
 import {CitySculptSharedKit,kitBounds,type KitLevel,type KitLevels,type KitPlot} from './CitySculptSharedKit';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
@@ -262,8 +262,10 @@ function NearOverlay({ready,visible,onShown}:{ready:Ready;visible:boolean;onShow
  useEffect(()=>{if(!prepared||!visible)return;onShown(ready.id,true);return()=>onShown(ready.id,false);},[prepared,visible,ready.id,onShown]);
  return <>
   <group name="city-sculpt-near" visible={visible} position={[x,0,z]} rotation={[0,rotation,0]} scale={scale}>
-   {prepared?.details&&<CityStudioDetailBatches details={prepared.details} center={{x,z}} full={false} pinNear>{studio?.freeFaces&&studio.portals&&<CityStudioFreeDoorLeaves plotId={ready.id} portals={studio.portals} faces={studio.freeFaces}/>}{studio?.freeFaces&&<CityStudioTrimParts faces={studio.freeFaces} trims={studio.freeTrims??(recipe.version===5||recipe.version===6?recipe.studio.freeTrims:undefined)} groundHeight={design.groundHeight}/>}</CityStudioDetailBatches>}
+   {prepared?.details&&<CityStudioDetailBatches details={prepared.details} center={{x,z}} full={false} pinNear seeThrough={!!interior}>{studio?.freeFaces&&studio.portals&&<CityStudioFreeDoorLeaves plotId={ready.id} portals={studio.portals} faces={studio.freeFaces}/>}{studio?.freeFaces&&<CityStudioTrimParts faces={studio.freeFaces} trims={studio.freeTrims??(recipe.version===5||recipe.version===6?recipe.studio.freeTrims:undefined)} groundHeight={design.groundHeight}/>}</CityStudioDetailBatches>}
    {prepared&&studio?.interiorLevels&&interior&&<CityStudioInteriorMeshes plotId={ready.id} levels={studio.interiorLevels} portals={studio.portals??[]} decks={studio.decks} view={{mode:'whole',floor:0}} finish={interior.floorFinish} wallColor={interior.wallColor}/>}
+   {prepared&&studio?.implicitInterior&&<CityStudioEntryRamps decks={studio.decks}/>}
+   {prepared&&studio?.implicitInterior&&studio.interiorLevels&&<ImplicitInteriorGate plotId={ready.id}><CityStudioInteriorMeshes plotId={ready.id} levels={studio.interiorLevels} portals={studio.portals??[]} decks={studio.decks} view={{mode:'whole',floor:0}} finish={IMPLICIT_FINISH.floor} wallColor={IMPLICIT_FINISH.wall} entries={false}/></ImplicitInteriorGate>}
   </group>
   {prepared&&visible&&ready.bake.sign&&<WorldSign sign={ready.bake.sign} name={ready.draft.name} color={ready.draft.color}/>}
  </>;

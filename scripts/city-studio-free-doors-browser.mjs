@@ -36,7 +36,7 @@ try{
  });
  console.log(JSON.stringify(resolved));
  assert.deepEqual(resolved.inactive,[]);assert.ok(resolved.portals.includes('exterior/free/door'),'the free door is a portal');
- assert.deepEqual(resolved.openable,[true]);assert.ok(resolved.glass.every(k=>k.endsWith('|see')),'free-face glass is see-through');assert.equal(resolved.shell,false,'interiors replace window shells');
+ assert.deepEqual(resolved.openable,[true]);assert.ok(resolved.glass.every(k=>k.endsWith('|see')),'free-face glass is see-through into the interior');assert.equal(resolved.shell,false,'no room boxes');
  // Glass: a close front view through the windows into the furnished rooms.
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1500);
  const box=await page.locator('canvas').first().boundingBox(),cx=box.x+box.width/2,cy=box.y+box.height*.5;
@@ -91,15 +91,15 @@ try{
  // Close it again from inside once clear of the swing.
  e=await goTo(door.near,{tolerance:.3,ms:6000});
  await page.keyboard.press('e');const closedAgain=await page.getByText(/Door closed|Step clear/).textContent({timeout:3000});
- // Without interiors (v5): no portal, the closed leaf stays baked, and window shells fill the glass.
+ // Without interiors (v5): the door is still a portal (implicit empty interior), glass is opaque, no room boxes.
  await page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),world=JSON.parse(localStorage.getItem(key)),plot=world.plots.find(p=>p.purchaseId==='free-doors-browser');const {interior,...rest}=plot.draft.sculpt;void interior;plot.draft.sculpt={...rest,version:5};localStorage.setItem(key,JSON.stringify(world));});
  await page.reload();await page.getByRole('button',{name:'Drive mode',exact:true}).click();await page.getByRole('button',{name:'Visit test plot'}).click();
  await page.getByRole('region',{name:'Construction studio'}).waitFor({timeout:60000});await page.waitForFunction(()=>!document.querySelector('.studio-preparing'),null,{timeout:60000});
- const v5=await page.evaluate(async()=>{const {resolveSculpt}=await import('/src/domain/citySculpt.ts'),key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),plot=JSON.parse(localStorage.getItem(key)).plots.find(p=>p.purchaseId==='free-doors-browser'),out=resolveSculpt(plot.draft.sculpt,plot.draft.design).studio;return {version:plot.draft.sculpt.version,portals:out.portals?.length??0,shell:!!out.freeFaces[0].shell,blocker:out.blockers.some(b=>b.id==='free-door/door')};});
- assert.deepEqual(v5,{version:5,portals:0,shell:true,blocker:true});
+ const v5=await page.evaluate(async()=>{const {resolveSculpt}=await import('/src/domain/citySculpt.ts'),{buildStudioDetailBatches}=await import('/src/domain/cityStudioDetailBatches.ts'),key=Object.keys(localStorage).find(k=>k.startsWith('city-land-v1-')),plot=JSON.parse(localStorage.getItem(key)).plots.find(p=>p.purchaseId==='free-doors-browser'),out=resolveSculpt(plot.draft.sculpt,plot.draft.design).studio,batches=buildStudioDetailBatches(out).batches;return {version:plot.draft.sculpt.version,door:(out.portals??[]).some(p=>p.id==='exterior/free/door'),implicit:!!out.implicitInterior,seeThrough:batches.some(b=>b.key.endsWith('|see')),shell:batches.some(b=>b.material.kind==='shell')};});
+ assert.deepEqual(v5,{version:5,door:true,implicit:true,seeThrough:false,shell:false});
  await page.getByRole('button',{name:'Front view'}).click();await page.waitForTimeout(1500);
  for(let i=0;i<9;i++){await page.mouse.move(cx,cy+110);await page.mouse.wheel(0,-240);await page.waitForTimeout(80);}
- await page.mouse.move(box.x+box.width/2,box.y+120);await page.waitForTimeout(2200);await page.screenshot({path:`output/city-studio-glass-shell${suffix}.png`});
+ await page.mouse.move(box.x+box.width/2,box.y+120);await page.waitForTimeout(2200);await page.screenshot({path:`output/city-studio-glass-opaque${suffix}.png`});
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({backend,door:{outsideBlockedAt:true,opened:true,inside:outward(e.foot).toFixed(2),closedAgain}}));
  console.log('Free doors are portals: E opens the door, the character walks in; windows show the furnished interior.');

@@ -1,7 +1,7 @@
-import {useEffect,useMemo,useRef} from 'react';
-import {useFrame} from '@react-three/fiber';
+import {useEffect,useMemo,useRef,type ReactNode} from 'react';
+import {useFrame,useThree} from '@react-three/fiber';
 import {BufferGeometry,Float32BufferAttribute,Group,MeshStandardMaterial} from 'three';
-import {studioDoorAngle} from '../../domain/cityStudioDoorState';
+import {studioDoorAngle,studioPlotDoorsOpen} from '../../domain/cityStudioDoorState';
 import {FurnitureInstances} from './CityFurnitureMeshes';
 import {freeDoorLeaves,freeDoorPortalId} from '../../domain/cityStudioFreeDoors';
 import {STUDIO_FAMILIES} from '../../domain/cityStudioCatalog';
@@ -25,14 +25,36 @@ export function CityStudioFreeDoorLeaves({plotId,portals,faces,hidden}:{plotId:s
  const owners=useMemo(()=>{const out=new Map<string,StudioFreeFace>();for(const face of faces)for(const g of face.groups)for(const leaf of freeDoorLeaves(g))out.set(freeDoorPortalId(g.id,leaf.index),face);return out;},[faces]);
  return <group name="city-studio-free-doors">{portals.map(door=>{const face=owners.get(door.id);if(!face||hidden?.has(face.id))return null;return <DoorLeaf key={door.id} plotId={plotId} door={door} color={face.finishes.door?.color??STUDIO_FAMILIES[face.family].door}/>;})}</group>;
 }
-export function CityStudioInteriorMeshes({plotId,levels,portals,decks,view,finish,wallColor}:{plotId:string;levels:StudioInteriorLevel[];portals:StudioPortal[];decks:StudioDeck[];view:StudioFloorView;finish:'timber'|'tile'|'stone';wallColor:string}){
+/**
+ * Implicit interiors (recipe v5 buildings, StudioResolved.implicitInterior): the empty floors behind the doors mount
+ * hidden and show from the first time one of the plot's doors opens (and stay, so the character is never left in the
+ * void after closing a door behind them). Authored interiors draw as before.
+ */
+/** Finishes of implicit interiors (as a fresh authored interior, cityStudioInteriors.emptyInterior). */
+export const IMPLICIT_FINISH={floor:'timber' as const,wall:'#e5ddcd'};
+export function ImplicitInteriorGate({plotId,children}:{plotId:string;children:ReactNode}){
+ const group=useRef<Group>(null),opened=useRef(false),invalidate=useThree(s=>s.invalidate);
+ useEffect(()=>{opened.current=false;if(group.current)group.current.visible=false;},[plotId]);
+ useFrame(()=>{if(opened.current||!group.current)return;if(studioPlotDoorsOpen(plotId)){opened.current=true;group.current.visible=true;invalidate();}});
+ return <group ref={group} name="city-studio-implicit-interior" visible={false}>{children}</group>;
+}
+/** `entries` (default): also draw the doorsteps and ramps outside the doors (implicit interiors draw them apart, always). */
+export function CityStudioInteriorMeshes({plotId,levels,portals,decks,view,finish,wallColor,entries=true}:{plotId:string;levels:StudioInteriorLevel[];portals:StudioPortal[];decks:StudioDeck[];view:StudioFloorView;finish:'timber'|'tile'|'stone';wallColor:string;entries?:boolean}){
  const geometry=useMemo(()=>levels.map(level=>({top:surface(level.slab),bottom:surface(level.underside),rooms:level.roomSurfaces.map(room=>({id:room.id,finish:room.finish,mesh:surface(room.vertices)}))})),[levels]);
  useEffect(()=>()=>geometry.forEach(pair=>{pair.top.dispose();pair.bottom.dispose();pair.rooms.forEach(room=>room.mesh.dispose());}),[geometry]);
- const ramps=useMemo(()=>decks.filter(deck=>deck.id.includes('/ramp')||deck.id.startsWith('entry/')).map(deck=>({deck,geometry:rampSurface(deck),floor:levels.reduce((chosen,level)=>{const y=level.slab[1];return y!==undefined&&y<=deck.y+.2?level.floor:chosen;},0)})),[decks,levels]);
+ const ramps=useMemo(()=>decks.filter(deck=>deck.id.includes('/ramp')||entries&&deck.id.startsWith('entry/')).map(deck=>({deck,geometry:rampSurface(deck),floor:levels.reduce((chosen,level)=>{const y=level.slab[1];return y!==undefined&&y<=deck.y+.2?level.floor:chosen;},0)})),[decks,levels,entries]);
  useEffect(()=>()=>ramps.forEach(ramp=>ramp.geometry.dispose()),[ramps]);
  const materials=useMemo(()=>({floor:new MeshStandardMaterial({color:finish==='timber'?'#ad8864':finish==='tile'?'#d0c4aa':'#aaa99b',roughness:.92,side:2}),timber:new MeshStandardMaterial({color:'#ad8864',roughness:.92,side:2}),tile:new MeshStandardMaterial({color:'#d0c4aa',roughness:.92,side:2}),stone:new MeshStandardMaterial({color:'#aaa99b',roughness:.92,side:2}),wall:new MeshStandardMaterial({color:wallColor,roughness:.95}),frame:new MeshStandardMaterial({color:'#c6b59e',roughness:.82}),stair:new MeshStandardMaterial({color:'#b59c7f',roughness:.9}),guard:new MeshStandardMaterial({color:'#5b5147',roughness:.8}),ghost:new MeshStandardMaterial({color:'#a3b5ac',transparent:true,opacity:.13,depthWrite:false,side:2})}),[finish,wallColor]);
  useEffect(()=>()=>Object.values(materials).forEach(m=>m.dispose()),[materials]);
  const wallPaint=useMemo(()=>new Map([...new Set(levels.flatMap(level=>level.blocks.map(b=>b.color).filter((color):color is string=>!!color)))].map(color=>[color,new MeshStandardMaterial({color,roughness:.95})])),[levels]);
  useEffect(()=>()=>wallPaint.forEach(material=>material.dispose()),[wallPaint]);
- return <group name="city-studio-interiors">{levels.map((level,index)=>{const main=view.mode==='whole'||view.mode==='cutaway'&&level.floor<=view.floor||view.mode==='floor'&&level.floor===view.floor,ghost=view.mode==='floor'&&level.floor===view.floor-1;if(!main&&!ghost)return null;return <group key={level.floor} name={`interior-storey-${level.floor}`}><mesh geometry={geometry[index].top} material={ghost?materials.ghost:materials.floor}/>{main&&geometry[index].rooms.map(room=><mesh key={room.id} geometry={room.mesh} material={materials[room.finish]}/>)}{main&&<mesh geometry={geometry[index].bottom} material={materials.floor}/>}{main&&level.blocks.map(b=><mesh key={b.id} position={[b.x,b.y,b.z]} rotation={[0,b.rotation,0]} scale={[b.width,b.height,b.depth]} material={b.color?wallPaint.get(b.color):materials[b.kind]}><boxGeometry args={[1,1,1]}/></mesh>)}{main&&level.furniture.length>0&&<FurnitureInstances items={level.furniture} y={level.slab[1]??.04}/>}{main&&ramps.filter(ramp=>ramp.floor===level.floor).map(ramp=><mesh key={ramp.deck.id} geometry={ramp.geometry} material={materials.stair} position={[ramp.deck.x,ramp.deck.y,ramp.deck.z]} rotation={[0,ramp.deck.rotation,0]}/>)}{main&&portals.filter(p=>p.floor===level.floor&&!p.id.startsWith('exterior/free/')).map(door=><DoorLeaf key={door.id} plotId={plotId} door={door}/>)}</group>;})}</group>;
+ return <group name="city-studio-interiors">{levels.map((level,index)=>{const main=view.mode==='whole'||view.mode==='cutaway'&&level.floor<=view.floor||view.mode==='floor'&&level.floor===view.floor,ghost=view.mode==='floor'&&level.floor===view.floor-1;if(!main&&!ghost)return null;return <group key={level.floor} name={`interior-storey-${level.floor}`}><mesh geometry={geometry[index].top} material={ghost?materials.ghost:materials.floor}/>{main&&geometry[index].rooms.map(room=><mesh key={room.id} geometry={room.mesh} material={materials[room.finish]}/>)}{main&&<mesh geometry={geometry[index].bottom} material={materials.floor}/>}{main&&level.blocks.map(b=><mesh key={b.id} position={[b.x,b.y,b.z]} rotation={[0,b.rotation,0]} scale={[b.width,b.height,b.depth]} material={b.color?wallPaint.get(b.color):materials[b.kind]}><boxGeometry args={[1,1,1]}/></mesh>)}{main&&level.furniture.length>0&&<FurnitureInstances items={level.furniture} y={level.slab[1]??.04}/>}{main&&ramps.filter(ramp=>ramp.floor===level.floor).map(ramp=><mesh key={ramp.deck.id} geometry={ramp.geometry} material={materials.stair} position={[ramp.deck.x,ramp.deck.y,ramp.deck.z]} rotation={[0,ramp.deck.rotation,0]}/>)}{main&&portals.filter(p=>p.floor===level.floor&&!p.piece&&!p.id.startsWith('exterior/free/')).map(door=><DoorLeaf key={door.id} plotId={plotId} door={door}/>)}</group>;})}</group>;
+}
+
+/** Doorsteps and ramps outside a building's doors (`entry/…` decks), drawn on their own for implicit interiors. */
+export function CityStudioEntryRamps({decks}:{decks:StudioDeck[]}){
+ const ramps=useMemo(()=>decks.filter(deck=>deck.id.startsWith('entry/')).map(deck=>({deck,geometry:rampSurface(deck)})),[decks]);
+ useEffect(()=>()=>ramps.forEach(ramp=>ramp.geometry.dispose()),[ramps]);
+ const material=useMemo(()=>new MeshStandardMaterial({color:'#b59c7f',roughness:.9}),[]);useEffect(()=>()=>material.dispose(),[material]);
+ return <group name="city-studio-entry-ramps">{ramps.map(r=><mesh key={r.deck.id} geometry={r.geometry} material={material} position={[r.deck.x,r.deck.y,r.deck.z]} rotation={[0,r.deck.rotation,0]}/>)}</group>;
 }

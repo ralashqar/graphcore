@@ -5,9 +5,10 @@
  * static door leaf) depends only on its shape, style and options, not on where it stands. Faces built with
  * `instance` (cityStudioFreeOpeningGeometry) list their openings by key and origin instead of emitting that detail;
  * here each key is built once into two tiered geometries:
- *   painted  trim and frame (near only), door leaf, rail, bar and handle (both, or far only on openable v6 faces);
+ *   painted  trim and frame (near only), door leaf, rail, bar and handle (both, or far only on openable faces);
  *            `slots` say which instance tint a vertex takes (0 = its own colour, 1 trim, 2 frame, 3 door)
- *   glass    glazing and glazed leaves (both, leaves far only when openable), dark aperture fills (far only)
+ *   glass    glazing and glazed leaves (both, leaves far only when openable), dark aperture fills (far only on
+ *            buildings with interiors; both without, where they close the aperture)
  * with indices ordered [near-only, both, far-only] like the detail batches, so near = [0, near) and
  * far = [farStart, farStart+far). The wall with its cut holes stays merged per building; only the pieces repeat.
  *
@@ -56,7 +57,7 @@ function packPiece(parts:{src:FreeFaceBuffers;tier:Tier}[]):OpeningPieceGeometry
 export function openingPiece(group:FreeOpeningGroup,o:OpeningPieceOptions):OpeningPiece{
  const spec=openingPieceSpec(group,o);let piece=registry.get(spec.key);if(piece)return piece;
  const c=buildOpeningPieceChannels(spec.group,o,spec.decisions),leaf:Tier=o.openable?2:1;
- const painted=packPiece([{src:c.trim,tier:0},{src:c.frame,tier:0},{src:c.door,tier:leaf}]),glass=packPiece([{src:c.glass,tier:1},{src:c.doorGlass,tier:leaf},{src:c.aperture,tier:2}]);
+ const painted=packPiece([{src:c.trim,tier:0},{src:c.frame,tier:0},{src:c.door,tier:leaf}]),glass=packPiece([{src:c.glass,tier:1},{src:c.doorGlass,tier:leaf},{src:c.aperture,tier:o.interior?2:1}]);
  const tris=(g:OpeningPieceGeometry|undefined,k:'near'|'far')=>g?g[k]/3:0;
  const g=spec.group,o4=g.outline,rect=g.role==='window'&&o4.length===4&&o4.every(([x,y])=>(Math.abs(x)<1e-9||Math.abs(x-g.x1)<1e-9)&&(Math.abs(y-g.y0)<1e-9||Math.abs(y-g.y1)<1e-9))&&Math.abs(g.y0)<1e-9;
  const farTris=tris(painted,'far')+tris(glass,'far'),farRect=rect&&!(painted&&painted.far)&&farTris===(g.glazing?4:2)?{kind:g.glazing?'glass' as const:'aperture' as const,width:g.x1,height:g.y1,z:o.thickness/2-FREE_FACE.inset}:undefined;
@@ -73,7 +74,7 @@ export function unitRectPiece(kind:'glass'|'aperture',z:number):OpeningPiece{
  const count=positions.length/3,geo:OpeningPieceGeometry={positions:new Float32Array(positions),normals:new Float32Array(normals),colors:new Float32Array(count*3).fill(1),slots:new Float32Array(count),indices:new Uint16Array(indices),near:0,farStart:0,far:indices.length,sphere:[.5,.5,z,Math.SQRT1_2]};
  const piece:OpeningPiece={key,glass:geo,triangles:{near:0,far:indices.length/3}};registry.set(key,piece);return piece;
 }
-type Face={id:string;origin:[number,number];rotation:number;base:number;family:StudioFamily;groups:FreeOpeningGroup[];openable?:boolean;bend?:FreeFaceBend;geometry:{openings?:FreeFaceOpening[]}};
+type Face={id:string;origin:[number,number];rotation:number;base:number;family:StudioFamily;groups:FreeOpeningGroup[];openable?:boolean;interior?:boolean;bend?:FreeFaceBend;geometry:{openings?:FreeFaceOpening[]}};
 const linear=(hex:string):[number,number,number]=>{const c=new Color(hex);return [c.r,c.g,c.b];};
 /**
  * Building-local instance matrix (column-major) of one opening: straight faces rotate about +Y and translate by the
@@ -95,7 +96,7 @@ export function openingInstances(faces:readonly Face[]):StudioOpeningInstances|u
  const lists=new Map<string,{face:Face;op:FreeFaceOpening}[]>(),pieces=new Map<string,OpeningPiece>();
  for(const face of faces)for(const op of face.geometry.openings??[]){
   let list=lists.get(op.key);if(!list){list=[];lists.set(op.key,list);}list.push({face,op});
-  if(!pieces.has(op.key)){const piece=openingPiece(face.groups[op.group],{openable:!!face.openable,surround:!face.bend,thickness:FREE_FACE.thickness});
+  if(!pieces.has(op.key)){const piece=openingPiece(face.groups[op.group],{openable:!!face.openable,interior:!!face.interior,surround:!face.bend,thickness:FREE_FACE.thickness});
    if(piece.key!==op.key)throw new Error(`Opening piece ${op.key} was listed with other options than its face (${piece.key}).`);pieces.set(op.key,piece);}
  }
  if(!lists.size)return undefined;

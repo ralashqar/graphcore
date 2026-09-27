@@ -160,7 +160,7 @@ function refineOutline(o:P2[],breaks:readonly number[]):P2[]{
  * of the bend (cityStudioCurvedWalls); vertices of flat opening parts are tagged `planar` with their group index.
  * `seam` (curved faces): the face is an unrolled ring, so its x = 0 and x = L ends meet and get no end caps.
  */
-export type FreeFaceBuildOptions={/** Leave each opening group's own detail out of the channels and list it as `openings` instead (cityStudioOpeningPieces). */instance?:{openable:boolean}};
+export type FreeFaceBuildOptions={/** Leave each opening group's own detail out of the channels and list it as `openings` instead (cityStudioOpeningPieces). */instance?:{openable:boolean;/** authored interiors behind the face: dark aperture fills draw far only (see-through into rooms near) */interior?:boolean}};
 export function buildFreeOpeningFaceGeometry(face:{length:number;height:number;region?:FreeRect[];thickness?:number;breaks?:readonly number[];seam?:boolean},groups:FreeOpeningGroup[],palette:FreeFacePalette=DEFAULT_FREE_PALETTE,paint?:FacePaint,options:FreeFaceBuildOptions={}):FreeFaceGeometry{
  tagging=!!face.breaks?.length;plane=-1;
  try{return buildFace(face,groups,palette,paint,options);}finally{tagging=false;plane=-1;}
@@ -226,7 +226,7 @@ function buildFace(face:{length:number;height:number;region?:FreeRect[];thicknes
    // Instanced (cityStudioOpeningPieces): the opening's own detail is one canonical piece placed by a transform.
    // A curved face keeps its surround here, because the surround follows the arc (everything else is planar).
    if(curved)sweepBand(trim,path.points,path.closed,dims.surround,1,t,t+dims.proud,trimTone,{inner:true,outer:true,ends:true});
-   const spec=openingPieceSpec(g,{openable:options.instance.openable,surround:!curved,thickness});
+   const spec=openingPieceSpec(g,{openable:options.instance.openable,interior:!!options.instance.interior,surround:!curved,thickness});
    openings.push({group:gi,key:spec.key,x:spec.x,y:spec.y,trim:trimTone,frame:frameTone,door:leafTone});
    return;
   }
@@ -291,7 +291,9 @@ const HANDLE:Rgb=rgb('#c9b27a');
  * the canonical piece's origin; the tones are per instance (a trim paint region, the palette's frame and door).
  */
 export type FreeFaceOpening={group:number;key:string;x:number;y:number;trim:Rgb;frame:Rgb;door:Rgb};
-export type OpeningPieceOptions={openable:boolean;surround:boolean;thickness:number};
+/** `interior`: the building has authored rooms, so unglazed apertures show them near (dark fill far only); without
+ * interiors the dark fill closes the aperture near as well (no void behind the wall). */
+export type OpeningPieceOptions={openable:boolean;interior?:boolean;surround:boolean;thickness:number};
 /** Switch for measurements and tests: off builds every opening's detail into its face channels as before. */
 export const OPENING_INSTANCING={enabled:true};
 /** Vertex colour tokens of the canonical pieces: the tinted parts carry their slot (1 trim, 2 frame, 3 door leaf). */
@@ -308,7 +310,7 @@ export function openingPieceSpec(g:FreeOpeningGroup,o:OpeningPieceOptions):{key:
   panels:g.panels.map(p=>({id:'',shape:p.shape,x0:px(p.x0),x1:px(p.x1),y0:py(p.y0),y1:py(p.y1),rise:qm(p.rise),spring:py(p.spring),clamped:false})),
   mullions:g.mullions.map(m=>({x:px(m.x),y0:py(m.y0),y1:py(m.y1)})),outline:g.outline.map(([a,b])=>[px(a),py(b)] as [number,number])};
  const decisions=openingDecisions(g);
- const key='o'+hashString(JSON.stringify([1,o.openable,o.surround,qm(o.thickness),group.role,group.style,group.glazing,group.x1,group.y0,group.y1,group.spring,group.panels.map(p=>[p.shape,p.x0,p.x1,p.y0,p.y1,p.rise,p.spring]),group.mullions.map(m=>[m.x,m.y0,m.y1]),group.outline,decisions]));
+ const key='o'+hashString(JSON.stringify([2,o.openable,!!o.interior,o.surround,qm(o.thickness),group.role,group.style,group.glazing,group.x1,group.y0,group.y1,group.spring,group.panels.map(p=>[p.shape,p.x0,p.x1,p.y0,p.y1,p.rise,p.spring]),group.mullions.map(m=>[m.x,m.y0,m.y1]),group.outline,decisions]));
  return {key,x,y,group,decisions};
 }
 /** Channels of one canonical opening piece (face-space around its origin, tints as OPENING_TINT tokens). */

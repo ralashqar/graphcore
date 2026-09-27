@@ -62,7 +62,7 @@ test('kit apertures: holes inside the wall are added as rings, doors at the base
  assert.deepEqual(freeRegion([[0,6,0,9.6],[6,12,0,9.6]]),[[[[0,0],[12,0],[12,9.6],[0,9.6],[0,0]]]],'bays tiling the wall make one rectangle');
 });
 
-const openingTriangles=(d:StudioDetailBatches)=>{const t={near:0,far:0};for(const b of d.batches)if(b.material.kind==='painted'||b.material.kind==='glass'&&b.material.seeThrough){t.near+=b.near/3;t.far+=b.far/3;}t.near+=d.openings?.triangles.near??0;t.far+=d.openings?.triangles.far??0;return t;};
+const openingTriangles=(d:StudioDetailBatches)=>{const t={near:0,far:0};for(const b of d.batches)if(b.material.kind==='painted'||b.material.kind==='glass'){t.near+=b.near/3;t.far+=b.far/3;}t.near+=d.openings?.triangles.near??0;t.far+=d.openings?.triangles.far??0;return t;};
 test('every facade rhythm style draws the same opening detail instanced as merged',()=>{
  for(const style of RHYTHM_STYLE_IDS)for(const seed of [3,11]){
   const r=recipe({facadeRhythm:newFacadeRhythm(style,seed)},[rect({width:11,depth:9,spanFloors:4}),rect({id:'wing',x:7.6,z:-1.5,width:5,depth:6,spanFloors:3})]);

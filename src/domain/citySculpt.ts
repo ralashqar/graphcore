@@ -463,12 +463,13 @@ function pitchedRoof(out:number[],shape:SculptPrimitive,base:number){
   tri([left,base,front],[right,base,front],[mid,ridge,front],[0,0,1]);
  }
 }
-export function resolveSculpt(recipe:SculptRecipe,d:CityBuildingDesignV3):SculptResolved{
+/** `doors` (studio recipes, default true): doors are openable portals (resolveStudio); business buildings pass false. */
+export function resolveSculpt(recipe:SculptRecipe,d:CityBuildingDesignV3,options:{doors?:boolean}={}):SculptResolved{
  if(recipe.version===5||recipe.version===6){
   const error=validateSculpt(recipe,d.floors)||validateStudio(recipe);if(error)throw Error(error);
   const generated=expandBuildingVariation(recipe,d);recipe=generated.recipe;
   const base:SculptResolved=recipe.volumes.length?resolveSculpt({...recipe,version:4},{...d,roof:'flat',synarcKit:undefined}):{floors:[],entrance:null,decorations:[],vertices:{wall:[],trim:[],roof:[],glass:[],door:[]},bounds:{minX:0,maxX:0,minZ:0,maxZ:0}};
-  const studio=resolveStudio(recipe,d,base,true),entry=studio.bays.find(b=>b.entrance);studio.inactive.push(...generated.diagnostics);
+  const studio=resolveStudio(recipe,d,base,true,options.doors??true),entry=studio.bays.find(b=>b.entrance);studio.inactive.push(...generated.diagnostics);
   return {...base,vertices:{...base.vertices,roof:studio.roof},volumeVertices:{},studio,kit:undefined,entrance:entry?{x:entry.x,z:entry.z,angle:entry.rotation}:null};
  }
  const error=validateSculpt(recipe,d.floors);if(error)throw new Error(error);

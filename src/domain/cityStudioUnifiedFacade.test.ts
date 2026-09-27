@@ -72,9 +72,10 @@ test('resolveSculpt draws a kit piece in the generated wall as an instanced kit 
  assert.ok(!out.pieces.some(p=>out.bays.some(b=>b.id===p.id&&b.anchor.side==='north')),'bay tiles of the face are gone');
  assert.ok(out.pieces.some(p=>out.bays.some(b=>b.id===p.id&&b.anchor.side==='south')),'other walls keep their tiles');
  assert.equal(face.groups[0].module,'window-shuttered');assert.equal(face.geometry.glass.indices.length,0);
- // The bay under the piece stays resolved for anchors; v6 portal doors leave their kit leaf out.
+ // The bay under the piece stays resolved for anchors; kit door leaves become portals (cityStudioDoorMotion).
  const v6:StudioRecipe={...recipe([kit('d','door-panelled',.3,0)]),version:6,interior:{partitions:[],doors:[],stairs:[],floorFinish:'timber',wallColor:'#eeeeee'}} as StudioRecipe;
- const o6=studio(v6);assert.deepEqual(o6.pieces.find(p=>p.id==='free/d')!.omit,['wall','door','glass']);assert.ok(o6.portals!.some(p=>p.id.startsWith('exterior/free/d')));
+ const o6=studio(v6),door=o6.pieces.find(p=>p.id==='free/d')!;assert.deepEqual(door.omit,['wall'],'the kit leaf is split from the module and animated');assert.equal(door.portal,true);
+ assert.deepEqual(o6.portals!.filter(p=>p.piece==='free/d').map(p=>[p.id,p.motion,p.hinge]),[['exterior/kit/free/d','swing','left']]);
 });
 
 test('kit pieces work on curved walls: flat on the chord, refused where the curve is too tight',()=>{
@@ -168,7 +169,9 @@ test('conversion keeps New York presets looking the same: every kit tile becomes
   assert.equal(after.pieces.filter(p=>p.id.startsWith('free/')).length,out.openings);
   assert.deepEqual(after.inactive.map(x=>x.id).sort(),before.inactive.map(x=>x.id).sort(),'assemblies stay anchored');
   const assemblyPieces=(s:StudioResolved)=>s.pieces.filter(p=>p.id.startsWith('nyc/')).map(p=>[p.module,p.x,p.y,p.z,p.rotation,...p.scale].map(v=>typeof v==='number'?+v.toFixed(4):v).join('|')).sort();assert.deepEqual(assemblyPieces(after),assemblyPieces(before),'cornices, awnings, balconies and pilasters unchanged');
-  assert.deepEqual(after.decks,before.decks);assert.equal(after.freeFaces!.length,before.bays.reduce((s,b)=>s.add(`${b.anchor.shapeId}/${b.anchor.side}`),new Set<string>()).size,'every exposed wall is generated');
+  // Door approaches are named after the tile or the free opening; the walking surfaces are the same.
+  const surfaces=(s:StudioResolved)=>s.decks.map(d=>JSON.parse(JSON.stringify({...d,id:d.id.startsWith('entry/')?(d.id.endsWith('/landing')?'entry/landing':'entry'):d.id},(_,v)=>typeof v==='number'?+v.toFixed(5):v))).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:a.x-b.x||a.z-b.z||a.y-b.y);
+  assert.deepEqual(surfaces(after),surfaces(before));assert.equal(after.freeFaces!.length,before.bays.reduce((s,b)=>s.add(`${b.anchor.shapeId}/${b.anchor.side}`),new Set<string>()).size,'every exposed wall is generated');
   assert.deepEqual(out.recipe.studio.surfaces,r.studio.surfaces);assert.ok(!isKitTileBuilding(out.recipe));
   assert.equal(validateStudio(out.recipe),null);
   assert.match((convertToUnifiedFacade(out.recipe,draft.design) as {reason:string}).reason,/already/);

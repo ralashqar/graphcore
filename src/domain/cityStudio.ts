@@ -11,7 +11,7 @@ import {resolveStudioStair} from './cityStudioAccess.ts';
 import {addStudioSoffits} from './cityStudioSoffits.ts';
 import {validateVariation} from './cityBuildingVariation.ts';
 import {STAMP_MAP} from './cityStorefrontStamps.ts';
-import {resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
+import {emptyInterior,resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
 import {faceS,faceX,freeOpeningIsDoor,isFrame,studioFaceFrame,validateFreeOpenings,type StudioFaceFrame,type StudioFreeOpening} from './cityStudioFreeOpenings.ts';
 import {poolModule} from './cityStudioModuleSpec.ts';
 import {validatePaintRegions} from './cityStudioPaintRegions.ts';
@@ -21,6 +21,8 @@ import {applyStudioRoofOpenings} from './cityStudioRoofOpeningGeometry.ts';
 import {validateFreeTrims} from './cityStudioTrimParts.ts';
 import {resolveStudioFreeFaces} from './cityStudioFreeFaces.ts';
 import {expandFacadeRhythm,validateFacadeRhythm} from './cityStudioFacadeRhythm.ts';
+import {validateFacadeThemes} from './cityStudioThemeCatalog.ts';
+import {resolveThemeDecor} from './cityStudioThemeDecor.ts';
 import type {StudioRecipe, StudioIntent, StudioAnchor, StudioBay, StudioResolved, StudioPiece, StudioFamily, StudioPartStyle, StudioFinish, StudioChannel} from './cityStudioTypes.ts';
 
 export const freshStudio = (): StudioIntent => ({catalogue:'synarc-kit-3',roofRevision:'roof-envelope-2',assemblyRevision:'connected-access-1',defaults:{family:'pastel-stucco',rhythm:'regular',window:'window-sash',roof:'flat'},parts:{},surfaces:[],openings:[],assemblies:[]});
@@ -69,7 +71,7 @@ export function validateStudio(r:StudioRecipe):string|null {
  {const error=validateFreeOpenings(r.studio?.freeOpenings);if(error)return error;}
  {const error=validateRoofOpenings(r.studio?.roofOpenings);if(error)return error;}
  {const error=validateFreeTrims(r.studio?.freeTrims);if(error)return error;}
- {const error=validateFacadeRhythm(r.studio?.facadeRhythm);if(error)return error;}
+ {const error=validateFacadeRhythm(r.studio?.facadeRhythm)??validateFacadeThemes(r.studio?.facadeThemes);if(error)return error;}
  {const error=validatePaintRegions(r.studio?.paintRegions)??validatePaintRules(r.studio?.paintRules);if(error)return error;}
  if(!['synarc-kit-2','synarc-kit-3','synarc-kit-4','synarc-kit-5'].includes(r.studio?.catalogue)||!r.studio.defaults||!r.studio.parts||!Array.isArray(r.studio.openings)||!Array.isArray(r.studio.surfaces)||!Array.isArray(r.studio.assemblies))return 'This building uses an unavailable catalogue.';
  if(r.studio.roofDetails!==undefined&&(!Array.isArray(r.studio.roofDetails)||!['synarc-kit-4','synarc-kit-5'].includes(r.studio.catalogue)||r.studio.roofDetails.length>16||r.studio.roofDetails.some(p=>!p.id||typeof p.partId!=='string'||!studioModuleAvailable(r.studio.catalogue,p.module)||STUDIO_MODULE_MAP.get(p.module)?.category!=='roof'||![p.u,p.v].every(n=>Number.isFinite(n)&&Math.abs(n)<=.5)||!Number.isInteger(p.rotation)||p.rotation<0||p.rotation>3)||new Set(r.studio.roofDetails.map(p=>p.id)).size!==r.studio.roofDetails.length))return 'A roof detail is invalid.';
@@ -155,7 +157,11 @@ export function findStudioBay(bays:StudioBay[],anchor:StudioAnchor):StudioBay|un
  return bays.filter(b=>sameFace(b.anchor,anchor)&&Math.abs(b.anchor.u-anchor.u)<=b.anchorSpan/2+.002).sort((a,b)=>Math.abs(a.anchor.u-anchor.u)-Math.abs(b.anchor.u-anchor.u))[0];
 }
 const pos=(b:Pick<StudioBay,'x'|'z'|'rotation'>,u:number,n:number)=>({x:b.x+Math.cos(b.rotation)*u+Math.sin(b.rotation)*n,z:b.z-Math.sin(b.rotation)*u+Math.cos(b.rotation)*n});
-export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptResolved,expanded=false):StudioResolved {
+/**
+ * `doors` (default): every door is an openable portal, and a building without authored interiors resolves an implicit
+ * empty one to walk into. Business buildings (cityModularBuilding) resolve without doors: closed, no interior levels.
+ */
+export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptResolved,expanded=false,doors=true):StudioResolved {
  const error=expanded?null:validateStudio(r);if(error)throw Error(error);
  const inactive:StudioResolved['inactive']=[],bays=studioBays(r,d,inactive),pieces:StudioPiece[]=[],blockers:StudioResolved['blockers']=[],decks:StudioResolved['decks']=[],accessRoutes:NonNullable<StudioResolved['accessRoutes']>=[],roofNotes:string[]=[];
  const limit=sculptBuildLimit(r.plotSize??24),family=r.studio.defaults.family??'pastel-stucco';
@@ -179,7 +185,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  // Generated facade rhythm openings join the manual ones for this resolve only (never saved).
  const rhythm=r.studio.facadeRhythm?expandFacadeRhythm(r,d,bays):null,freeRecipe:StudioRecipe=rhythm?{...r,studio:{...r.studio,freeOpenings:[...(r.studio.freeOpenings??[]),...rhythm.freeOpenings],freeTrims:[...(r.studio.freeTrims??[]),...rhythm.freeTrims]}}:r;if(rhythm)inactive.push(...rhythm.inactive);
  freeOpeningsForDoorways=rhythm?.freeOpenings;
- const freeFaces=resolveStudioFreeFaces(freeRecipe,d,bays,pieces,blockers,inactive,id=>studioStyle(r,id).family??family);
+ const freeFaces=resolveStudioFreeFaces(freeRecipe,d,bays,pieces,blockers,inactive,id=>studioStyle(r,id).family??family,doors);
  // Walls drawn by generated faces: their bay tiles are gone, so tile-level fix-ups below skip them.
  const generatedWall=new Set(freeFaces.map(f=>f.id)),onGenerated=(b:StudioBay)=>generatedWall.has(`${b.anchor.shapeId}/${b.anchor.side}`);
  // Flat roof decks retain the exact polygon, including courtyard holes.
@@ -328,11 +334,14 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  for(const v of r.volumes.filter(v=>v.operation==='add'&&!r.studio.roofRevision)){const roof=studioStyle(r,v.id).roof;if((roof==='pitched'||roof==='mansard')&&v.kind==='ellipse')roofNotes.push('Round parts use a flat roof; the chosen roof is kept for rectangular shapes.');}
  const roof=studioRoofGeometry(r,d,base),roofOpenings=applyStudioRoofOpenings(r,roof,inactive,blockers);
  if(roof.faces){for(let i=decks.length-1;i>=0;i--)if(decks[i].id.startsWith('roof/'))decks.splice(i,1);roof.faces.forEach((f,i)=>decks.push({id:`roof/${i}`,x:0,z:0,y:f.base,width:0,depth:0,rotation:0,polygon:f.polygon,plane:f.plane,underside:f.underside??f.base-.12}));}
- if(r.version===6){const ids=new Set(bays.filter(b=>b.module.startsWith('door-')&&!onGenerated(b)).map(b=>b.id));for(let i=pieces.length-1;i>=0;i--)if(ids.has(pieces[i].id)||[...ids].some(id=>pieces[i].id.startsWith(id+'/header')||pieces[i].id.startsWith(id+'/filler')||pieces[i].id.startsWith(id+'/access-filler')))pieces.splice(i,1);for(let i=blockers.length-1;i>=0;i--)if(ids.has(blockers[i].id))blockers.splice(i,1);}
  const resolved:StudioResolved={bays,pieces,blockers,decks,inactive,accessRoutes,roof:roof.vertices,roofFaces:roof.faces,roofEdges:roof.edges,roofPatches:roof.patches,roofNotes:[...new Set([...roofNotes,...roof.notes])],...(freeFaces.length?{freeFaces}:{}),...(rhythm?{freeTrims:freeRecipe.studio.freeTrims??[]}:{}),...(roofOpenings?{roofOpenings}:{})};
  resolveStudioRoofDetails(r,resolved);
+ // Facade theme decorations and rooftop props (local studio; docs/city-studio-themes.md), after the rhythm's openings.
+ if(r.studio.facadeThemes)resolveThemeDecor(r,d,resolved,rhythm?.freeOpenings??[]);
  addStudioSoffits(r,base,resolved);
- return r.version===6?resolveStudioInteriors(r,d,base,resolved,bays):resolved;
+ // Every door opens: buildings without authored interiors resolve an implicit empty one to walk into (not saved).
+ if(r.version===6)return resolveStudioInteriors(r,d,base,resolved,bays);
+ return doors?resolveStudioInteriors({...r,version:6,interior:emptyInterior()},d,base,resolved,bays,true):resolved;
 }
 export function checkStudioDraft(draft:LandDraft,r:StudioRecipe){return validateSculpt(r,studioFloorCount(r),r.plotSize)||validateStudio(r)||(!draft.name.trim()?'Give your building a name.':null);}
 

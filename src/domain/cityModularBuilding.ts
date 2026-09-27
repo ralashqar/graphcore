@@ -32,7 +32,7 @@ const resolvedCache=new Map<string,ReturnType<typeof resolveSculpt>>();
 export function resolveModularBuilding(d:CityBuildingDesignV3,lod:'near'|'medium'|'far'):ResolvedV3{
  const error=validateModularDesign(d);if(error)throw Error(error);
  const key=JSON.stringify([d.modular,d.groundHeight,d.upperHeight,d.floors]);let shape=resolvedCache.get(key);
- if(!shape){shape=resolveSculpt(d.modular!.recipe,d);resolvedCache.set(key,shape);while(resolvedCache.size>64)resolvedCache.delete(resolvedCache.keys().next().value!);}
+ if(!shape){shape=resolveSculpt(d.modular!.recipe,d,{doors:false});resolvedCache.set(key,shape);while(resolvedCache.size>64)resolvedCache.delete(resolvedCache.keys().next().value!);}
  const studio=shape.studio!,entry=studio.bays.find(b=>b.entrance),entrance={x:entry?.x??0,z:entry?.z??d.depth/2},rotation=entry?.rotation??0;
  const sign={...entrance,x:entrance.x+Math.sin(rotation)*.4,z:entrance.z+Math.cos(rotation)*.4,y:d.groundHeight+.37,width:Math.min(2,entry?.width??2),height:.38,rotation,campaign:false};
  return {parts:[{kind:'box',position:[0,.22,0],size:[22.7,.12,22.7],color:d.palette.trim,sceneLayer:'grounds'},...groundsParts(d,lod)],masses:modularMasses(d),walls:[],attachments:[],entrance,sign,signs:d.slots['brand.entrance']==='brand'?[sign]:[],slots:[],corners:[],kitNotes:studio.inactive.map(i=>i.reason),extensionReason:null,studioAssembly:studio};

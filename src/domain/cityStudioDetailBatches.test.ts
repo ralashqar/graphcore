@@ -24,7 +24,7 @@ function fixture(){
  OPENING_INSTANCING.enabled=false;try{return resolveSculpt(r,design).studio!;}finally{OPENING_INSTANCING.enabled=true;}
 }
 const sum=<T,>(list:T[],f:(t:T)=>number)=>list.reduce((n,t)=>n+f(t),0);
-const sources=(s:ReturnType<typeof fixture>):FreeFaceBuffers[]=>[...(s.freeFaces??[]).flatMap(f=>[f.geometry.wall,f.geometry.trim,f.geometry.frame,f.geometry.glass,f.geometry.door,...(f.geometry.aperture?[f.geometry.aperture]:[]),...(f.geometry.doorGlass?[f.geometry.doorGlass]:[]),...(f.shell?[f.shell]:[])]),...(s.roofOpenings??[]).flatMap(p=>[p.geometry.wall,p.geometry.trim,p.geometry.frame,p.geometry.glass,p.geometry.roof,p.geometry.flashing])];
+const sources=(s:ReturnType<typeof fixture>):FreeFaceBuffers[]=>[...(s.freeFaces??[]).flatMap(f=>[f.geometry.wall,f.geometry.trim,f.geometry.frame,f.geometry.glass,f.geometry.door,...(f.geometry.aperture?[f.geometry.aperture]:[]),...(f.geometry.doorGlass?[f.geometry.doorGlass]:[])]),...(s.roofOpenings??[]).flatMap(p=>[p.geometry.wall,p.geometry.trim,p.geometry.frame,p.geometry.glass,p.geometry.roof,p.geometry.flashing])];
 function checkBatches(d:StudioDetailBatches){
  for(const b of d.batches){const count=b.positions.length/3;
   assert.equal(b.normals.length,count*3);assert.equal(b.uvs.length,count*2);if(b.distance)assert.equal(b.distance.length,count);if(b.colors)assert.equal(b.colors.length,count*3);
@@ -50,8 +50,8 @@ test('one building merges into one batch per material with every vertex and inde
  checkBatches(d);
  assert.equal(sum(d.batches,b=>b.positions.length),sum(src,b=>b.positions.length),'vertices preserved');
  assert.equal(sum(d.batches,b=>b.indices.length),sum(src,b=>b.indices.length),'indices preserved');
- assert.deepEqual(d.batches.map(b=>b.material.kind).sort(),['glass','glass','painted','roof','shell','wall'],'wall, painted (trim/frame/door/flashing), see-through face glass, opaque roof glass, window shells and roof');
- const faceCalls=sum(s.freeFaces!,f=>(['wall','trim','frame','glass','door'] as const).filter(k=>f.geometry[k].indices.length).length+(f.shell?1:0))+sum(s.roofOpenings!,p=>(['wall','trim','frame','glass','roof','flashing'] as const).filter(k=>p.geometry[k].indices.length).length);
+ assert.deepEqual(d.batches.map(b=>b.material.kind).sort(),['glass','painted','roof','wall'],'wall, painted (trim/frame/door/flashing), opaque glass (no interiors: face and roof glass share it) and roof');
+ const faceCalls=sum(s.freeFaces!,f=>(['wall','trim','frame','glass','door'] as const).filter(k=>f.geometry[k].indices.length).length)+sum(s.roofOpenings!,p=>(['wall','trim','frame','glass','roof','flashing'] as const).filter(k=>p.geometry[k].indices.length).length);
  assert.ok(d.batches.length*2.5<=faceCalls,`${faceCalls} per-face meshes become ${d.batches.length}`);
  assert.ok(d.triangles.far<d.triangles.near*.6,`far LOD drops most detail (${d.triangles.far} of ${d.triangles.near})`);
  const painted=d.batches.find(b=>b.material.kind==='painted')!,wall=d.batches.find(b=>b.material.kind==='wall')!;
@@ -63,13 +63,14 @@ test('face frames and tiers: rotation, offset and [near-only, both, far-only] in
  const tri=(z:number):FreeFaceBuffers=>({positions:new Float32Array([0,0,z,1,0,z,0,1,z]),normals:new Float32Array([0,0,1,0,0,1,0,0,1]),uvs:new Float32Array(6),indices:new Uint32Array([0,1,2]),distance:new Float32Array([0,.5,1]),colors:new Float32Array([.2,.3,.4,.2,.3,.4,.2,.3,.4])});
  const empty:FreeFaceBuffers={positions:new Float32Array(0),normals:new Float32Array(0),uvs:new Float32Array(0),indices:new Uint32Array(0)};
  const wall=tri(.15);const both={...wall,positions:new Float32Array([...wall.positions,0,0,-.15,0,1,-.15,1,0,-.15]),normals:new Float32Array([...wall.normals,0,0,-1,0,0,-1,0,0,-1]),uvs:new Float32Array(12),distance:new Float32Array(6),indices:new Uint32Array([0,1,2,3,4,5]),rearStart:3};
- const face={id:'f',shapeId:'main',side:'east',origin:[2,3],rotation:Math.PI/2,base:1,length:1,height:1,family:'pastel-stucco',finishes:{},floors:[0],groups:[],geometry:{wall:both,trim:tri(.2),frame:empty,glass:empty,door:empty,aperture:tri(0),triangles:3}} as unknown as StudioFreeFace;
+ const face={id:'f',shapeId:'main',side:'east',origin:[2,3],rotation:Math.PI/2,base:1,length:1,height:1,family:'pastel-stucco',finishes:{},floors:[0],groups:[],interior:true,geometry:{wall:both,trim:tri(.2),frame:empty,glass:empty,door:empty,aperture:tri(0),triangles:3}} as unknown as StudioFreeFace;
  const d=buildStudioDetailBatches({freeFaces:[face]});checkBatches(d);
  const w=d.batches.find(b=>b.material.kind==='wall')!;
  // Local (1,0,0.15) rotated a quarter turn about +Y then offset: (0.15+2, 1, -1+3).
  assert.deepEqual([...w.positions.slice(3,6)].map(v=>+v.toFixed(5)),[2.15,1,2]);assert.deepEqual([...w.normals.slice(0,3)].map(v=>+v.toFixed(5)),[1,0,0]);
  assert.deepEqual([...w.indices],[3,4,5,0,1,2],'near-only inner skin first');assert.deepEqual([w.near,w.farStart,w.far],[6,3,3]);
- const glass=d.batches.find(b=>b.material.kind==='glass')!;assert.deepEqual([glass.near,glass.farStart,glass.far],[0,0,3],'aperture fills draw only when far');
+ const glass=d.batches.find(b=>b.material.kind==='glass')!;assert.deepEqual([glass.near,glass.farStart,glass.far],[0,0,3],'with interiors, aperture fills draw only when far');
+ const closed=buildStudioDetailBatches({freeFaces:[{...face,interior:false}]}).batches.find(b=>b.material.kind==='glass')!;assert.deepEqual([closed.near,closed.farStart,closed.far],[3,0,3],'without interiors they close the opening near too');
  const painted=d.batches.find(b=>b.material.kind==='painted')!;assert.deepEqual([painted.near,painted.far],[3,0]);assert.deepEqual([...painted.colors!.slice(0,3)].map(v=>+v.toFixed(3)),[.2,.3,.4]);
 });
 

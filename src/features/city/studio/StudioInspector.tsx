@@ -25,6 +25,7 @@ import {editableOutline,setOutlineEdgeLength,OUTLINE_EDIT} from '../../../domain
 import {StyleFilter,moduleStyle,styleMatches} from './studioStyles';
 import {LEVEL_COLOURS} from './StudioSceneMarks';
 import {DECOR_LABELS,TRIM_LABELS,type StudioState} from './useStudioState';
+import {ThemeSection} from './StudioThemes';
 
 const ROOFS:StudioRoof[]=['flat','terrace','pitched','mansard'];
 const SHAPE_LABELS:Record<string,string>={rect:'Rectangle',arch:'Arch',round:'Round',pointed:'Pointed'};
@@ -67,6 +68,7 @@ function BuildingSection({st}:{st:StudioState}){
   <div className="studio-inspector-title"><strong>{st.draft.name||'Building'}</strong><small>{parts} {parts===1?'part':'parts'} · {st.highestStorey} {st.highestStorey===1?'storey':'storeys'}{recipe.studio.facade==='unified'?' · editable facade':''}</small></div>
   <div className="studio-inspector-actions"><button aria-label="Roll a new facade look" title="New look · Space (hand-placed edits stay)" disabled={!st.diceReady} onClick={st.tryAnotherLook}><DiceFive size={18} weight="duotone"/> New look</button>{st.unifiedFacade.canConvert&&<button className="studio-unified-convert" title="Turn the kit tiles into kit pieces on generated walls: every window can be moved and the rhythm fills around them (undoable)" onClick={st.unifiedFacade.convert}>Convert to editable facade</button>}</div>
   {st.kitVersion!==5&&!st.diceReady&&<small className="studio-palette-hint">Add the Blender catalog (Brush → Openings) to use style dice.</small>}
+  <Section title="Theme" label="Building theme"><ThemeSection st={st}/></Section>
   <Section title="Default style"><StyleControls st={st} part={false}/></Section>
   <section className="studio-inspector-section"><button className="studio-section-toggle" aria-expanded={st.variationOpen} aria-label="Variation rules" onClick={()=>st.setVariationOpen(!st.variationOpen)}>{st.variationOpen?<CaretDown size={12}/>:<CaretRight size={12}/>}<span>Variation and structure</span></button>
    {st.variationOpen&&<div className="studio-section-body studio-advanced-body"><p className="studio-palette-hint">Fine-tune structure and tile variation. Manual edits remain protected.</p><CityVariationDimensions recipe={recipe} design={st.draft.design} onChange={(r,d)=>st.land.edit(studioDraft({...st.draft,design:d},r))}/><CityVariationPanel recipe={recipe} design={st.draft.design} onChange={(r,heights)=>heights?st.land.edit(studioDraft({...st.draft,design:{...st.draft.design,...heights}},r)):st.commit(r)} selectedPart={st.selected?.id}/></div>}
@@ -95,6 +97,7 @@ function PartSection({st,partId}:{st:StudioState;partId:string}){
   </div>
   <Section title="Size"><div className="studio-precision">{([['width','Width',.25],['depth','Depth',.25],['spanFloors','Storeys',1],['startFloor','Base storey',1]] as const).filter(([key])=>v.kind!=='polygon'||key==='spanFloors'||key==='startFloor').map(([key,label,step])=><label key={key}>{label}<input aria-label={label} type="number" step={step} value={v[key]} onChange={e=>st.editPart({[key]:Number(e.target.value)})}/></label>)}</div><small className="studio-palette-hint">Or drag the Move, Height, Lift and Turn handles on the building.</small></Section>
   {v.operation==='add'&&<OutlineSection st={st}/>}
+  {v.operation==='add'&&<Section title="Theme" label="Part theme"><ThemeSection st={st} partId={v.id}/></Section>}
   {v.operation==='add'&&<Section title="Style"><StyleControls st={st} part/><button onClick={()=>st.chooseRail('roof')}>Shape roof</button></Section>}
   {!!walls.length&&<Section title="Walls" count={walls.length}><div className="studio-chip-row">{walls.map(w=><button key={w.side} onClick={()=>st.select({level:'wall',partId:v.id,walls:[w]})}>{wallLabel(w)}</button>)}</div></Section>}
   <Section title="Paint"><div className="studio-inspector-actions"><button aria-label="Paint whole part" onClick={()=>st.paintPart(v.id)}><i className="studio-finish-dot" style={{background:st.color}}/>Paint whole part</button><button className="studio-text" onClick={()=>{const r=st.recipe!;st.commit({...r,studio:{...r.studio,surfaces:r.studio.surfaces.filter(x=>x.anchor.shapeId!==v.id),openings:r.studio.openings.filter(x=>x.anchor.shapeId!==v.id)}});}}>Reset local paint and openings</button></div></Section>
@@ -231,7 +234,7 @@ function RulesSection({st}:{st:StudioState}){
   st.setRhythmOpen(true);};
  return <div className="studio-inspector-rules">
   <section className="studio-inspector-section"><button className="studio-section-toggle" aria-expanded={st.rhythmOpen} aria-label="Rhythm" title="Facade rhythm: generated openings from weighted pools, scoped to the building, parts, walls, floors or regions" onClick={toggleRhythm}>{st.rhythmOpen?<CaretDown size={12}/>:<CaretRight size={12}/>}<span>Facade rhythm</span>{recipe.studio.facadeRhythm&&<small>{recipe.studio.facadeRhythm.style??'custom'}</small>}</button>
-   {st.rhythmOpen&&<div className="studio-section-body"><CityRhythmPanel recipe={recipe} commit={r=>st.commit(r)} panel={panel} partName={st.partName} shuffle={st.tryAnotherLook} onClose={()=>{panel.setAction('pick');panel.setScope('building');}}/></div>}
+   {st.rhythmOpen&&<div className="studio-section-body"><CityRhythmPanel recipe={recipe} commit={r=>st.commit(r)} panel={panel} partName={st.partName} shuffle={st.tryAnotherLook} onClose={()=>{panel.setAction('pick');panel.setScope('building');}} onTheme={(id,partId)=>st.applyTheme(id,partId?{scope:'part',partId}:{scope:'building'})}/></div>}
   </section>
   <CityPaintRulesPanel recipe={recipe} commit={r=>st.commit(r)} state={st.paintRules} partName={st.partName} finish={st.finish} channel={st.channel} floor={st.floor} setIssue={st.interaction.setIssue}/>
  </div>;

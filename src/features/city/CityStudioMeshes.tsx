@@ -1,7 +1,9 @@
 import {CITY_LIGHT_MODE} from './cityRenderMode';
 import {useCityVisibility} from './CityVisibility';
 import {useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {BoxGeometry,BufferGeometry,Color,Group,Vector3,InstancedMesh,Mesh,Object3D,type Material} from 'three';
+import {BoxGeometry,BufferGeometry,Color,Float32BufferAttribute,Group,Vector3,InstancedMesh,Mesh,Object3D,type Material} from 'three';
+import {packDoorMotion,splitDoorLeaves,type KitPack} from '../../domain/cityStudioDoorMotion';
+import {CityStudioKitDoorLeaves} from './CityStudioKitDoorLeaves';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {useFrame,useThree} from '@react-three/fiber';
@@ -12,7 +14,8 @@ import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {viewDistance} from './CityStudioDetailBatches';
 
-type Piece={geometry:BufferGeometry;channel:string};
+/** One channel of a kit module; `leaf`: the part of it that is door leaf `leaf` (cityStudioDoorMotion), split at load. */
+export type Piece={geometry:BufferGeometry;channel:string;leaf?:number};
 /** Kit detail levels: `full` is the authored kit; `medium` is the prepared far kit (kit-medium.glb, built by
  * scripts/build-city-kit-medium.py: bevels, small parts and hidden faces removed; docs/city-generated-walls-at-scale.md). */
 export type StudioKitDetail='full'|'medium';
@@ -27,7 +30,25 @@ const TOKYO_KIT={full:'/city/tokyo-kit/v1/kit.glb',medium:'/city/tokyo-kit/v1/ki
 const STOREFRONT_KIT={full:'/city/storefront-kit/v1/kit.glb',medium:'/city/storefront-kit/v1/kit-medium.glb'} as const;
 /** Whether these pieces need the storefront pack (loadStudioKit's `storefront`). */
 export const usesStorefrontKit=(pieces:readonly {module:string}[])=>pieces.some(p=>STOREFRONT_MODULE_IDS.has(p.module));
-function parseStudioKit(url:string){return new GLTFLoader().loadAsync(url).then(gltf=>{
+/**
+ * Door leaves (full kit only): every channel of a door module is split into its static rest and one piece per leaf
+ * of the module's door motion (splitDoorLeaves), so the leaves can be drawn closed with the kit (instanced) or
+ * animated per door near the camera (CityStudioKitDoorLeaves). The medium kit keeps its leaves baked.
+ */
+function splitLeaves(pack:Map<string,Piece[]>,doors:KitPack|undefined){
+ if(!doors)return;
+ for(const [module,pieces] of pack){const spec=packDoorMotion(doors,module);if(!spec?.leaves.length)continue;
+  pack.set(module,pieces.flatMap(piece=>{
+   if(piece.channel==='wall')return [piece];
+   const g=piece.geometry,split=splitDoorLeaves({positions:g.getAttribute('position').array,normals:g.getAttribute('normal').array,uvs:g.getAttribute('uv')?.array},spec);
+   const make=(t:{positions:number[];normals:number[];uvs:number[]})=>{const out=new BufferGeometry();out.setAttribute('position',new Float32BufferAttribute(t.positions,3));out.setAttribute('normal',new Float32BufferAttribute(t.normals,3));out.setAttribute('uv',new Float32BufferAttribute(t.uvs,2));out.computeBoundingSphere();return out;};
+   const out:Piece[]=[];if(split.rest.positions.length)out.push({geometry:make(split.rest),channel:piece.channel});
+   split.leaves.forEach((leaf,index)=>{if(leaf.positions.length)out.push({geometry:make(leaf),channel:piece.channel,leaf:index});});
+   g.dispose();return out;
+  }));
+ }
+}
+function parseStudioKit(url:string,doors?:KitPack){return new GLTFLoader().loadAsync(url).then(gltf=>{
  const pack=new Map<string,Piece[]>();gltf.scene.updateMatrixWorld(true);
  for(const root of gltf.scene.children){const groups=new Map<string,BufferGeometry[]>();root.traverse(child=>{
   if(!(child instanceof Mesh)||Array.isArray(child.material))return;
@@ -38,16 +59,17 @@ function parseStudioKit(url:string){return new GLTFLoader().loadAsync(url).then(
  });
  pack.set(String(root.userData.name??root.name).replace(/^v[345]\//,''),[...groups].flatMap(([channel,geometries])=>{const geometry=geometries.length===1?geometries[0]:mergeGeometries(geometries);if(!geometry)return geometries.map(geometry=>({geometry,channel}));if(geometries.length>1)geometries.forEach(g=>g.dispose());return [{geometry,channel}];}));}
  gltf.scene.traverse(child=>{if(child instanceof Mesh){child.geometry.dispose();(Array.isArray(child.material)?child.material:[child.material]).forEach((m:Material)=>m.dispose());}});
+ splitLeaves(pack,doors);
  return pack;
 });}
 export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full',storefront=false):Promise<Map<string,Piece[]>>{
  // Kit v5 with `storefront`: the plain v5 pack plus the storefront pack (a copy; geometries are shared).
  if(storefront&&version===5){const id=`5/${detail}/storefront`,previous=pending.get(id);if(previous)return previous;
-  const loading=Promise.all([loadStudioKit(5,detail),parseStudioKit(STOREFRONT_KIT[detail])]).then(([base,extra])=>{const pack=new Map(base);for(const [module,pieces] of extra)pack.set(module,pieces);
+  const loading=Promise.all([loadStudioKit(5,detail),parseStudioKit(STOREFRONT_KIT[detail],detail==='full'?'storefront':undefined)]).then(([base,extra])=>{const pack=new Map(base);for(const [module,pieces] of extra)pack.set(module,pieces);
    if(pack.size!==studioModules(5).length)throw Error('The storefront kit is incomplete.');return pack;}).catch(e=>{pending.delete(id);throw e;});pending.set(id,loading);return loading;}
  const id=`${version}/${detail}`,previous=pending.get(id);if(previous)return previous;
  // Kit v5 also loads the Tokyo pack: the studio's v5 catalogue (studioModules(5)) includes its modules.
- const loading=Promise.all([parseStudioKit(`/city/synarc-kit/v${version}/${detail==='medium'?'kit-medium':'kit'}.glb`),version===5?parseStudioKit(TOKYO_KIT[detail]):null]).then(([pack,tokyo])=>{
+ const loading=Promise.all([parseStudioKit(`/city/synarc-kit/v${version}/${detail==='medium'?'kit-medium':'kit'}.glb`,detail==='full'?version:undefined),version===5?parseStudioKit(TOKYO_KIT[detail],detail==='full'?'tokyo':undefined):null]).then(([pack,tokyo])=>{
  if(tokyo)for(const [module,pieces] of tokyo)pack.set(module,pieces);
  if(pack.size!==studioModules(version).length-(version===5?STOREFRONT_MODULE_IDS.size:0)||!pack.has('wall-full')||version>=3&&!pack.has('stair-top-threshold'))throw Error('The architectural kit is incomplete.');return pack;
 }).catch(e=>{pending.delete(id);throw e;});pending.set(id,loading);return loading;}
@@ -61,7 +83,8 @@ export function StudioInstances({geometry,channel,placements,texture,onSelect,re
  return <instancedMesh ref={ref} args={[geometry,material,placements.length]} frustumCulled onClick={onSelect?e=>{if(e.instanceId!==undefined){e.stopPropagation();onSelect(placements[visibleIndices.current[e.instanceId]]);}}:undefined}/>;
 }
 
-export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];version?:2|3|4|5}){
+/** `plotId`: the studio plot these pieces belong to; its portal doors' leaves animate within 120 m. */
+export function CityStudioMeshes({pieces,version=2,plotId}:{pieces:StudioPiece[];version?:2|3|4|5;plotId?:string}){
  const visibility=useCityVisibility(),proxyOnly=!!visibility&&CITY_LIGHT_MODE;
  // Business pieces (propertyId) follow CityVisibility and its proxies; a studio building's own kit goes medium far away.
  const business=useMemo(()=>pieces.some(p=>p.propertyId),[pieces]);
@@ -82,11 +105,11 @@ export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];versio
   if(!pack)return out;
   const kit=medium&&mediumPack?mediumPack:pack;
   for(const p of pieces.filter(p=>p.propertyId||near||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near'))for(const [i,piece] of (kit.get(p.module)??[]).entries()){
-   // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
-   if(p.omit?.includes(piece.channel))continue;
+   // Kit pieces in generated walls leave out their wall slab; portal door leaves animate near (CityStudioKitDoorLeaves).
+   if(p.omit?.includes(piece.channel)||piece.leaf!==undefined&&p.portal&&near&&plotId)continue;
    const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,key=`${p.module}/${kit===pack?i:'medium:'+piece.channel}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture,see:STOREFRONT_MODULE_IDS.has(p.module)};group.placements.push(p);out.set(key,group);
   }return out;
- },[pieces,pack,near,medium,mediumPack]);
+ },[pieces,pack,near,medium,mediumPack,plotId]);
  const fallbackCube=useMemo(()=>new BoxGeometry(1,1,1),[]);
  useEffect(()=>()=>fallbackCube.dispose(),[fallbackCube]);
  const fallback=useMemo(()=>{
@@ -108,5 +131,5 @@ export function CityStudioMeshes({pieces,version=2}:{pieces:StudioPiece[];versio
  },[pieces]);
  useEffect(()=>()=>proxies.forEach(g=>g.geometry.dispose()),[proxies]);
 
- return <group ref={root} name={`studio-kit-v${version}`}>{!proxyOnly&&(pack?[...groups].map(([key,g])=><StudioInstances key={key} geometry={g.piece.geometry} channel={g.piece.channel} placements={g.placements} texture={g.texture} seeThrough={g.see} representation={pieces.some(p=>p.propertyId)?'full':undefined}/>):<StudioInstances geometry={fallbackCube} channel="wall" placements={fallback}/>)}{(pack||proxyOnly)&&proxies.map((g,i)=><StudioInstances key={'proxy/'+i} geometry={g.geometry} channel={g.channel} placements={g.placements} texture={g.texture} representation="simple"/>)}</group>;
+ return <group ref={root} name={`studio-kit-v${version}`}>{!proxyOnly&&(pack?[...groups].map(([key,g])=><StudioInstances key={key} geometry={g.piece.geometry} channel={g.piece.channel} placements={g.placements} texture={g.texture} seeThrough={g.see} representation={pieces.some(p=>p.propertyId)?'full':undefined}/>):<StudioInstances geometry={fallbackCube} channel="wall" placements={fallback}/>)}{(pack||proxyOnly)&&proxies.map((g,i)=><StudioInstances key={'proxy/'+i} geometry={g.geometry} channel={g.channel} placements={g.placements} texture={g.texture} representation="simple"/>)}{pack&&plotId&&near&&!proxyOnly&&<CityStudioKitDoorLeaves plotId={plotId} pieces={pieces} pack={pack} version={version}/>}</group>;
 }

@@ -11,6 +11,7 @@ import type {SculptWallSide} from '../../domain/citySculpt';
 import type {StudioBay,StudioRecipe} from '../../domain/cityStudioTypes';
 import type {CityBuildingDesignV3} from '../../domain/cityBuildingV3';
 import {freeOpeningOutline} from './studioFreeOpeningTool';
+import {themeForStyle} from '../../domain/cityStudioThemeCatalog';
 import {studioKitVersion,studioModules} from '../../domain/cityStudioCatalog';
 import {MODULE_POOL_PREFIX,moduleOpeningSpec} from '../../domain/cityStudioModuleSpec';
 
@@ -125,7 +126,8 @@ function KitPoolChips({recipe,layer,pool,total,setWeight}:{recipe:StudioRecipe;l
  </div>;
 }
 
-export function CityRhythmPanel({recipe,commit,panel,partName,shuffle,onClose}:{recipe:StudioRecipe;commit:(r:StudioRecipe)=>void;panel:RhythmPanelState;partName:(id:string)=>string;shuffle:()=>void;onClose:()=>void}){
+/** `onTheme` (optional): apply the full facade theme a style stands for (docs/city-studio-themes.md) at the building or one chosen part. */
+export function CityRhythmPanel({recipe,commit,panel,partName,shuffle,onClose,onTheme}:{recipe:StudioRecipe;commit:(r:StudioRecipe)=>void;panel:RhythmPanelState;partName:(id:string)=>string;shuffle:()=>void;onClose:()=>void;onTheme?:(themeId:string,partId?:string)=>void}){
  const rhythm=recipe.studio.facadeRhythm,{scope,targets,layer}=panel;
  const needsTargets=scope!=='building',ready=!needsTargets||targets.length>0,cellScope=scope==='floors'||scope==='region';
  const settings=useMemo(()=>rhythm?rhythmScopeSettings(rhythm,targets[0]):null,[rhythm,targets]);
@@ -146,6 +148,7 @@ export function CityRhythmPanel({recipe,commit,panel,partName,shuffle,onClose}:{
   <div className="rhythm-side">
    <span className="studio-caption">Style preset</span>
    <div className="rhythm-styles">{RHYTHM_STYLES.map(st=><button className="studio-tile" key={st.id} title={st.blurb} aria-pressed={settings?.style===st.id} disabled={!ready&&!!rhythm} onClick={()=>commit(applyRhythmStyle(recipe,writeTargets,st.id))}><StyleIcon id={st.id}/><span>{st.label}</span></button>)}</div>
+   {onTheme&&settings&&(()=>{const theme=themeForStyle(settings.style),part=scope==='parts'&&targets.length===1?targets[0].partId:undefined;return theme&&(scope==='building'||part)?<button className="rhythm-full-theme" title={`${theme.blurb} Adds shops, decorations, colours and roof props.`} onClick={()=>onTheme(theme.id,part)}>Full theme: {theme.label}</button>:null;})()}
    <span className="studio-caption">Apply to</span>
    <div className="rhythm-scopes" role="radiogroup" aria-label="Apply rules to">{SCOPES.map(([id,label])=><button key={id} role="radio" aria-checked={scope===id} disabled={!rhythm&&id!=='building'} onClick={()=>panel.setScope(id)}>{label}</button>)}</div>
    {scope!=='building'&&<div className="rhythm-targets">{targets.length?targets.map((t,i)=><span key={i}>{rhythmRuleLabel(t,partName)}<button aria-label="Remove from selection" onClick={()=>panel.setTargets(targets.filter(x=>x!==t))}><X size={10}/></button></span>):<small>{panel.hint}</small>}

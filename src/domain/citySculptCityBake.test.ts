@@ -26,7 +26,7 @@ const at=(x:number,z:number,rotation=0,scale=2):CityPlotTransform=>({x,z,rotatio
 test('the bake keeps every far detail triangle and the roof envelope, in world space', ()=>{
  for(const d of [unifiedNyc(0),unifiedNyc(5),rhythm('townhouse',3)]){
   const {resolved,details,bake:b}=bake(d,at(100,-40,Math.PI/2,2));
-  const far=details.batches.filter(x=>x.material.kind!=='shell').reduce((n,x)=>n+x.far/3,0);
+  const far=details.batches.reduce((n,x)=>n+x.far/3,0);
   assert.equal(b.triangles.detail,far,'far detail triangles');
   const patches=(resolved.studio!.roofPatches??[]).reduce((n,p)=>n+p.vertices.length/9+(p.wallVertices?.length??0)/9,0);
   assert.ok(b.triangles.envelope>=patches,'roof patches are in the envelope');

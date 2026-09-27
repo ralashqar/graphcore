@@ -4,6 +4,7 @@ import {studioBays} from './cityStudio.ts';
 import {STAMP_MAP,STOREFRONT_KIT_STAMP_IDS,STOREFRONT_STAMPS,TOKYO_STAMP_IDS,faceMatches} from './cityStorefrontStamps.ts';
 import {VARIATION_LAYERS,type BuildingVariation,type VariationLayer,type VariationLayerRule,type VariationRule,type VariationDiagnostic,type ModularBuilding} from './cityVariationTypes.ts';
 import type {StudioRecipe,StudioBay,StudioAnchor} from './cityStudioTypes.ts';
+import {expandFacadeThemes} from './cityStudioThemeExpand.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 
 export const variationHash=(text:string)=>{let h=2166136261;for(let i=0;i<text.length;i++)h=Math.imul(h^text.charCodeAt(i),16777619);return (h>>>0)/4294967296;};
@@ -46,6 +47,8 @@ const continuous=(run:StudioBay[],width:number)=>run.length>0&&run.reduce((n,b)=
 const anchorOf=(run:StudioBay[]):StudioAnchor=>({...run[0].anchor,u:run.reduce((n,b)=>n+b.anchor.u,0)/run.length});
 /** Pure expansion: generated placements never enter the saved manual recipe. */
 export function expandBuildingVariation(input:StudioRecipe,d:CityBuildingDesignV3):{recipe:StudioRecipe;diagnostics:VariationDiagnostic[]}{
+ // Facade themes (local studio) first: their storefronts, paint rules and kit strips join the recipe like manual ones.
+ if(input.studio.facadeThemes?.length)input=expandFacadeThemes(input,d);
  const v=input.studio.variation,stamps=input.studio.stamps??[];if(!v&&!stamps.length)return {recipe:input,diagnostics:[]};
  if(v){const error=validateVariation(v);if(error)throw Error(error);}
  const r=structuredClone(input),diagnostics:VariationDiagnostic[]=[];delete r.studio.variation;delete r.studio.stamps;

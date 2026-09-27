@@ -4,7 +4,7 @@ import {newDesign} from './cityBuildingV3.ts';
 import {resolveSculpt,type SculptVolume} from './citySculpt.ts';
 import {freshStudio,studioFloorCount} from './cityStudio.ts';
 import {upgradeStudioInterior} from './cityStudioInteriors.ts';
-import {buildStudioDetailBatches,withoutDetailGeometry} from './cityStudioDetailBatches.ts';
+import {buildStudioDetailBatches} from './cityStudioDetailBatches.ts';
 import {FREE_DOOR,freeDoorLeaves,freeDoorPortalId} from './cityStudioFreeDoors.ts';
 import {FREE_FACE} from './cityStudioFreeOpeningGeometry.ts';
 import {OPENING_INSTANCING} from './cityStudioOpeningPieces.ts';
@@ -25,7 +25,7 @@ const legacy=<T,>(f:()=>T):T=>{OPENING_INSTANCING.enabled=false;try{return f();}
 
 test('free door groups become exterior portals on v6 buildings; stone arcades stay open',()=>{
  const out=resolve(recipe(true)),face=out.freeFaces![0],ids=(out.portals??[]).filter(p=>p.id.startsWith('exterior/free/')).map(p=>p.id).sort();
- assert.deepEqual(out.inactive,[]);assert.equal(face.openable,true);assert.equal(face.shell,undefined,'interiors replace the shell');
+ assert.deepEqual(out.inactive,[]);assert.equal(face.openable,true);assert.equal(face.interior,true);
  assert.deepEqual(ids,['exterior/free/carriage','exterior/free/carriage#2','exterior/free/door','exterior/free/shop']);
  const door=face.groups.find(g=>g.id==='door')!,portal=out.portals!.find(p=>p.id==='exterior/free/door')!;
  // Transform: centre of the clear opening at the glazing plane, face rotation, threshold at the part base.
@@ -54,25 +54,30 @@ test('static leaves are not duplicated near the camera when a portal takes over'
  assert.ok(glass(openable).near>0);
 });
 
-test('free-face glazing is see-through; roof and far fills keep opaque glass keys',()=>{
+test('glass is see-through only into authored interiors; without them it is opaque and fills close the openings',()=>{
+ const v6=buildStudioDetailBatches(legacy(()=>resolve(recipe(true)))).batches.filter(b=>b.material.kind==='glass');
+ assert.equal(v6.length,1);assert.ok(v6[0].material.kind==='glass'&&v6[0].material.seeThrough===true);assert.match(v6[0].key,/\|see$/);
  const out=legacy(()=>resolve(recipe(false))),d=buildStudioDetailBatches(out),glass=d.batches.filter(b=>b.material.kind==='glass');
- assert.equal(glass.length,1);assert.ok(glass[0].material.kind==='glass'&&glass[0].material.seeThrough===true);assert.match(glass[0].key,/\|see$/);
- assert.ok(glass[0].far>0,'aperture fills and glass remain in the far range (drawn opaque there)');
- const shell=d.batches.find(b=>b.material.kind==='shell')!;assert.ok(shell.near>0);assert.equal(shell.far,0,'window shells are near-only');
- assert.ok(shell.colors&&shell.colors.length===shell.positions.length);
- assert.equal(withoutDetailGeometry(out).freeFaces![0].shell,undefined,'shell buffers ride only in the batches');
+ assert.equal(glass.length,1);assert.ok(glass[0].material.kind==='glass'&&!glass[0].material.seeThrough,'opaque reflective glass');assert.doesNotMatch(glass[0].key,/\|see$/);
+ // The arcade's dark fill draws near as well: the recess is closed from the street, never a view into the void.
+ const face=out.freeFaces![0],fill=face.geometry.aperture!.indices.length;assert.ok(fill>0);
+ const withRooms=buildStudioDetailBatches({freeFaces:[{...face,interior:true}]}).batches.find(b=>b.material.kind==='glass')!;
+ assert.equal(glass[0].near-withRooms.near,fill,'aperture fills join the near range without interiors');
+ assert.equal(glass[0].far,withRooms.far,'and stay in the far range');
+ assert.ok(!d.batches.some(b=>(b.material.kind as string)==='shell'),'no room boxes behind the openings');
 });
 
-test('v5 buildings keep closed static leaves with blockers and get interior shells',()=>{
+test('v5 buildings: every leafed door is a portal into an implicit empty interior; arcades are closed recesses',()=>{
  const out=resolve(recipe(false)),face=out.freeFaces![0];
- assert.equal(out.portals,undefined);assert.notEqual(face.openable,true);
- assert.deepEqual(out.blockers.filter(b=>b.id.startsWith('free-door/')).map(b=>b.id).sort(),['free-door/carriage','free-door/door','free-door/shop']);
- assert.ok(!out.blockers.some(b=>b.id==='free-door/arcade'),'arcades stay open');
- const shell=face.shell!;assert.ok(shell.indices.length>0);
- // Every shell vertex sits behind the inner skin and inside the storey band.
- for(let k=0;k<shell.positions.length;k+=3)assert.ok(shell.positions[k+2]<=-FREE_FACE.thickness/2&&shell.positions[k+2]>=-FREE_FACE.thickness/2-FREE_DOOR.shellDepth-.01);
- // The shell never reaches the opposite (north) wall: 10 m deep part, depth is capped.
- assert.ok(Math.min(...Array.from(shell.positions).filter((_,k)=>k%3===2))>-5);
+ assert.equal(out.implicitInterior,true);assert.equal(face.openable,true);assert.equal(face.interior,false);
+ assert.deepEqual((out.portals??[]).map(p=>p.id).filter(id=>id.startsWith('exterior/free/')).sort(),['exterior/free/carriage','exterior/free/carriage#2','exterior/free/door','exterior/free/shop']);
+ assert.ok(out.interiorLevels!.length>=2&&out.interiorLevels!.every(l=>l.slab.length>0&&l.rooms.length===0),'empty floors, no rooms');
+ assert.deepEqual(out.blockers.filter(b=>b.id.startsWith('free-recess/')).map(b=>b.id),['free-recess/arcade'],'the arcade is a closed recess');
+ assert.ok(!out.blockers.some(b=>b.id.startsWith('free-door/')),'no static leaf blockers: portal leaves block instead');
+ // Business buildings (no portals): every doorway stays closed and no interior is resolved.
+ const business=resolveSculpt(recipe(false),{...newDesign('free-doors'),groundHeight:3.2,floors:2,middleFloors:1,crown:'none',roof:'flat'},{doors:false}).studio!;
+ assert.equal(business.portals,undefined);assert.equal(business.interiorLevels,undefined);assert.equal(business.freeFaces![0].openable,false);
+ assert.deepEqual(business.blockers.filter(b=>b.id.startsWith('free-recess/')).map(b=>b.id).sort(),['free-recess/arcade','free-recess/carriage','free-recess/door','free-recess/shop']);
 });
 
 test('closed leaves block the doorway; opening the group lets you walk through',()=>{

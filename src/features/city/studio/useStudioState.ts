@@ -7,6 +7,7 @@ import type {PerspectiveCamera} from 'three';
 import {STAMP_MAP,STUDIO_STOREFRONT_STAMPS,protectedStorefrontAtBay} from '../../../domain/cityStorefrontStamps';
 import {enableBuildingVariation,previewStorefront,shuffleVariation} from '../../../domain/cityBuildingVariation';
 import {shuffleFacadeRhythm} from '../../../domain/cityStudioFacadeRhythm';
+import {applyFacadeTheme,rerollTheme,themeStarterRecipe} from '../../../domain/cityStudioThemes';
 import {removeFreeOpening} from '../../../domain/cityStudioFreeOpenings';
 import {pruneFreeTrims,toggleFreeTrim,freeTrimKinds,type TrimKind} from '../../../domain/cityStudioTrimParts';
 import {ROOF_OPENING_PRESETS,removeRoofOpening} from '../../../domain/cityStudioRoofOpenings';
@@ -88,6 +89,8 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const [interiorDoorStyle,setInteriorDoorStyle]=useState<'panelled'|'glazed'>('panelled'),[interiorDoorHinge,setInteriorDoorHinge]=useState<'left'|'right'>('left');
  const [selectedRoomId,setSelectedRoomId]=useState<string|null>(null),[furnitureKind,setFurnitureKind]=useState<StudioFurnitureKind>('table'),[furnitureRotation,setFurnitureRotation]=useState(0),[selectedFurnitureId,setSelectedFurnitureId]=useState<string|null>(null);
  // Panels: shortcut sheet, starters, overlapping-part chooser, replace confirm, palette and inspector drawers.
+ /** Facade theme gallery (docs/city-studio-themes.md): which scope a picked theme applies to. */
+ const [themeGallery,setThemeGallery]=useState<{scope:'part';partId:string}|{scope:'building'}|{scope:'starter'}|null>(null);
  const [help,setHelp]=useState(false),[starters,setStarters]=useState(false),[collection,setCollection]=useState(false),[parts,setParts]=useState(false),[replace,setReplace]=useState<number|null>(null);
  const [paletteOpen,setPaletteOpen]=useState(true),[inspectorOpen,setInspectorOpen]=useState(true),[rhythmOpen,setRhythmOpen]=useState(false),[variationOpen,setVariationOpen]=useState(false);
 
@@ -238,7 +241,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  // ---- Recipe actions (moved from CityStudio) -------------------------------------------------------------------
  const shown=interaction.transient??recipe,selected=shown?.volumes.find(v=>v.id===land.selectedVolume),style=recipe&&selected?studioStyle(recipe,selected.id):recipe?.studio.defaults;
  const partName=(id:string)=>{const i=recipe?.volumes.filter(v=>v.operation==='add').findIndex(v=>v.id===id)??-1;if(i<0){const cut=recipe?.volumes.findIndex(v=>v.id===id)??-1;return cut<0?'Part':`Cutout ${cut+1}`;}return i===0?'Main part':`Part ${i+1}`;};
- const tryAnotherLook=()=>{if(!recipe)return;if(recipe.studio.facadeRhythm){commit({...recipe,studio:{...recipe.studio,facadeRhythm:shuffleFacadeRhythm(recipe.studio.facadeRhythm)}});return;}const varied=recipe.studio.variation?{...recipe,studio:{...recipe.studio,variation:shuffleVariation(recipe.studio.variation)}}:enableBuildingVariation(recipe);commit(varied);};
+ const tryAnotherLook=()=>{if(!recipe)return;if(recipe.studio.facadeThemes?.length){let next=recipe;for(const ref of recipe.studio.facadeThemes)next=rerollTheme(next,ref.partId);commit(next,'New look');return;}if(recipe.studio.facadeRhythm){commit({...recipe,studio:{...recipe.studio,facadeRhythm:shuffleFacadeRhythm(recipe.studio.facadeRhythm)}});return;}const varied=recipe.studio.variation?{...recipe,studio:{...recipe.studio,variation:shuffleVariation(recipe.studio.variation)}}:enableBuildingVariation(recipe);commit(varied);};
  const diceReady=kitVersion===5||!!recipe?.studio.facadeRhythm;
  const placingRoof=useRef(false);
  async function placeRoofDetail(partId:string,u:number,v:number){if(!recipe||!roofModule||placingRoof.current)return;placingRoof.current=true;const id=crypto.randomUUID(),next={...recipe,studio:{...recipe.studio,roofDetails:[...(recipe.studio.roofDetails??[]),{id,partId,module:roofModule,u,v,rotation:roofRotation}]}};
@@ -261,6 +264,14 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const splitAtStorey=()=>{const r=latestRecipe(),v=r?.volumes.find(x=>x.id===land.selectedVolume);if(!r||!v)return;const at=floor>v.startFloor&&floor<v.startFloor+v.spanFloors?floor:v.startFloor+1,id=crypto.randomUUID(),out=splitStudioPartAtStorey(r,v.id,at,id,draft.design);if('reason' in out){interaction.setIssue(out.reason);return;}const summary=outlineRemovalSummary(out.removed,1);if(commit(out.recipe,`Split part at storey ${at+1}${summary?` · ${summary}`:''}`))land.setSelectedVolume(floor>=at?id:v.id);};
  const duplicate=()=>{if(!recipe||!selected)return;const id=crypto.randomUUID();commit({...recipe,volumes:[...recipe.volumes,{...selected,id,x:selected.x+.5,z:selected.z+.5}],studio:{...recipe.studio,parts:{...recipe.studio.parts,[id]:structuredClone(style??{})}}});land.setSelectedVolume(id);};
  const remove=()=>{if(!recipe||!selected)return;commit({...recipe,volumes:recipe.volumes.filter(v=>v.id!==selected.id)});land.setSelectedVolume(null);};
+ /** Apply a theme from the gallery: one labelled undo step. With no parts yet (or from Build's ideas) it starts a themed box. */
+ const applyTheme=(themeId:string,scope=themeGallery??{scope:'building' as const})=>{if(!recipe)return false;
+  const starting=scope.scope==='starter'||!recipe.volumes.some(v=>v.operation==='add');
+  // ?themeSeed=<n> fixes the seed (reproducible thumbnails and browser checks); otherwise every apply rolls a new look.
+  const fixed=typeof window!=='undefined'?Number(new URLSearchParams(window.location.search).get('themeSeed')??NaN):NaN,seed=Number.isInteger(fixed)?fixed:undefined;
+  const out=starting?themeStarterRecipe(recipe,draft.design,themeId,plot.size,seed):applyFacadeTheme(recipe,draft.design,themeId,{...(scope.scope==='part'?{partId:scope.partId}:{}),...(seed!==undefined?{seed}:{})});
+  if('reason' in out){interaction.setIssue(out.reason);return false;}
+  if(!commit(out.recipe,out.label))return false;if(starting){land.setSelectedVolume(null);setStarters(false);}setThemeGallery(null);return true;};
  const empty=()=>{if(!recipe)return;commit({...recipe,volumes:[],attachments:[],studio:freshStudio()});land.setSelectedVolume(null);setStarters(false);chooseRail('build');setBuildShape('block');};
  const starter=(index:number)=>{if(index<=-2){land.edit(studioExample(draft,-index-2,plot.size));land.setSelectedVolume(null);setStarters(false);setReplace(null);return;}const design=applyComposition(draft.design,index),next=upgradeStudio({...draft,sculpt:undefined,design},plot.size);if(next){land.edit(next);land.setSelectedVolume(null);setStarters(false);setReplace(null);}};
  /** Current brush finish as a stored finish (texture only when set). */
@@ -319,7 +330,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  // ---- Camera, walking and keys ---------------------------------------------------------------------------------
  const view=(kind:StudioViewKind)=>cam.view(kind,{selected,interior,floor});
  const walk=()=>{if(land.previewStatus.pending||land.previewStatus.error)return;const ready=preparedStudioPlot(plot.id);if(!ready){interaction.setIssue('Your building is still preparing.');return;}cam.saveForWalk();const entry=landEntrance(plot);Object.assign(session.foot,createFootState(entry.x,entry.z,entry.heading));session.mode='on-foot';land.setPhase('walkthrough');};
- function onEscape(){if(help){setHelp(false);return true;}if(parts||starters){setParts(false);setStarters(false);return true;}if(rail==='rooms'||rail==='furnish')return false;if(rail!=='select'){chooseRail('select');return true;}return stepUp();}
+ function onEscape(){if(help){setHelp(false);return true;}if(themeGallery){setThemeGallery(null);return true;}if(parts||starters){setParts(false);setStarters(false);return true;}if(rail==='rooms'||rail==='furnish')return false;if(rail!=='select'){chooseRail('select');return true;}return stepUp();}
  const keyState={walking,category,rail,level,selection,selectedFurnitureId,selectedId:selected?.id??null,remove,removeFurniture,deleteSelection,duplicate,chooseRail,toggleErase,chooseFloor,floor,highestStorey,view,dice:tryAnotherLook,openRing,ringAllowed:rail==='paint'&&target==='material'&&!!interaction.hover&&!ring,diceReady,busy:interaction.active,stepUp,setLevel:setLevelState,useSlot:(i:number)=>{const item=hotbar.items[i];if(item)useHotbar(item);},help:()=>setHelp(h=>!h)};
  const keyActions=useRef(keyState);keyActions.current=keyState;
  // Clicking the world returns keyboard focus to it (pointer events suppress the usual blur), so Tab, Delete and
@@ -362,6 +373,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
   interiorEditId,setInteriorEditId,floorViewMode,setFloorViewMode,interiorDoorStyle,setInteriorDoorStyle,interiorDoorHinge,setInteriorDoorHinge,
   selectedRoomId,setSelectedRoomId,selectedRoom,roomChoices,editRoom,furnitureKind,furnitureRotation,selectedFurnitureId,selectFurniture,chooseFurniture,rotateFurniture,removeFurniture,moveFurniture:()=>setToolFromGesture('interior-furniture'),
   help,setHelp,starters,setStarters,collection,setCollection,styleFilter,setStyleFilter,parts,setParts,replace,setReplace,paletteOpen,setPaletteOpen,inspectorOpen,setInspectorOpen,rhythmOpen,setRhythmOpen,variationOpen,setVariationOpen,
+  themeGallery,setThemeGallery,applyTheme,
   paintRules,paintPicking,rhythmPanel,rhythmPicking,rhythmMarks,partName,tryAnotherLook,diceReady,removeInactive,editPart,editStyle,followWall,duplicate,remove,empty,starter,
   paintWalls,paintPart,paintTiles,eraseItems,removeFreeOpeningById,
   chooseFloor,addInteriorStorey,toggleInteriorFloor,highestStorey,prepared,inactive,shown,selected,style,ghost,splitAtStorey,

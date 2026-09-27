@@ -37,10 +37,10 @@ function accumulate(s:Stats,pos:(k:number)=>[number,number,number],col:(k:number
 }
 const finish=(s:Stats)=>({triangles:s.triangles,area:s.area,centroid:s.centroid.map(v=>v/(s.area||1)),color:s.color.map(v=>v/(s.area||1))});
 const glassColor=(b:DetailBatch)=>{const m=b.material;if(m.kind!=='glass')return [1,1,1] as [number,number,number];const c=new Color(m.color);return [c.r,c.g,c.b] as [number,number,number];};
-/** Free-face painted and see-through glass detail of a building (merged batches plus expanded instances), near and far. */
+/** Free-face painted and glass detail of a building (merged batches plus expanded instances), near and far. */
 function opening(d:StudioDetailBatches,tier:'near'|'far'){
  const out={painted:empty(),glass:empty()};
- for(const b of d.batches){const kind=b.material.kind==='painted'?'painted':b.material.kind==='glass'&&b.material.seeThrough?'glass':null;if(!kind)continue;
+ for(const b of d.batches){const kind=b.material.kind==='painted'?'painted':b.material.kind==='glass'&&!b.owners.some(o=>o.id.startsWith('roof/'))?'glass':null;if(!kind)continue;
   const [start,count]=tier==='near'?[0,b.near]:[b.farStart,b.far],gc=glassColor(b);
   accumulate(out[kind],k=>[b.positions[k*3],b.positions[k*3+1],b.positions[k*3+2]],k=>kind==='glass'?gc:[b.colors![k*3],b.colors![k*3+1],b.colors![k*3+2]],b.indices,start,count);}
  for(const g of d.openings?.groups??[]){const piece=lookupOpeningPiece(g.key)!;

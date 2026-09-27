@@ -27,20 +27,22 @@ import {seeThroughGlass} from './CityStudioOpeningInstances';
 import {KIT_MEDIUM,loadStudioKit,usesStorefrontKit,type StudioKitDetail} from './CityStudioMeshes';
 export {KIT_MEDIUM};
 import {viewDistance} from './CityStudioDetailBatches';
+import {CityStudioKitDoorLeaves} from './CityStudioKitDoorLeaves';
 import {cityGwStats} from './cityGwStats';
 
 export type KitLevel='hidden'|'proxy'|'medium'|'full'|'near';
 export type KitLevels={revision:number;levels:Map<string,KitLevel>};
 export type KitPlot={id:string;version:2|3|4|5;pieces:StudioPiece[];transform:CityPlotTransform};
-type Tier='full'|'near'|'medium'|'proxy';
-type Pack=Map<string,{geometry:BufferGeometry;channel:string}[]>;
+/** `leaf`: closed leaves of portal kit doors, drawn at `full`; at `near` the plot's leaves animate (CityStudioKitDoorLeaves). */
+type Tier='full'|'near'|'medium'|'proxy'|'leaf';
+type Pack=Map<string,{geometry:BufferGeometry;channel:string;leaf?:number}[]>;
 const kitStats=new Map<string,{tier:Tier;triangles:number;instances:number}>();
 type Block={plot:string;matrices:Float32Array;colors:Float32Array;count:number};
 /** `see`: storefront-pack glass, drawn see-through (as in the studio) so shop displays show from the street. */
 type GroupSource={geometry:BufferGeometry;channel:string;texture?:string;tier:Tier;see?:boolean};
 type Group=GroupSource&{key:string;blocks:Block[];total:number};
 
-const shows=(tier:Tier,level:KitLevel|undefined)=>tier==='proxy'?level==='proxy':tier==='medium'?level==='medium':tier==='near'?level==='near':level==='full'||level==='near';
+const shows=(tier:Tier,level:KitLevel|undefined)=>tier==='leaf'?level==='full':tier==='proxy'?level==='proxy':tier==='medium'?level==='medium':tier==='near'?level==='near':level==='full'||level==='near';
 const materials=new Map<string,{material:Material;users:number}>();
 function acquire(glass:boolean,texture?:string,see=false){const key=`${glass}|${texture??''}|${see}`;let e=materials.get(key);if(!e){const material=citySurfaceMaterial(glass,texture as CityTextureId);if(glass&&see)seeThroughGlass(material);e={material,users:0};materials.set(key,e);}e.users++;return e.material;}
 function release(glass:boolean,texture?:string,see=false){const key=`${glass}|${texture??''}|${see}`,e=materials.get(key);if(!e||--e.users>0)return;materials.delete(key);e.material.dispose();}
@@ -67,7 +69,7 @@ function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
   for(const [i,piece] of (pack.get(p.module)??[]).entries()){
    // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
    if(p.omit?.includes(piece.channel))continue;
-   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,tier:Tier=near?'near':'full';
+   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,tier:Tier=piece.leaf!==undefined&&p.portal?'leaf':near?'near':'full';
    push(`${plot.version}/${p.module}/${i}/${texture??''}/${tier}`,{geometry:piece.geometry,channel:piece.channel,texture,tier,see:piece.channel==='glass'&&STOREFRONT_MODULE_IDS.has(p.module)},p);
   }
   // Medium kit: the same modules and channels (near-only modules stay out, as at the full level).
@@ -147,7 +149,13 @@ export function CitySculptSharedKit({plots,levels}:{plots:KitPlot[];levels:Mutab
   if(changed){effective.current.revision++;invalidate();const h:Record<string,number>={};for(const l of out.values())h[l]=(h[l]??0)+1;(cityGwStats as {kitLevels?:string}).kitLevels=JSON.stringify(h);}
   if(import.meta.env.DEV){const t:Record<string,number>={};for(const s of kitStats.values())t[s.tier]=(t[s.tier]??0)+s.triangles;(cityGwStats as {kit?:string}).kit=JSON.stringify(t);}
  },-1);
- return <group name="city-sculpt-shared-kit">{groups.map(g=><KitGroup key={`${g.key}|${capacityFor(g.total)}`} group={g} capacity={capacityFor(g.total)} levels={effective}/>)}</group>;
+ // Portal kit doors of plots at the near level animate their leaves (the instanced `leaf` tier draws them closed at full).
+ const [nearDoors,setNearDoors]=useState<string>('');
+ useFrame(()=>{const ids=refine.current.plots.filter(p=>effective.current.levels.get(p.id)==='near'&&p.pieces.some(x=>x.portal)).map(p=>p.id).join('|');if(ids!==nearDoors)setNearDoors(ids);});
+ const doorPlots=useMemo(()=>{const ids=new Set(nearDoors.split('|'));return plots.filter(p=>ids.has(p.id)).map(plot=>({plot,pack:packs.get(packKey(plot.version,'full',storefront))??packs.get(packKey(plot.version,'full'))})).filter((d):d is {plot:KitPlot;pack:Pack}=>!!d.pack);},[nearDoors,plots,packs,storefront]);
+ return <group name="city-sculpt-shared-kit">{groups.map(g=><KitGroup key={`${g.key}|${capacityFor(g.total)}`} group={g} capacity={capacityFor(g.total)} levels={effective}/>)}
+  {doorPlots.map(({plot,pack})=><group key={plot.id} position={[plot.transform.x,0,plot.transform.z]} rotation={[0,plot.transform.rotation,0]} scale={plot.transform.scale}><CityStudioKitDoorLeaves plotId={plot.id} pieces={plot.pieces} pack={pack} version={plot.version}/></group>)}
+ </group>;
 }
 
 const triangles=(g:BufferGeometry)=>(g.index?g.index.count:g.getAttribute('position').count)/3;

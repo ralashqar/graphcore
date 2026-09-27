@@ -1,5 +1,5 @@
 import {subscribeStudioPlots} from './cityStudioRegistry';
-import {stepStudioDoors,studioDoorTarget,toggleStudioDoor} from '../../domain/cityStudioDoorState';
+import {stepStudioDoors,studioDoorAngle,studioDoorTarget,toggleStudioDoor} from '../../domain/cityStudioDoorState';
 import {CityLandEditor} from './CityLandEditor';
 import type {CityLandController} from './useCityLand';
 import {landPrice,landEntrance,type LandPlot} from '../../domain/cityLand';
@@ -148,7 +148,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
   viewCamera.lookAt(target.current);
   const fov=60+(reduced||onFoot?0:speed*5),next=reduced?60:viewCamera.fov+(fov-viewCamera.fov)*(1-Math.exp(-4*d));if(Math.abs(next-viewCamera.fov)>.01){viewCamera.fov=next;viewCamera.updateProjectionMatrix();}
   costs.current[costIndex.current++%240]=performance.now()-started;costCount.current=Math.min(240,costCount.current+1);
-  timer.current+=dt;if(timer.current>.2){timer.current=0;const nearby=onFoot?nearestPlot():null;setNearPlot(prev=>prev?.id===nearby?.id&&prev?.revision===nearby?.revision?prev:nearby);onRegion(logicalAxis(actor.x),logicalAxis(actor.z));gl.domElement.dataset.cityDriving=JSON.stringify(v);gl.domElement.dataset.cityExploration=JSON.stringify({mode:session.mode,foot:p,camera:session.footCamera,character:readiness.current});const samples=Array.from(costs.current.subarray(0,costCount.current)).sort((a,b)=>a-b);gl.domElement.dataset.cityDrivePerformance=JSON.stringify({p95:samples[Math.floor(samples.length*.95)],samples:samples.length});}
+  timer.current+=dt;if(timer.current>.2){timer.current=0;const nearby=onFoot?nearestPlot():null;setNearPlot(prev=>prev?.id===nearby?.id&&prev?.revision===nearby?.revision?prev:nearby);onRegion(logicalAxis(actor.x),logicalAxis(actor.z));gl.domElement.dataset.cityDriving=JSON.stringify(v);const door=onFoot?walkingWorld.studio.nearestDoor(foot.current.x,foot.current.y,foot.current.z,3):null;gl.domElement.dataset.cityExploration=JSON.stringify({mode:session.mode,foot:p,camera:session.footCamera,character:readiness.current,door:door&&{plot:door.plotId,id:door.doorId,angle:studioDoorAngle(door.plotId,door.doorId)}});const samples=Array.from(costs.current.subarray(0,costCount.current)).sort((a,b)=>a-b);gl.domElement.dataset.cityDrivePerformance=JSON.stringify({p95:samples[Math.floor(samples.length*.95)],samples:samples.length});}
  },-1);
  const hold=(key:keyof ReturnType<typeof empty>)=>({onPointerDown:(e:React.PointerEvent<HTMLButtonElement>)=>{e.currentTarget.setPointerCapture(e.pointerId);input.current[key]=true;},onPointerUp:()=>{input.current[key]=false;},onPointerCancel:()=>{input.current[key]=false;},onLostPointerCapture:()=>{input.current[key]=false;}});
  const onFoot=mode==='on-foot';

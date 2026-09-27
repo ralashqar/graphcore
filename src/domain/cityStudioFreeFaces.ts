@@ -6,7 +6,7 @@
  * apertures (addModulePieces), so no kit tile owns a whole wall any more.
  * Bays stay resolved, so picking, paint anchors, parapets and assemblies keep working.
  */
-import {buildFreeOpeningFaceGeometry,DEFAULT_FREE_PALETTE,OPENING_INSTANCING,type FreeFaceBuffers,type FreeFaceBuildOptions,type FreeFaceGeometry,type FreeFacePalette} from './cityStudioFreeOpeningGeometry.ts';
+import {buildFreeOpeningFaceGeometry,DEFAULT_FREE_PALETTE,OPENING_INSTANCING,type FreeFaceBuildOptions,type FreeFaceGeometry,type FreeFacePalette} from './cityStudioFreeOpeningGeometry.ts';
 import {finishFreeFace} from './cityStudioFreeDoors.ts';
 import {faceCached,InputHash} from './cityStudioFaceCache.ts';
 import {faceS,facePose,resolveStudioFreeFace,studioBayFaceSpans,type FreeModulePlacement,type FreeOpeningGroup,type FreeRect,type StudioFaceFrame} from './cityStudioFreeOpenings.ts';
@@ -25,7 +25,7 @@ import type {StudioBay,StudioBox,StudioFamily,StudioFinish,StudioPiece,StudioRec
  * Curved faces (side 'curve', see cityStudioCurvedWalls): `curve` + `bend` are set and geometry/shell are already
  * baked into building-local x/z (y still above `base`); `origin`/`rotation` then describe the front of the ring only.
  */
-export type StudioFreeFace={id:string;shapeId:string;side:SculptWallSide;origin:[number,number];rotation:number;base:number;length:number;height:number;family:StudioFamily;finishes:StudioBay['finishes'];floors:number[];groups:FreeOpeningGroup[];geometry:FreeFaceGeometry;/** v6: doors are portals (static leaves draw far only). */openable?:boolean;/** No interior: lit room boxes behind the openings (cityStudioFreeDoors). */shell?:FreeFaceBuffers;curve?:FaceCurve;bend?:FreeFaceBend};
+export type StudioFreeFace={id:string;shapeId:string;side:SculptWallSide;origin:[number,number];rotation:number;base:number;length:number;height:number;family:StudioFamily;finishes:StudioBay['finishes'];floors:number[];groups:FreeOpeningGroup[];geometry:FreeFaceGeometry;/** Doors are portals (static leaves draw far only); every resolved face since every door opens. */openable?:boolean;/** Recipe v6: authored interiors behind the openings (glass may be see-through, dark fills far only). */interior?:boolean;curve?:FaceCurve;bend?:FreeFaceBend};
 const tilePart=/\/(header|filler-?1|access-filler-?1)$/;
 /**
  * Paint layers of one owned face, bottom to top: legacy tile paint first (each bay whose resolved
@@ -57,7 +57,8 @@ function splitCurvedBlocker(blockers:StudioBox[],i:number,frame:StudioFaceFrame,
  blockers.splice(i,1,...parts.map(([p0,p1],k)=>{const m=(p0+p1)/2;return {...b,id:`${b.id}/free${k}`,x:b.x+tx*m,z:b.z+tz*m,width:p1-p0};}));
 }
 
-export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,bays:StudioBay[],pieces:StudioPiece[],blockers:StudioBox[],inactive:StudioResolved['inactive'],familyOf:(id:string)=>StudioFamily):StudioFreeFace[]{
+/** `portals`: doors become portals (studio plots); business buildings resolve with every doorway closed. */
+export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>,bays:StudioBay[],pieces:StudioPiece[],blockers:StudioBox[],inactive:StudioResolved['inactive'],familyOf:(id:string)=>StudioFamily,portals=true):StudioFreeFace[]{
  const list=r.studio.freeOpenings??[],unified=r.studio.facade==='unified';if(!list.length&&!unified)return [];
  const faces=new Map<string,{shapeId:string;side:SculptWallSide}>();for(const o of list)faces.set(`${o.shapeId}/${o.side}`,{shapeId:o.shapeId,side:o.side});
  // Unified facades: every exposed part face is a generated wall, openings or not.
@@ -85,7 +86,7 @@ export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV
   const family=familyOf(shapeId),palette=STUDIO_FAMILIES[family],part={...r.studio.defaults.finishes,...r.studio.parts[shapeId]?.finishes},finishes={...(owned.find(b=>b.anchor.floor===0)??owned[0])?.finishes,wall:part.wall,trim:part.trim};
   const colours:FreeFacePalette={...DEFAULT_FREE_PALETTE,painted:{trim:finishes.trim?.color??palette.trim,frame:finishes.frame?.color??'#f4f0e6'},door:finishes.door?.color??palette.door};
   const paint=studioFacePaint(r,shapeId,side,frame,owned,part,paintRuleFace(r,d,shapeId,side,frame,resolution.groups));
-  const floors=[...new Set(owned.map(b=>b.anchor.floor))].sort((a,b)=>a-b),build:FreeFaceBuildOptions=OPENING_INSTANCING.enabled?{instance:{openable:r.version===6}}:{};
+  const floors=[...new Set(owned.map(b=>b.anchor.floor))].sort((a,b)=>a-b),build:FreeFaceBuildOptions=OPENING_INSTANCING.enabled?{instance:{openable:portals,interior:portals&&r.version===6}}:{};
   // Built faces are cached by their inputs (cityStudioFaceCache): opening ids do not change the geometry.
   const key=faceKey(frame.length,frame.height,face.region,resolution.groups,colours,paint,build);
   if(frame.curve){
@@ -101,7 +102,7 @@ export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV
    const geometry=faceCached(`flat/${key}`,()=>buildFreeOpeningFaceGeometry({length:frame.length,height:frame.height,region:face.region},resolution.groups,colours,paint,build));
    out.push({id,shapeId,side,origin:frame.origin,rotation:frame.rotation,base:frame.base,length:frame.length,height:frame.height,family,finishes,floors,groups:resolution.groups,geometry});
   }
-  finishFreeFace(r,d,bays,blockers,out[out.length-1]);
+  finishFreeFace(r,blockers,out[out.length-1],portals);
   addModulePieces(r,out[out.length-1],frame,resolution,owned,paint,pieces);
  }
  return out;
@@ -114,7 +115,7 @@ function faceKey(length:number,height:number,region:readonly FreeRect[]|undefine
   for(const p of g.panels)h.str(p.shape).num(p.x0).num(p.x1).num(p.y0).num(p.y1).num(p.rise).num(p.spring);
   h.num(g.mullions.length);for(const m of g.mullions)h.num(m.x).num(m.y0).num(m.y1);h.num(g.outline.length);for(const [x,y] of g.outline)h.num(x).num(y);}
  for(const style of ['stone','timber','painted'] as const)h.str(colours[style].trim).str(colours[style].frame);
- return h.str(colours.door).json(paint).num(build.instance?build.instance.openable?2:1:0).key();
+ return h.str(colours.door).json(paint).num(build.instance?(build.instance.openable?2:1)+(build.instance.interior?2:0):0).key();
 }
 /** Report id of a derived kit opening: its intent (`kit/<id>`), or the stamp a storefront opening came from. */
 const kitIntentId=(id:string)=>{if(!id.startsWith('kit/'))return id;const intent=id.slice(4),stamp=/^stamp\/(.+?)\/(opening|garage)/.exec(intent);return stamp?stamp[1]:intent;};
@@ -124,15 +125,14 @@ const kitIntentId=(id:string)=>{if(!id.startsWith('kit/'))return id;const intent
  * curved faces (like procedural frames); wall panels follow the facet. Plain blind tiles draw nothing. Finishes
  * come from the tile paint of the bay under the piece; trim paint regions tint the piece's trim.
  */
-function addModulePieces(r:StudioRecipe,face:StudioFreeFace,frame:StudioFaceFrame,resolution:{groups:FreeOpeningGroup[];modules:FreeModulePlacement[]},owned:StudioBay[],paint:FacePaint|undefined,pieces:StudioPiece[]){
+function addModulePieces(_r:StudioRecipe,face:StudioFreeFace,frame:StudioFaceFrame,resolution:{groups:FreeOpeningGroup[];modules:FreeModulePlacement[]},owned:StudioBay[],paint:FacePaint|undefined,pieces:StudioPiece[]){
  for(const m of resolution.modules){
   if(m.kind==='blind')continue;
   const xm=(m.x0+m.x1)/2,group=m.group?resolution.groups.find(g=>g.id===m.group):undefined,plane=group?resolution.groups.indexOf(group):-1;
   const pose=face.bend?bendPose(face.bend,xm,0,plane):facePose(frame,xm,0);
   const storey=owned.filter(b=>Math.abs(b.y-frame.base-m.y0)<.05),bay=(storey.length?storey:owned).map(b=>({b,d:Math.abs(faceS(frame,b.x,b.z)-xm)})).sort((a,b)=>a.d-b.d)[0]?.b;
   const finishes={...bay?.finishes},trim=trimPaintColor(paint?.trim,[m.x0,m.x1,m.y0,m.y1],false);if(trim)finishes.trim={...finishes.trim,color:trim};
-  // Openable doors (v6 portals) draw their own leaves: the kit leaf and its glass stay out.
-  const omit=r.version===6&&group?.role==='door'?['wall','door','glass']:['wall'];
-  pieces.push({id:`free/${m.id}`,module:m.module,x:pose.x,y:frame.base+m.y0,z:pose.z,rotation:pose.rotation,scale:[1,1,1],family:face.family,finishes,omit});
+  // Kit door leaves are split from the module geometry and become portals (cityStudioDoorMotion, resolveStudioInteriors).
+  pieces.push({id:`free/${m.id}`,module:m.module,x:pose.x,y:frame.base+m.y0,z:pose.z,rotation:pose.rotation,scale:[1,1,1],family:face.family,finishes,omit:['wall']});
  }
 }
