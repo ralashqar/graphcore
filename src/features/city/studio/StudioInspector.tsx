@@ -20,7 +20,8 @@ import {CityVariationDimensions} from '../CityVariationDimensions';
 import {CityVariationPanel} from '../CityVariationPanel';
 import {FREE_PRESETS,freeOpeningOutline,freePresetFor,freeModuleTrayId} from '../studioFreeOpeningTool';
 import {assembliesAt,countStudioItems,kitOpeningAt,removeStudioOpenings,selectionCrumbs,wallLabel,type StudioObjectRef,type StudioSelection,type WallRef} from '../studioSelection';
-import {LEVEL_ICONS} from './StudioPalette';
+import {LEVEL_ICONS,OutlineActions} from './StudioPalette';
+import {editableOutline,setOutlineEdgeLength,OUTLINE_EDIT} from '../../../domain/cityStudioOutlineEdit';
 import {StyleFilter,moduleStyle,styleMatches} from './studioStyles';
 import {LEVEL_COLOURS} from './StudioSceneMarks';
 import {DECOR_LABELS,TRIM_LABELS,type StudioState} from './useStudioState';
@@ -88,11 +89,12 @@ function PartSection({st,partId}:{st:StudioState;partId:string}){
   <div className="studio-inspector-actions is-icons">
    <button aria-label="Duplicate part" title="Duplicate · Ctrl D" onClick={st.duplicate}><Copy/></button>
    {v.kind!=='polygon'&&<button aria-label="Rotate part" title="Quarter turn (drag the Turn handle for free rotation)" onClick={()=>st.editPart({width:v.depth,depth:v.width})}><ArrowClockwise/></button>}
-   {v.kind==='rectangle'&&v.operation==='add'&&<button aria-label="Sculpt outline" title="Sculpt into a polygon: pull walls, bevel corners" onClick={()=>{st.chooseRail('build');st.setBuildShape('outline');}}><Polygon/></button>}
+   {v.operation==='add'&&<button aria-label="Sculpt outline" title="Edit outline: drag corners, add corners, push or pull walls" onClick={()=>{st.chooseRail('build');st.setBuildShape('outline');}}><Polygon/></button>}
    <button aria-label="Frame part" title="Frame · Z" onClick={()=>st.view('focus')}><ArrowsOut/></button>
    <button aria-label="Remove part" title="Remove · Delete" onClick={st.remove}><Trash/></button>
   </div>
   <Section title="Size"><div className="studio-precision">{([['width','Width',.25],['depth','Depth',.25],['spanFloors','Storeys',1],['startFloor','Base storey',1]] as const).filter(([key])=>v.kind!=='polygon'||key==='spanFloors'||key==='startFloor').map(([key,label,step])=><label key={key}>{label}<input aria-label={label} type="number" step={step} value={v[key]} onChange={e=>st.editPart({[key]:Number(e.target.value)})}/></label>)}</div><small className="studio-palette-hint">Or drag the Move, Height, Lift and Turn handles on the building.</small></Section>
+  {v.operation==='add'&&<OutlineSection st={st}/>}
   {v.operation==='add'&&<Section title="Style"><StyleControls st={st} part/><button onClick={()=>st.chooseRail('roof')}>Shape roof</button></Section>}
   {!!walls.length&&<Section title="Walls" count={walls.length}><div className="studio-chip-row">{walls.map(w=><button key={w.side} onClick={()=>st.select({level:'wall',partId:v.id,walls:[w]})}>{wallLabel(w)}</button>)}</div></Section>}
   <Section title="Paint"><div className="studio-inspector-actions"><button aria-label="Paint whole part" onClick={()=>st.paintPart(v.id)}><i className="studio-finish-dot" style={{background:st.color}}/>Paint whole part</button><button className="studio-text" onClick={()=>{const r=st.recipe!;st.commit({...r,studio:{...r.studio,surfaces:r.studio.surfaces.filter(x=>x.anchor.shapeId!==v.id),openings:r.studio.openings.filter(x=>x.anchor.shapeId!==v.id)}});}}>Reset local paint and openings</button></div></Section>
@@ -233,4 +235,24 @@ function RulesSection({st}:{st:StudioState}){
   </section>
   <CityPaintRulesPanel recipe={recipe} commit={r=>st.commit(r)} state={st.paintRules} partName={st.partName} finish={st.finish} channel={st.channel} floor={st.floor} setIssue={st.interaction.setIssue}/>
  </div>;
+}
+
+const SIDE_NAMES:Record<string,string>={south:'South',north:'North',east:'East',west:'West'};
+/** Numeric wall length: commits on Enter or blur as one undo step (the next wall stretches). */
+function EdgeLength({value,label,onCommit}:{value:number;label:string;onCommit:(value:number)=>void}){
+ const shown=(Math.round(value*100)/100).toString(),[text,setText]=useState(shown),[was,setWas]=useState(shown);
+ if(was!==shown){setWas(shown);setText(shown);}
+ const commit=()=>{const n=Number(text);if(Number.isFinite(n)&&Math.abs(n-value)>.004)onCommit(n);else setText(shown);};
+ return <label className="studio-outline-length"><input aria-label={label} type="number" step={OUTLINE_EDIT.grid} min={OUTLINE_EDIT.minEdge} value={text} onChange={e=>setText(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();commit();}else if(e.key==='Escape'){setText(shown);}}}/>m</label>;
+}
+/** Inspector › Part › Outline: corners, wall lengths (editable) and tidy actions (docs/city-studio-sculpt-v2.md). */
+function OutlineSection({st}:{st:StudioState}){
+ const v=st.selected;const o=v&&editableOutline(v);if(!v||!o)return null;const n=o.points.length;
+ const sel=st.interaction.outlineSelection?.partId===v.id?st.interaction.outlineSelection.indices:[];
+ return <Section title="Outline" count={n} label="Outline">
+  <small className="studio-palette-hint">{n} corners · up to {OUTLINE_EDIT.limit}{v.kind==='ellipse'?' · the first edit turns the oval facets into walls':v.kind==='rectangle'?' · the first edit turns the box into a polygon':''}{sel.length?` · ${sel.length} selected`:''}</small>
+  <div className="studio-outline-edges" role="list" aria-label="Outline walls">{o.points.map((p,i)=>{const q=o.points[(i+1)%n],length=Math.hypot(q[0]-p[0],q[1]-p[1]),side=o.ids[i];return <div role="listitem" key={side} className={sel.includes(i)&&sel.includes((i+1)%n)?'is-selected':''}><span>{i+1}. {SIDE_NAMES[side]??'Wall'}</span><EdgeLength value={length} label={`Wall ${i+1} length`} onCommit={value=>st.interaction.editOutline(x=>setOutlineEdgeLength(x,i,value),'Set wall length')}/></div>;})}</div>
+  <div className="studio-inspector-actions"><button onClick={()=>{st.chooseRail('build');st.setBuildShape('outline');}}>Edit outline</button>{v.spanFloors>1&&<button title="The storeys from here up become their own part with their own outline" onClick={st.splitAtStorey}>Split at storey {(st.floor>v.startFloor&&st.floor<v.startFloor+v.spanFloors?st.floor:v.startFloor+1)+1}</button>}</div>
+  <OutlineActions st={st} count={false}/>
+ </Section>;
 }

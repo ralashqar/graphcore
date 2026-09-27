@@ -63,6 +63,9 @@ function candidates(r:StudioRecipe,v:SculptVolume,d:CityBuildingDesignV3,notes:s
  else {planes=pair(cross,rise/span,base+rise);if(profile==='half-hip')planes.push(...pair(cross==='x'?'z':'x',rise/span,base+rise*s.shoulder+rise*(cross==='x'?h:w)/span));}
  const concave=domain.some((p,i)=>{const a=domain[(i+domain.length-1)%domain.length],b=domain[(i+1)%domain.length];return (p[0]-a[0])*(b[1]-p[1])-(p[1]-a[1])*(b[0]-p[0])<-.00001;});
  if(!concave)return planes.flatMap(plane=>{let poly=domain;for(const other of planes)if(other!==plane)poly=clip(poly,[other[0]-plane[0],other[1]-plane[1],other[2]-plane[2]]);return poly.length>=3?[{partId:v.id,base,plane,polygon:[poly]}]:[];});
+ // A single roof plane (flat/terrace) needs no clipping: detailed studio outlines (more than the 12 corners
+ // business recipes allow) keep one face instead of one face per triangle (docs/city-studio-sculpt-v2.md).
+ if(planes.length===1&&domain.length>12)return [{partId:v.id,base,plane:planes[0],polygon:[domain]}];
  // Convex triangles from the concave boundary can be clipped independently.
  // This avoids coincident-edge failures in polygon booleans at eave offsets.
  const triangles=ShapeUtils.triangulateShape(domain.map(p=>new Vector2(...p)),[]);

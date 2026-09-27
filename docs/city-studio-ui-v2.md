@@ -69,7 +69,7 @@ Placing with a stroke tool (openings, decorations, storefronts) keeps the tool a
 
 ## Build, hotbar, onboarding
 
-- **Build palette:** big block icons Box, Round, Oval, Polygon (sculpt the selected box's outline: pull walls or bays, bevel or recess corners) and Cut; Starting ideas and the Blender collection open a sheet (style filter instead of the old New York toggle); My parts. Drawing on a roof still stacks on the storey above, and a drawn block is selected with its handles (Select at Part level).
+- **Build palette:** big block icons Box, Round, Oval, Polygon (edit the selected part's outline: drag, add and remove corners, push/pull or move walls, bevel or recess corners, bay pulls; see [city-studio-sculpt-v2.md](city-studio-sculpt-v2.md)) and Cut; Starting ideas and the Blender collection open a sheet (style filter instead of the old New York toggle); My parts. Drawing on a roof still stacks on the storey above, and a drawn block is selected with its handles (Select at Part level).
 - **Hotbar:** new brush items enter slot 1; items already in a slot keep it so number keys stay stable; nine slots, remembered per device (`city-studio-hotbar-v1`). Slots show a swatch, material sample, cut shape or kit thumbnail.
 - **Onboarding:** a one-line-per-verb card on first visit (`city-studio-ui-v2-intro`; hidden in `cityStudioTest=1` runs unless `studioIntro=1`) and the shortcut sheet (`?`), generated from `STUDIO_SHORTCUTS`.
 - Clicking the world hands keyboard focus back to it, so letters, Tab and Delete act on the building rather than the last panel button.

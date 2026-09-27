@@ -236,3 +236,16 @@
  .studio-intro{font-size:11px}
 }
 @media(prefers-reduced-motion:reduce){.studio-v2 *{transition:none!important;animation:none!important}}
+/* Outline editor (docs/city-studio-sculpt-v2.md): live labels, refusals, inspector wall list and tidy actions. */
+.studio-drag-label.is-warn{background:#fff0d6f2;color:#8a4a10}
+.studio-drag-label.is-refused{background:#c8412ff2;color:#fff;font-size:12px}
+.studio-outline-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;width:100%}
+.studio-outline-actions small{flex-basis:100%;color:#667566;font-size:11px}
+.studio-outline-actions button{padding:4px 9px;border-radius:8px;font-size:11px}
+.studio-outline-edges{display:grid;gap:3px;max-height:220px;overflow-y:auto;margin:6px 0;padding-right:3px}
+.studio-outline-edges>div{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 6px;border-radius:7px;font-size:12px}
+.studio-outline-edges>div.is-selected{background:#dcebf8}
+.studio-outline-length{display:flex;align-items:center;gap:4px;font-size:11px;color:#667566}
+.studio-outline-length input{width:68px}
+.studio-v2 .studio-outline-options{display:grid;grid-template-columns:auto 1fr;gap:6px 8px;align-items:center;justify-items:start}
+.studio-v2 .studio-outline-options .studio-outline-actions{grid-column:1/-1}

@@ -21,6 +21,8 @@ import {landEntrance} from '../../../domain/cityLand';
 import type {SculptVolume} from '../../../domain/citySculpt';
 import type {StudioAnchor,StudioAssemblyKind,StudioBay,StudioChannel,StudioFurnitureKind,StudioRecipe,StudioRoom,StudioRoomFinish} from '../../../domain/cityStudioTypes';
 import {useStudioInteraction,studioOutlineHandles,type StudioPick,type StudioTool} from '../useStudioInteraction';
+import type {OutlineCornerMode,OutlineEdgeMode} from './studioHandles';
+import {outlineRemovalSummary,splitStudioPartAtStorey} from '../../../domain/cityStudioOutlineEdit';
 import {preparedStudioPlot} from '../cityStudioRegistry';
 import {prepareSculpt} from '../citySculptService';
 import {setSculptPreview,clearSculptPreview} from '../citySculptPreview';
@@ -80,7 +82,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const [roofScope,setRoofScope]=useState<'part'|'connected'>('part');
  // Freeform brush: dab size in metres, full-width band mode, building-wide bands.
  const [freeBrush,setFreeBrush]=useState<number>(1),[band,setBand]=useState(false),[bandAround,setBandAround]=useState(false);
- const [outlineCornerMode,setOutlineCornerMode]=useState<'bevel'|'recess'>('bevel'),[outlineEdgeMode,setOutlineEdgeMode]=useState<'whole'|'bay'>('whole');
+ const [outlineCornerMode,setOutlineCornerMode]=useState<OutlineCornerMode>('move'),[outlineEdgeMode,setOutlineEdgeMode]=useState<OutlineEdgeMode>('extrude');
  const [stairLayout,setStairLayout]=useState<'auto'|'straight'|'switchback'>('auto'),[stairEditing,setStairEditing]=useState<string|null>(null),[stairBusy,setStairBusy]=useState(false);
  const [interiorEditId,setInteriorEditId]=useState<string|null>(null),[floorViewMode,setFloorViewMode]=useState<StudioFloorView['mode']>('whole');
  const [interiorDoorStyle,setInteriorDoorStyle]=useState<'panelled'|'glazed'>('panelled'),[interiorDoorHinge,setInteriorDoorHinge]=useState<'left'|'right'>('left');
@@ -255,6 +257,8 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const editPart=(patch:Partial<SculptVolume>)=>{if(!recipe||!selected)return;commit(liftStudioAnchors({...recipe,volumes:recipe.volumes.map(v=>v.id===selected.id?{...v,...patch}:v)},selected.id,(patch.startFloor??selected.startFloor)-selected.startFloor));};
  const editStyle=(patch:NonNullable<typeof style>,part:boolean=!!selected)=>{if(!recipe)return;commit({...recipe,studio:{...recipe.studio,...(part&&selected?{parts:{...recipe.studio.parts,[selected.id]:{...recipe.studio.parts[selected.id],...patch}}}:{defaults:{...recipe.studio.defaults,...patch}})}});};
  const followWall=()=>{const b=interaction.hover;if(!recipe||!b)return;const nx=Math.sin(b.rotation),nz=Math.cos(b.rotation);const anchors=interaction.bays.filter(other=>other.anchor.floor===b.anchor.floor&&Math.abs(Math.cos(other.rotation-b.rotation)-1)<.001&&Math.abs((other.x-b.x)*nx+(other.z-b.z)*nz)<.03).map(other=>other.anchor);commit({...recipe,studio:{...recipe.studio,assemblies:[...recipe.studio.assemblies,{id:crypto.randomUUID(),kind:'cornice',anchors,look,variant:['synarc-kit-4','synarc-kit-5'].includes(recipe.studio.catalogue)?'nyc':undefined}]}});};
+ /** Per-storey outlines: the storeys from the current one up become their own part (Inspector › Part › Outline). */
+ const splitAtStorey=()=>{const r=latestRecipe(),v=r?.volumes.find(x=>x.id===land.selectedVolume);if(!r||!v)return;const at=floor>v.startFloor&&floor<v.startFloor+v.spanFloors?floor:v.startFloor+1,id=crypto.randomUUID(),out=splitStudioPartAtStorey(r,v.id,at,id,draft.design);if('reason' in out){interaction.setIssue(out.reason);return;}const summary=outlineRemovalSummary(out.removed,1);if(commit(out.recipe,`Split part at storey ${at+1}${summary?` · ${summary}`:''}`))land.setSelectedVolume(floor>=at?id:v.id);};
  const duplicate=()=>{if(!recipe||!selected)return;const id=crypto.randomUUID();commit({...recipe,volumes:[...recipe.volumes,{...selected,id,x:selected.x+.5,z:selected.z+.5}],studio:{...recipe.studio,parts:{...recipe.studio.parts,[id]:structuredClone(style??{})}}});land.setSelectedVolume(id);};
  const remove=()=>{if(!recipe||!selected)return;commit({...recipe,volumes:recipe.volumes.filter(v=>v.id!==selected.id)});land.setSelectedVolume(null);};
  const empty=()=>{if(!recipe)return;commit({...recipe,volumes:[],attachments:[],studio:freshStudio()});land.setSelectedVolume(null);setStarters(false);chooseRail('build');setBuildShape('block');};
@@ -342,7 +346,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const hoverOwned=!!interaction.hover&&scope!=='part'&&(channel==='wall'||channel==='trim')&&!!prepared?.freeFaces?.some(f=>f.shapeId===interaction.hover!.anchor.shapeId&&f.side===interaction.hover!.anchor.side);
  const paintTargets=effectiveTool==='surface'&&interaction.hover&&!hoverOwned&&!paintPicking?(scope==='part'?interaction.bays.filter(b=>b.anchor.shapeId===interaction.hover!.anchor.shapeId):scope==='wall'?interaction.bays.filter(b=>b.anchor.shapeId===interaction.hover!.anchor.shapeId&&b.anchor.side===interaction.hover!.anchor.side&&b.anchor.floor===interaction.hover!.anchor.floor):[interaction.hover]):[];
  const protectedStamp=recipe?.studio.stamps?.find(stamp=>stamp.id===interaction.protectedStampId)??(recipe&&interaction.hover?protectedStorefrontAtBay(recipe,interaction.hover,interaction.bays):undefined);
- const outlineHandles=useMemo(()=>selected?studioOutlineHandles(selected,draft.design.groundHeight,new Set(interaction.bays.filter(b=>b.anchor.shapeId===selected.id).map(b=>b.anchor.side)),outlineEdgeMode,interaction.bays,draft.design.upperHeight):[],[selected,draft.design.groundHeight,interaction.bays,outlineEdgeMode]);// eslint-disable-line react-hooks/exhaustive-deps
+ const outlineHandles=useMemo(()=>selected?studioOutlineHandles(selected,draft.design.groundHeight,new Set(interaction.bays.filter(b=>b.anchor.shapeId===selected.id).map(b=>b.anchor.side)),outlineEdgeMode,interaction.bays,draft.design.upperHeight,outlineCornerMode):[],[selected,draft.design.groundHeight,interaction.bays,outlineEdgeMode,outlineCornerMode]);// eslint-disable-line react-hooks/exhaustive-deps
  const selectedFreeId=selection.level==='opening'&&selection.openings.length===1&&selection.openings[0].kind==='free'?selection.openings[0].id:null;
  const freeChoice=useMemo(()=>selectedFreeId&&recipe?freeOpeningTrimChoices(recipe,draft.design,selectedFreeId,interaction.bays):null,[selectedFreeId,recipe,draft.design,interaction.bays]);
  const rhythmMarks=rhythmOpen?rhythmPanel.highlight(interaction.bays,effectiveTool==='rhythm-face'?interaction.hover:null):null;
@@ -360,9 +364,9 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
   help,setHelp,starters,setStarters,collection,setCollection,styleFilter,setStyleFilter,parts,setParts,replace,setReplace,paletteOpen,setPaletteOpen,inspectorOpen,setInspectorOpen,rhythmOpen,setRhythmOpen,variationOpen,setVariationOpen,
   paintRules,paintPicking,rhythmPanel,rhythmPicking,rhythmMarks,partName,tryAnotherLook,diceReady,removeInactive,editPart,editStyle,followWall,duplicate,remove,empty,starter,
   paintWalls,paintPart,paintTiles,eraseItems,removeFreeOpeningById,
-  chooseFloor,addInteriorStorey,toggleInteriorFloor,highestStorey,prepared,inactive,shown,selected,style,ghost,
+  chooseFloor,addInteriorStorey,toggleInteriorFloor,highestStorey,prepared,inactive,shown,selected,style,ghost,splitAtStorey,
   bursts,clearBurst,muted,ring,openRing,closeRing,previewRing,pickRing,view,walk,
-  storefrontPreview,hoverOwned,paintTargets,protectedStamp,outlineHandles,selectedFreeId,freeChoice,
+  storefrontPreview,hoverOwned,paintTargets,protectedStamp,outlineHandles,cornerSelected:(i:number)=>interaction.outlineSelection?.partId===selected?.id&&!!interaction.outlineSelection?.indices.includes(i),selectedFreeId,freeChoice,
   colors:STUDIO_COLORS};
 }
 export type StudioState=ReturnType<typeof useStudioState>;

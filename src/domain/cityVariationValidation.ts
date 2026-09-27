@@ -1,4 +1,4 @@
-import {validateSculpt} from './citySculpt.ts';
+import {SCULPT_BUSINESS_POLYGON_RULES,SCULPT_STUDIO_POLYGON_RULES,validateSculpt} from './citySculpt.ts';
 import {validateStudio} from './cityStudio.ts';
 import {usesTokyoKit} from './cityBuildingVariation.ts';
 import type {StudioRecipe} from './cityStudioTypes.ts';
@@ -24,6 +24,7 @@ export function validateVariationRecipe(value:unknown,floors:number,plotSize:24|
   if(value.version===6){const t=value.interior;if(!only(t,['partitions','doors','stairs','openFloors','roomFinishes','furniture','floorFinish','wallColor'])||!obj(t))return 'Invalid interior preset.';
    for(const [key,fields] of Object.entries({partitions:['id','floor','a','b'],doors:['id','partitionId','u','style','hinge'],stairs:['id','floor','x','z','rotation','layout','flip'],roomFinishes:['id','floor','x','z','boundaryIds','floorFinish','wallColor','openToBelow'],furniture:['id','floor','kind','x','z','rotation']}))if(t[key]!==undefined&&!list(t[key],256,item=>only(item,fields)&&obj(item)&&id(item.id)))return 'Invalid interior details.';
   }
-  const r=value as StudioRecipe;return validateStudio(r)||validateSculpt(r,floors,plotSize);
+  // Business presets keep the 12-corner polygon rule; the construction studio (allowInterior) allows larger outlines.
+  const r=value as StudioRecipe;return validateStudio(r)||validateSculpt(r,floors,plotSize,allowInterior?SCULPT_STUDIO_POLYGON_RULES:SCULPT_BUSINESS_POLYGON_RULES);
  }catch{return 'Invalid building preset.';}
 }

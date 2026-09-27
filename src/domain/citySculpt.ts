@@ -151,15 +151,30 @@ function sourcePoint(anchor:SculptWallAnchor,shapes:SculptPrimitive[]):{x:number
  if(shape.kind!=='rectangle')return null;
  return anchor.side==='north'?{x:shape.x+(u-.5)*shape.width,z:shape.z+shape.depth/2}:anchor.side==='south'?{x:shape.x+(u-.5)*shape.width,z:shape.z-shape.depth/2}:anchor.side==='east'?{x:shape.x+shape.width/2,z:shape.z+(u-.5)*shape.depth}:{x:shape.x-shape.width/2,z:shape.z+(u-.5)*shape.depth};
 }
+/** Straight-through corners of studio polygon outlines (left by inserting a corner on a wall). Footprint unions drop them. */
+function straightCorners(shapes:SculptPrimitive[]):[number,number][]{
+ const out:[number,number][]=[];
+ for(const shape of shapes){if(shape.kind!=='polygon'||shape.operation!=='add')continue;const loop=sculptPrimitiveBoundary(shape),n=loop.length;
+  for(let i=0;i<n;i++){const a=loop[(i+n-1)%n],b=loop[i],c=loop[(i+1)%n],cross=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);if(Math.abs(cross)<.05&&(b[0]-a[0])*(c[0]-b[0])+(b[1]-a[1])*(c[1]-b[1])>0)out.push(b);}}
+ return out;
+}
 export function sculptWalls(recipe:SculptRecipe,d:Pick<CityBuildingDesignV3,'floors'|'groundHeight'|'upperHeight'>):SculptWall[]{
  const walls:SculptWall[]=[];let bottom=.65;
  for(let floor=0;floor<d.floors;floor++){
   const top=bottom+(floor?(d.upperHeight??3):d.groundHeight);
   const shapes=effectiveSculptShapes(recipe,floor);
+  const splits=straightCorners(shapes);
   for(const polygon of sculptFootprint(effectiveSculptShapes(recipe,floor)))for(const [ringIndex,ring] of polygon.entries())for(let i=0;i<ring.length;i++){
-   const a=ring[i],b=ring[(i+1)%ring.length],dx=b[0]-a[0],dz=b[1]-a[1],length=Math.hypot(dx,dz);
-   if(length<.01)continue;
-   walls.push({floor,ring:ringIndex,a,b,length,nx:dz/length,nz:-dx/length,angle:Math.atan2(dz,-dx),bottom,top,source:wallSource(shapes,a,b,dz/length,-dx/length,(recipe.version===4||recipe.version===5||recipe.version===6))});
+   const a0=ring[i],b0=ring[(i+1)%ring.length],dx=b0[0]-a0[0],dz=b0[1]-a0[1],length0=Math.hypot(dx,dz);
+   if(length0<.01)continue;
+   // A straight-through corner splits the wall so each source edge keeps its own face (studio outlines only).
+   const cuts=splits.length?splits.map(p=>({t:((p[0]-a0[0])*dx+(p[1]-a0[1])*dz)/(length0*length0),d:Math.abs((p[0]-a0[0])*dz-(p[1]-a0[1])*dx)/length0})).filter(c=>c.d<.03&&c.t>.001&&c.t<.999).map(c=>c.t).sort((x,y)=>x-y):[];
+   const ts=[0,...cuts,1];
+   for(let k=0;k<ts.length-1;k++){
+    const a:[number,number]=k?[a0[0]+dx*ts[k],a0[1]+dz*ts[k]]:a0,b:[number,number]=k<ts.length-2?[a0[0]+dx*ts[k+1],a0[1]+dz*ts[k+1]]:b0,length=length0*(ts[k+1]-ts[k]);
+    if(length<.01)continue;
+    walls.push({floor,ring:ringIndex,a,b,length,nx:dz/length0,nz:-dx/length0,angle:Math.atan2(dz,-dx),bottom,top,source:wallSource(shapes,a,b,dz/length0,-dx/length0,(recipe.version===4||recipe.version===5||recipe.version===6))});
+   }
   }
   bottom=top;
  }
@@ -296,28 +311,46 @@ export function addSculptAttachment(recipe:SculptRecipe,d:Pick<CityBuildingDesig
  return {recipe,reason:result?.reason||'This placement does not fit.'};
 }
 export function sculptBuildLimit(plotSize:24|48=24){return (plotSize/2-1.5)/(plotSize/24);}
-export function validSculptPolygon(v:SculptPrimitive){
- if(v.kind!=='polygon')return true;
+/**
+ * Polygon outline limits. Business recipes (profile/preset boundary, `validateVariationRecipe` without interiors)
+ * keep the original 12 corners and reject straight-through corners; the construction studio allows up to
+ * SCULPT_STUDIO_POLYGON_LIMIT corners, including straight-through ones left by inserting a corner on a wall
+ * (docs/city-studio-sculpt-v2.md).
+ */
+export const SCULPT_BUSINESS_POLYGON_LIMIT=12,SCULPT_STUDIO_POLYGON_LIMIT=64;
+export type SculptPolygonRules={maxVertices:number;allowStraight:boolean};
+export const SCULPT_BUSINESS_POLYGON_RULES:SculptPolygonRules={maxVertices:SCULPT_BUSINESS_POLYGON_LIMIT,allowStraight:false};
+export const SCULPT_STUDIO_POLYGON_RULES:SculptPolygonRules={maxVertices:SCULPT_STUDIO_POLYGON_LIMIT,allowStraight:true};
+export type SculptPolygonProblem='shape'|'limit'|'bounds'|'area'|'short'|'fold'|'straight'|'cross';
+/** Why a polygon part is invalid (null when valid). */
+export function sculptPolygonProblem(v:SculptPrimitive,rules:SculptPolygonRules=SCULPT_STUDIO_POLYGON_RULES):SculptPolygonProblem|null{
+ if(v.kind!=='polygon')return null;
  const points=v.vertices,ids=v.edgeIds;
- if(v.operation!=='add'||!Array.isArray(points)||!Array.isArray(ids)||points.length<3||points.length>12||ids.length!==points.length||new Set(ids).size!==ids.length||ids.some(id=>!validSculptSide(id))||points.some(p=>!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)))return false;
+ if(v.operation!=='add'||!Array.isArray(points)||!Array.isArray(ids)||points.length<3||ids.length!==points.length||new Set(ids).size!==ids.length||ids.some(id=>!validSculptSide(id))||points.some(p=>!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite)))return 'shape';
+ if(points.length>rules.maxVertices)return 'limit';
  const xs=points.map(p=>p[0]),zs=points.map(p=>p[1]);
- if(Math.abs(Math.min(...xs)+v.width/2)>.02||Math.abs(Math.max(...xs)-v.width/2)>.02||Math.abs(Math.min(...zs)+v.depth/2)>.02||Math.abs(Math.max(...zs)-v.depth/2)>.02)return false;
+ if(Math.abs(Math.min(...xs)+v.width/2)>.02||Math.abs(Math.max(...xs)-v.width/2)>.02||Math.abs(Math.min(...zs)+v.depth/2)>.02||Math.abs(Math.max(...zs)-v.depth/2)>.02)return 'bounds';
  const signed=points.reduce((total,p,i)=>{const q=points[(i+1)%points.length];return total+p[0]*q[1]-q[0]*p[1];},0)/2;
- if(signed<2)return false;
+ if(signed<2)return 'area';
  const cross=(a:[number,number],b:[number,number],c:[number,number])=>(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
  const on=(a:[number,number],b:[number,number],p:[number,number])=>p[0]>=Math.min(a[0],b[0])-.001&&p[0]<=Math.max(a[0],b[0])+.001&&p[1]>=Math.min(a[1],b[1])-.001&&p[1]<=Math.max(a[1],b[1])+.001;
  for(let i=0;i<points.length;i++){
   const a=points[i],b=points[(i+1)%points.length],c=points[(i+2)%points.length];
-  if(Math.hypot(b[0]-a[0],b[1]-a[1])<.5||Math.abs(cross(a,b,c))<.05)return false;
+  if(Math.hypot(b[0]-a[0],b[1]-a[1])<.5)return 'short';
+  if(Math.abs(cross(a,b,c))<.05){if((b[0]-a[0])*(c[0]-b[0])+(b[1]-a[1])*(c[1]-b[1])<=0)return 'fold';if(!rules.allowStraight)return 'straight';}
+ }
+ for(let i=0;i<points.length;i++){
+  const a=points[i],b=points[(i+1)%points.length];
   for(let j=i+2;j<points.length;j++){
    if((j+1)%points.length===i)continue;
    const d=points[j],e=points[(j+1)%points.length],abD=cross(a,b,d),abE=cross(a,b,e),deA=cross(d,e,a),deB=cross(d,e,b);
-   if(abD*abE<-.000001&&deA*deB<-.000001||Math.abs(abD)<.000001&&on(a,b,d)||Math.abs(abE)<.000001&&on(a,b,e)||Math.abs(deA)<.000001&&on(d,e,a)||Math.abs(deB)<.000001&&on(d,e,b))return false;
+   if(abD*abE<-.000001&&deA*deB<-.000001||Math.abs(abD)<.000001&&on(a,b,d)||Math.abs(abE)<.000001&&on(a,b,e)||Math.abs(deA)<.000001&&on(d,e,a)||Math.abs(deB)<.000001&&on(d,e,b))return 'cross';
   }
  }
- return true;
+ return null;
 }
-export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=(recipe.version===4||recipe.version===5||recipe.version===6)?recipe.plotSize??24:24):string|null{
+export function validSculptPolygon(v:SculptPrimitive,rules:SculptPolygonRules=SCULPT_STUDIO_POLYGON_RULES){return sculptPolygonProblem(v,rules)===null;}
+export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=(recipe.version===4||recipe.version===5||recipe.version===6)?recipe.plotSize??24:24,polygonRules:SculptPolygonRules=SCULPT_STUDIO_POLYGON_RULES):string|null{
  if(recipe.version===5||recipe.version===6){const error=validateStudio(recipe);if(error)return error;}
  const limit=sculptBuildLimit(plotSize);
  if((recipe.version===4||recipe.version===5||recipe.version===6)){
@@ -325,7 +358,7 @@ export function validateSculpt(recipe:SculptRecipe,floors:number,plotSize:24|48=
   if(recipe.tileAnchors&&(!Array.isArray(recipe.tileAnchors)||recipe.tileAnchors.length>64||recipe.tileAnchors.some(a=>!a.id||!recipe.volumes.some(v=>v.id===a.volumeId)||!validSculptSide(a.side)||!Number.isFinite(a.u)||a.u<0||a.u>1||!Number.isInteger(a.floor)||a.floor<0||a.floor>=8||!SYNARC_KIT_PAINTS.includes(a.part))))return 'A facade tile anchor is invalid.';
   const ids=new Set<string>();
   for(const v of recipe.volumes){
-   if(!v.id||ids.has(v.id)||!['rectangle','ellipse','polygon'].includes(v.kind)||!['add','subtract'].includes(v.operation)||!validSculptPolygon(v)||
+   if(!v.id||ids.has(v.id)||!['rectangle','ellipse','polygon'].includes(v.kind)||!['add','subtract'].includes(v.operation)||!validSculptPolygon(v,polygonRules)||
     ![v.x,v.z,v.width,v.depth].every(Number.isFinite)||v.width<2||v.depth<2||
     Math.abs(v.x)+v.width/2>limit||Math.abs(v.z)+v.depth/2>limit||
     (v.wallTexture!==undefined&&!TEXTURE_IDS.includes(v.wallTexture))||

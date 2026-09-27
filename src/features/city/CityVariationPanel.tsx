@@ -5,7 +5,7 @@ import {VARIATION_LAYERS,type VariationLayer,type VariationLayerRule,type Variat
 import type {StudioRecipe,StudioBay} from '../../domain/cityStudioTypes';
 import type {CityBuildingDesignV3} from '../../domain/cityBuildingV3';
 import {studioBays,studioFloorCount,validateStudio} from '../../domain/cityStudio';
-import {validateSculpt} from '../../domain/citySculpt';
+import {SCULPT_BUSINESS_POLYGON_RULES,SCULPT_STUDIO_POLYGON_RULES,validateSculpt} from '../../domain/citySculpt';
 import {STOREFRONT_STAMPS,STAMP_MAP,unpackStorefront} from '../../domain/cityStorefrontStamps';
 import './cityVariation.css';
 
@@ -23,7 +23,7 @@ export function CityVariationPanel({recipe,design,onChange,selectedPart}:{recipe
  const bays=useMemo(()=>studioBays(expanded.recipe,design),[expanded,design]);
  const rawBays=useMemo(()=>studioBays({...recipe,studio:{...recipe.studio,openings:[]}},design),[recipe,design]);
  const active=v?.rules.find(r=>r.id===scope),settings=v?{...v.layers[layer],...active?.layers[layer]}:null;
- const commit=(r:StudioRecipe,heights?:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>)=>{const problem=validateStudio(r)||validateSculpt(r,studioFloorCount(r),r.plotSize??24);if(problem){setError(problem);return;}setError('');onChange(r,heights);};
+ const commit=(r:StudioRecipe,heights?:Pick<CityBuildingDesignV3,'groundHeight'|'upperHeight'>)=>{const problem=validateStudio(r)||validateSculpt(r,studioFloorCount(r),r.plotSize??24,design.modular?SCULPT_BUSINESS_POLYGON_RULES:SCULPT_STUDIO_POLYGON_RULES);if(problem){setError(problem);return;}setError('');onChange(r,heights);};
  const change=(patch:Partial<VariationLayerRule>)=>{const r=structuredClone(recipe),rules=r.studio.variation!;if(scope==='building')Object.assign(rules.layers[layer],patch);else {const rule=rules.rules.find(r=>r.id===scope);if(rule)rule.layers[layer]={...rule.layers[layer],...patch};}commit(r);};
  const addRule=(kind:VariationRule['scope']['kind'])=>{if(!v||v.rules.length>=32)return;const id=crypto.randomUUID(),rule:VariationRule={id,name:kind==='region'?'Painted section':kind==='part'?'Selected part':`Floors ${floor+1}–${lastFloor+1}`,scope:{kind,...(kind==='part'?{partId:chosenPart}:{}),...(kind==='floor'||kind==='region'?{fromFloor:floor,toFloor:Math.max(floor,lastFloor)}:{}),...(kind==='region'?{faces:selection.map(b=>({partId:b.anchor.shapeId,side:b.anchor.side,from:Math.max(0,b.anchor.u-b.anchorSpan/2),to:Math.min(1,b.anchor.u+b.anchorSpan/2)}))}:{})},layers:{}};commit({...recipe,studio:{...recipe.studio,variation:{...v,rules:[...v.rules,rule]}}});setScope(id);};
  const importRecipe=(text:string)=>{try{if(text.length>65536)throw Error('Preset exceeds 64 KB.');const value=JSON.parse(text);if(value.version!==1||Object.keys(value).some(k=>!['version','recipe','groundHeight','upperHeight'].includes(k))||!value.recipe||![5,6].includes(value.recipe.version))throw Error('Choose a variation preset JSON file.');const r=value.recipe as StudioRecipe;const problem=validateVariationRecipe(r,Math.max(1,...r.volumes.map(v=>v.startFloor+v.spanFloors)),recipe.plotSize??24,!design.modular);if(problem)throw Error(problem);const heights={groundHeight:value.groundHeight??design.groundHeight,upperHeight:value.upperHeight??design.upperHeight??3};if(Object.values(heights).some(n=>typeof n!=='number'||!Number.isFinite(n)||n<3||n>4.5))throw Error('Invalid storey heights.');commit(r,heights);setScope('building');}catch(e){setError(e instanceof Error?e.message:'Invalid preset.');}};

@@ -1,6 +1,7 @@
 // Left flyout palette next to the tool rail; its content follows the rail tool (docs/city-studio-ui-v2.md).
 import {AppWindow,Cube,Cylinder,DiceFive,Door,GridFour,House,Lamp,Polygon,Scissors,Stairs,Trash,Wall,X,type Icon} from '@phosphor-icons/react';
 import {upgradeStudioInterior} from '../../../domain/cityStudioInteriors';
+import {deleteOutlineVertices,editableOutline,simplifyOutline,squareOutlineCorners,straightenOutline} from '../../../domain/cityStudioOutlineEdit';
 import {setSculptPreview,clearSculptPreview} from '../citySculptPreview';
 import {CityRoofTray} from '../CityRoofTray';
 import {RoofExtras} from './RoofExtras';
@@ -46,15 +47,15 @@ const BLOCKS:readonly {id:BuildShape;label:string;icon:Icon;hint:string}[]=[
  {id:'block',label:'Box',icon:Cube,hint:'Drag on the ground or on a roof to draw a box · Alt carves'},
  {id:'round',label:'Round',icon:Cylinder,hint:'Drag to draw a round tower'},
  {id:'oval',label:'Oval',icon:Cylinder,hint:'Drag to draw an oval'},
- {id:'outline',label:'Polygon',icon:Polygon,hint:'Sculpt the selected box into a polygon: pull walls and bays, bevel or recess corners'},
+ {id:'outline',label:'Polygon',icon:Polygon,hint:'Edit the selected part outline: drag corners, click a wall to add a corner, push or pull walls. 0.25 m grid (Ctrl for free), 15° steps, lines up with other corners'},
  {id:'cut',label:'Cut',icon:Scissors,hint:'Drag to carve a cutout through parts'},
 ];
 function PaletteBuild({st}:{st:StudioState}){
- const s=st.selected,outlineOk=!!s&&s.kind!=='ellipse'&&s.operation!=='subtract';
+ const s=st.selected,outlineOk=!!s&&s.operation!=='subtract';
  return <>
   <span className="studio-caption">Blocks</span>
-  <div className="studio-blocks">{BLOCKS.map(b=>{const Glyph=b.icon,on=st.rail==='build'&&st.buildShape===b.id,disabled=b.id==='outline'&&!outlineOk;return <button key={b.id} className={`studio-block tool-${b.id}`} aria-label={b.label} aria-pressed={on} disabled={disabled} title={disabled?'Select a box part first (Select · Part), then sculpt its outline':b.hint} onClick={()=>{st.chooseRail('build');st.setBuildShape(b.id);}}><Glyph size={34} weight={on?'fill':'duotone'}/><span>{b.label}</span></button>;})}</div>
-  {st.buildShape==='outline'&&<div className="studio-outline-options"><span>Pull</span><div className="studio-segment" aria-label="Edge action"><button aria-pressed={st.outlineEdgeMode==='whole'} onClick={()=>st.setOutlineEdgeMode('whole')}>Wall</button><button aria-pressed={st.outlineEdgeMode==='bay'} onClick={()=>st.setOutlineEdgeMode('bay')}>Bay</button></div><span>Corner</span><div className="studio-segment" aria-label="Corner action"><button aria-pressed={st.outlineCornerMode==='bevel'} onClick={()=>st.setOutlineCornerMode('bevel')}>Bevel</button><button aria-pressed={st.outlineCornerMode==='recess'} onClick={()=>st.setOutlineCornerMode('recess')}>Recess</button></div></div>}
+  <div className="studio-blocks">{BLOCKS.map(b=>{const Glyph=b.icon,on=st.rail==='build'&&st.buildShape===b.id,disabled=b.id==='outline'&&!outlineOk;return <button key={b.id} className={`studio-block tool-${b.id}`} aria-label={b.label} aria-pressed={on} disabled={disabled} title={disabled?'Select a solid part first (Select · Part), then edit its outline':b.hint} onClick={()=>{st.chooseRail('build');st.setBuildShape(b.id);}}><Glyph size={34} weight={on?'fill':'duotone'}/><span>{b.label}</span></button>;})}</div>
+  {st.buildShape==='outline'&&<div className="studio-outline-options"><span>Corners</span><div className="studio-segment" aria-label="Corner action"><button aria-pressed={st.outlineCornerMode==='move'} title="Drag corners · Shift adds · double-click or Delete removes" onClick={()=>st.setOutlineCornerMode('move')}>Move</button><button aria-pressed={st.outlineCornerMode==='bevel'} onClick={()=>st.setOutlineCornerMode('bevel')}>Bevel</button><button aria-pressed={st.outlineCornerMode==='recess'} onClick={()=>st.setOutlineCornerMode('recess')}>Recess</button></div><span>Walls</span><div className="studio-segment" aria-label="Edge action"><button aria-pressed={st.outlineEdgeMode==='extrude'} title="Push or pull a wall; its neighbours stay put (Alt moves it instead)" onClick={()=>st.setOutlineEdgeMode('extrude')}>Push/pull</button><button aria-pressed={st.outlineEdgeMode==='move'} title="Move a wall; its neighbours stretch (Alt pushes/pulls instead)" onClick={()=>st.setOutlineEdgeMode('move')}>Move</button><button aria-pressed={st.outlineEdgeMode==='bay'} onClick={()=>st.setOutlineEdgeMode('bay')}>Bay</button></div>{st.selected&&st.selected.operation==='add'&&<OutlineActions st={st}/>}</div>}
   <p className="studio-palette-hint">{BLOCKS.find(b=>b.id===st.buildShape)?.hint}. Drawing over a roof stacks on the storey above.</p>
   <span className="studio-caption">Start from</span>
   <div className="studio-blocks is-ideas"><button className="studio-block" aria-label="Starting ideas" onClick={()=>{st.setCollection(false);st.setStarters(true);}}><House size={30} weight="duotone"/><span>Starting ideas</span></button><button className="studio-block" aria-label="Blender collection" onClick={()=>{st.setCollection(true);st.setStarters(true);}}><House size={30}/><span>Collection</span></button></div>
@@ -101,4 +102,15 @@ function PaletteFurnish({st}:{st:StudioState}){
  const recipe=st.recipe!;
  if(recipe.version!==6)return <div className="studio-room-tray"><span>Add interior floors to furnish this building.</span><button onClick={()=>st.commit(upgradeStudioInterior(recipe))}>Add interiors</button></div>;
  return <CityFurnitureTray kind={st.furnitureKind} placing={st.furnishTool==='interior-furniture'} items={(recipe.interior.furniture??[]).filter(item=>item.floor===st.floor)} total={recipe.interior.furniture?.length??0} selected={st.selectedFurnitureId} choose={st.chooseFurniture} select={st.selectFurniture} move={st.moveFurniture} rotate={st.rotateFurniture} duplicate={()=>st.chooseFurniture(st.furnitureKind)} remove={st.removeFurniture}/>;
+}
+
+/** Whole-outline tidy actions (also in Inspector › Part › Outline). */
+export function OutlineActions({st,count=true}:{st:StudioState;count?:boolean}){
+ const v=st.selected;if(!v||v.operation!=='add')return null;const n=editableOutline(v)?.points.length??0,picked=st.interaction.outlineSelection?.partId===v.id?st.interaction.outlineSelection.indices:[];
+ return <div className="studio-outline-actions" role="group" aria-label="Outline actions">{count&&<small>{n} corners{v.kind==='ellipse'?' (oval facets: the first edit makes them editable)':''}</small>}
+  {!!picked.length&&<button onClick={()=>{if(st.interaction.editOutline(x=>deleteOutlineVertices(x,picked),picked.length>1?`Remove ${picked.length} corners`:'Remove corner'))st.interaction.setOutlineSelection(null);}} title="Delete">{picked.length>1?`Remove ${picked.length} corners`:'Remove corner'}</button>}
+  <button onClick={()=>st.interaction.editOutline(straightenOutline,'Straighten walls')} title="Walls within 10° of the plot axes become straight and snap to the grid">Straighten</button>
+  <button onClick={()=>st.interaction.editOutline(squareOutlineCorners,'Square corners')} title="Corners within 15° of square become square">Square corners</button>
+  <button onClick={()=>st.interaction.editOutline(v=>simplifyOutline(v),'Simplify outline')} title="Remove straight-through corners and walls shorter than 0.5 m">Simplify</button>
+ </div>;
 }

@@ -13,7 +13,7 @@ export function studioStatus(st:StudioState){
  if(!recipe.volumes.length)return <span>Draw your first block inside the plot</span>;
  if(st.paintPicking)return <span>{st.paintRules.hint}</span>;
  if(tool==='rhythm-face')return <span>{st.rhythmPanel.hint}</span>;
- if(tool==='outline')return <span>Pull an exposed {st.outlineEdgeMode==='bay'?'bay':'wall'} · Drag an amber corner inward to {st.outlineCornerMode==='recess'?'recess':'bevel'} · 0.5 m snap</span>;
+ if(tool==='outline')return <span>{st.outlineCornerMode==='move'?'Drag a corner (Shift adds, double-click or Delete removes)':`Drag an amber corner inward to ${st.outlineCornerMode==='recess'?'recess':'bevel'}`} · Pull an exposed {st.outlineEdgeMode==='bay'?'bay':st.outlineEdgeMode==='move'?'wall to move it (Alt pushes/pulls)':'wall to push or pull it (Alt moves it)'} · click a wall to add a corner · {st.outlineEdgeMode==='bay'||st.outlineCornerMode!=='move'?'0.5':'0.25'} m snap, Ctrl free</span>;
  if(tool==='balcony')return <span>Brush across neighbouring upper windows</span>;
  if(tool==='stair')return <span><Stairs size={16}/> Choose a side wall · Stairs fit the floor heights</span>;
  if(tool==='roof-opening')return <span>Click a sloped roof to add · Drag one to move it · Click one to change its style</span>;
