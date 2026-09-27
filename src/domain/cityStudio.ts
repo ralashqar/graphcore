@@ -5,14 +5,14 @@ import {TEXTURE_IDS} from './cityTexturePresets.ts';
 import {sculptWalls, sculptFloorBottom, upgradeSculptVolumes, sculptFromPreset, validateSculpt, sculptBuildLimit, sculptPrimitiveBoundary, sculptSourceEdge, sculptSideLength, validSculptSide, type SculptResolved, type SculptVolume} from './citySculpt.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import type {LandDraft} from './cityLand.ts';
-import {STUDIO_MODULE_MAP,studioModuleAvailable} from './cityStudioCatalog.ts';
+import {STREET_ENTRANCE_CLEAR,STUDIO_MODULE_MAP,streetModule,studioModuleAvailable} from './cityStudioCatalog.ts';
 import {mergeStudioOpeningSpans,resolveStudioRoofDetails} from './cityStudioNyc.ts';
 import {resolveStudioStair} from './cityStudioAccess.ts';
 import {addStudioSoffits} from './cityStudioSoffits.ts';
 import {validateVariation} from './cityBuildingVariation.ts';
 import {STAMP_MAP} from './cityStorefrontStamps.ts';
 import {resolveStudioInteriors,validateStudioInterior} from './cityStudioInteriors.ts';
-import {faceS,faceX,isFrame,studioFaceFrame,validateFreeOpenings,type StudioFaceFrame} from './cityStudioFreeOpenings.ts';
+import {faceS,faceX,freeOpeningIsDoor,isFrame,studioFaceFrame,validateFreeOpenings,type StudioFaceFrame,type StudioFreeOpening} from './cityStudioFreeOpenings.ts';
 import {poolModule} from './cityStudioModuleSpec.ts';
 import {validatePaintRegions} from './cityStudioPaintRegions.ts';
 import {validatePaintRules} from './cityStudioPaintRules.ts';
@@ -154,6 +154,14 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  const error=expanded?null:validateStudio(r);if(error)throw Error(error);
  const inactive:StudioResolved['inactive']=[],bays=studioBays(r,d,inactive),pieces:StudioPiece[]=[],blockers:StudioResolved['blockers']=[],decks:StudioResolved['decks']=[],accessRoutes:NonNullable<StudioResolved['accessRoutes']>=[],roofNotes:string[]=[];
  const limit=sculptBuildLimit(r.plotSize??24),family=r.studio.defaults.family??'pastel-stucco';
+ // A bay whose middle is a doorway (kit door, the entrance, or a free opening reaching the floor): street objects in
+ // front of it must keep STREET_ENTRANCE_CLEAR either side of the centre line free.
+ const studioDoorway=(b:StudioBay)=>{
+  if(b.entrance||b.module.startsWith('door-'))return true;
+  const f=studioFaceFrame(r,d,b.anchor.shapeId,b.anchor.side);if(!isFrame(f))return false;const at=faceS(f,b.x,b.z);
+  return [...(r.studio.freeOpenings??[]),...(freeOpeningsForDoorways??[])].some(o=>o.shapeId===b.anchor.shapeId&&o.side===b.anchor.side&&freeOpeningIsDoor(o)&&Math.abs(faceX(f,o.u)-at)<o.width/2+STREET_ENTRANCE_CLEAR);
+ };
+ let freeOpeningsForDoorways:StudioFreeOpening[]|undefined;
  const add=(id:string,module:string,b:{x:number;z:number;rotation:number;finishes?:StudioPiece['finishes']},y:number,scale:[number,number,number]=[1,1,1],f:StudioFamily=family)=>{pieces.push({id,module,x:b.x,z:b.z,rotation:b.rotation,y,scale,family:f,finishes:r.studio.catalogue==='synarc-kit-5'?b.finishes??r.studio.defaults.finishes:undefined});};
  for(const b of bays){
   const module=STUDIO_MODULE_MAP.get(b.module)!,opening=module.opening,[mw,mh]=module.size;
@@ -165,6 +173,7 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
  }
  // Generated facade rhythm openings join the manual ones for this resolve only (never saved).
  const rhythm=r.studio.facadeRhythm?expandFacadeRhythm(r,d,bays):null,freeRecipe:StudioRecipe=rhythm?{...r,studio:{...r.studio,freeOpenings:[...(r.studio.freeOpenings??[]),...rhythm.freeOpenings],freeTrims:[...(r.studio.freeTrims??[]),...rhythm.freeTrims]}}:r;if(rhythm)inactive.push(...rhythm.inactive);
+ freeOpeningsForDoorways=rhythm?.freeOpenings;
  const freeFaces=resolveStudioFreeFaces(freeRecipe,d,bays,pieces,blockers,inactive,id=>studioStyle(r,id).family??family);
  // Walls drawn by generated faces: their bay tiles are gone, so tile-level fix-ups below skip them.
  const generatedWall=new Set(freeFaces.map(f=>f.id)),onGenerated=(b:StudioBay)=>generatedWall.has(`${b.anchor.shapeId}/${b.anchor.side}`);
@@ -219,7 +228,16 @@ export function resolveStudio(r:StudioRecipe,d:CityBuildingDesignV3,base:SculptR
    }
   }else for(const b of selected){
    const id=`${assembly.id}/${b.id}`,floorY=b.y;
-   if(assembly.module){
+   if(assembly.module&&streetModule(assembly.module)){
+    // Storefront street objects (docs/city-storefront-kit.md) stand on the ground storey in front of their bay; in
+    // front of a door only door-safe ones (clear of the entrance path) are allowed. Each carries walking colliders.
+    const street=streetModule(assembly.module)!,spec=STUDIO_MODULE_MAP.get(assembly.module)!;
+    if(b.anchor.floor!==0){inactive.push({id:assembly.id,reason:'Street furniture stands at street level: choose a ground-floor tile.'});continue;}
+    if(spec.size[0]>b.width+.01){inactive.push({id:assembly.id,reason:'This detail needs more wall space.'});continue;}
+    if(!street.doorSafe&&studioDoorway(b)){inactive.push({id:assembly.id,reason:'Keep the entrance clear: only door-side pieces fit in front of a door.'});continue;}
+    add(id,assembly.module,{...pos(b,0,.18),rotation:b.rotation,finishes:b.finishes},b.y,[1,1,1],b.family);
+    for(const [k,[x0,x1,z0,z1,h]] of street.obstacles.entries())blockers.push({id:`${id}/street${k}`,...pos(b,(x0+x1)/2,.18+(z0+z1)/2),y:b.y+h/2,width:x1-x0,height:h,depth:z1-z0,rotation:b.rotation});
+   }else if(assembly.module){
     const spec=STUDIO_MODULE_MAP.get(assembly.module)!;
     if(spec.size[0]>b.width+.01||spec.size[1]>b.height+.01){inactive.push({id:assembly.id,reason:'This detail needs more wall space.'});continue;}
     const y=b.y+(assembly.module.includes('pier')||assembly.module.includes('pilaster')?0:b.height-spec.size[1]);

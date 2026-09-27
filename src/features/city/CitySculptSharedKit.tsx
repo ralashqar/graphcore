@@ -23,7 +23,7 @@ import type {StudioChannel,StudioPiece} from '../../domain/cityStudioTypes';
 import type {CityPlotTransform} from '../../domain/citySculptCityBake';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
-import {KIT_MEDIUM,loadStudioKit,type StudioKitDetail} from './CityStudioMeshes';
+import {KIT_MEDIUM,loadStudioKit,usesStorefrontKit,type StudioKitDetail} from './CityStudioMeshes';
 export {KIT_MEDIUM};
 import {viewDistance} from './CityStudioDetailBatches';
 import {cityGwStats} from './cityGwStats';
@@ -100,7 +100,8 @@ export function kitBounds(plot:KitPlot):Box3{
 const blockCache=new WeakMap<KitPlot,{pack:Pack;medium:Pack|undefined;blocks:ReturnType<typeof plotBlocks>}>();
 const capacityFor=(n:number)=>Math.max(64,2**Math.ceil(Math.log2(Math.max(1,n))));
 
-const packKey=(version:number,detail:StudioKitDetail)=>`${version}/${detail}`;
+/** Kit v5 packs with the storefront pack (loaded only while some plot uses it) are keyed apart. */
+const packKey=(version:number,detail:StudioKitDetail,storefront=false)=>`${version}/${detail}${storefront&&version===5?'/storefront':''}`;
 type Force={kit?:KitLevel};
 const testForce=():Force|undefined=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('cityStudioTest')?(window as unknown as {__cityGwForce?:Force}).__cityGwForce:undefined;
 
@@ -108,16 +109,18 @@ export function CitySculptSharedKit({plots,levels}:{plots:KitPlot[];levels:Mutab
  const invalidate=useThree(s=>s.invalidate);
  const versions=useMemo(()=>[...new Set(plots.map(p=>p.version))].sort().join(','),[plots]);
  const [packs,setPacks]=useState<Map<string,Pack>>(new Map());
- useEffect(()=>{let live=true;for(const v of versions.split(',').filter(Boolean).map(Number) as (2|3|4|5)[])for(const detail of (KIT_MEDIUM?['full','medium']:['full']) as StudioKitDetail[]){const key=packKey(v,detail);if(packs.has(key))continue;loadStudioKit(v,detail).then(pack=>{if(live){setPacks(old=>new Map(old).set(key,pack));invalidate();}}).catch(()=>{});}return()=>{live=false;};},[versions]);// eslint-disable-line react-hooks/exhaustive-deps
+ const storefront=useMemo(()=>plots.some(p=>p.version===5&&usesStorefrontKit(p.pieces)),[plots]);
+ useEffect(()=>{let live=true;for(const v of versions.split(',').filter(Boolean).map(Number) as (2|3|4|5)[])for(const detail of (KIT_MEDIUM?['full','medium']:['full']) as StudioKitDetail[]){const key=packKey(v,detail,storefront);if(packs.has(key))continue;loadStudioKit(v,detail,storefront&&v===5).then(pack=>{if(live){setPacks(old=>new Map(old).set(key,pack));invalidate();}}).catch(()=>{});}return()=>{live=false;};},[versions,storefront]);// eslint-disable-line react-hooks/exhaustive-deps
  const groups=useMemo(()=>{
   const out=new Map<string,Group>();
   for(const plot of plots){
-   const pack=packs.get(packKey(plot.version,'full')),medium=packs.get(packKey(plot.version,'medium'));if(!pack)continue;
+   // Until the storefront pack arrives the plain v5 pack draws everything else.
+   const pack=packs.get(packKey(plot.version,'full',storefront))??packs.get(packKey(plot.version,'full')),medium=packs.get(packKey(plot.version,'medium',storefront))??packs.get(packKey(plot.version,'medium'));if(!pack)continue;
    let cached=blockCache.get(plot);if(!cached||cached.pack!==pack||cached.medium!==medium){cached={pack,medium,blocks:plotBlocks(plot,pack,medium)};blockCache.set(plot,cached);}
    for(const [key,s] of cached.blocks){let g=out.get(key);if(!g){g={key,geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,blocks:[],total:0};out.set(key,g);}g.blocks.push(s.block);g.total+=s.block.count;}
   }
   return [...out.values()];
- },[plots,packs]);
+ },[plots,packs,storefront]);
  useEffect(()=>{const canvas=document.querySelector('canvas');if(canvas&&import.meta.env.DEV)canvas.dataset.citySculptKit=JSON.stringify({groups:groups.length,instances:groups.reduce((n,g)=>n+g.total,0),packs:[...packs.keys()]});},[groups,packs]);
  useEffect(()=>{const live=new Set(groups.map(g=>g.key));for(const key of [...kitStats.keys()])if(!live.has(key))kitStats.delete(key);},[groups]);
 
@@ -132,7 +135,7 @@ export function CitySculptSharedKit({plots,levels}:{plots:KitPlot[];levels:Mutab
   const out=effective.current.levels,forced=!!testForce()?.kit;let changed=false;
   for(const plot of r.plots){
    const upstream=up.levels.get(plot.id),old=out.get(plot.id);let level=upstream;
-   if(upstream==='full'&&KIT_MEDIUM&&!forced&&r.packs.has(packKey(plot.version,'medium'))){
+   if(upstream==='full'&&KIT_MEDIUM&&!forced&&(r.packs.has(packKey(plot.version,'medium'))||r.packs.has(packKey(plot.version,'medium',true)))){
     const d=viewDistance(camera,size.height,plot.transform.x,plot.transform.z);
     if(d>=(old==='medium'?KIT_MEDIUM.leave:KIT_MEDIUM.enter))level='medium';
    }

@@ -2,8 +2,9 @@
 
 Headless, reproducible (reads only the shipped kit, writes kit-medium.glb + kit-medium.json next to it):
   "C:/Program Files/Blender Foundation/Blender 5.0/blender.exe" --background --factory-startup \
-      --python scripts/build-city-kit-medium.py [-- 2 3 4 5 tokyo]
-  (`tokyo` is the Tokyo pack in public/city/tokyo-kit/v1, docs/city-tokyo-kit.md; its roots are plain module ids)
+      --python scripts/build-city-kit-medium.py [-- 2 3 4 5 tokyo storefront]
+  (`tokyo` is the Tokyo pack in public/city/tokyo-kit/v1, docs/city-tokyo-kit.md, and `storefront` the storefront pack in
+  public/city/storefront-kit/v1, docs/city-storefront-kit.md; their roots are plain module ids)
 
 The kit modules are assemblies of boxes (bevelled with one segment in the New York and collection modules), six-sided
 rods and a few cones. The medium level keeps what reads from about 120 m to the proxy switch (window frames,
@@ -31,7 +32,8 @@ from mathutils import Vector, Matrix
 
 ROOT = Path(globals().get('CITY_STUDIO_ROOT', Path(__file__).resolve().parents[1]))
 ARGS = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
-VERSIONS = [a if a == 'tokyo' else int(a) for a in ARGS] or [2, 3, 4, 5, 'tokyo']
+PACKS = {'tokyo': 'public/city/tokyo-kit/v1', 'storefront': 'public/city/storefront-kit/v1'}
+VERSIONS = [a if a in PACKS else int(a) for a in ARGS] or [2, 3, 4, 5, 'tokyo', 'storefront']
 RULES = 'kit-medium-2'
 TOL = .003
 FACADE = {'window', 'door', 'trim', 'ornament', 'decoration'}
@@ -206,7 +208,7 @@ def reduce_module(root, part_spec):
 
 
 def build(version):
-    folder = ROOT / ('public/city/tokyo-kit/v1' if version == 'tokyo' else f'public/city/synarc-kit/v{version}')
+    folder = ROOT / (PACKS[version] if version in PACKS else f'public/city/synarc-kit/v{version}')
     source = folder / 'kit.glb'
     catalogue = json.loads((folder / ('catalogue.json' if (folder / 'catalogue.json').exists() else 'manifest.json')).read_text())
     specs = {p['id']: p for p in catalogue['parts']}

@@ -4,9 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync,readFileSync} from 'node:fs';
-import {STUDIO_MODULES_TOKYO,STUDIO_MODULES_V5,STUDIO_MODULE_MAP,TOKYO_MODULE_IDS,studioModuleAvailable,studioModules} from './cityStudioCatalog.ts';
+import {STUDIO_MODULES_STOREFRONT,STUDIO_MODULES_TOKYO,STUDIO_MODULES_V5,STUDIO_MODULE_MAP,TOKYO_MODULE_IDS,studioModuleAvailable,studioModules} from './cityStudioCatalog.ts';
 import {moduleOpeningSpec} from './cityStudioModuleSpec.ts';
-import {STAMP_MAP,STOREFRONT_STAMPS,STUDIO_STOREFRONT_STAMPS,TOKYO_STOREFRONT_STAMPS} from './cityStorefrontStamps.ts';
+import {STAMP_MAP,STOREFRONT_KIT_STAMPS,STOREFRONT_STAMPS,STUDIO_STOREFRONT_STAMPS,TOKYO_STOREFRONT_STAMPS} from './cityStorefrontStamps.ts';
 import {previewStorefront,validateModularBuilding,variationChoices} from './cityBuildingVariation.ts';
 import {validateVariationRecipe} from './cityVariationValidation.ts';
 import {VARIATION_LAYERS} from './cityVariationTypes.ts';
@@ -15,7 +15,7 @@ import {newDesign} from './cityBuildingV3.ts';
 import {freshStudio,studioBays,studioDraft,validateStudio} from './cityStudio.ts';
 import {resolveSculpt} from './citySculpt.ts';
 import {RHYTHM_STYLE_IDS,expandFacadeRhythm,rhythmLayerPreset} from './cityStudioFacadeRhythm.ts';
-import {STUDIO_EXAMPLES,TOKYO_EXAMPLE_START,studioExample} from './cityStudioExamples.ts';
+import {STOREFRONT_EXAMPLE_START,STUDIO_EXAMPLES,TOKYO_EXAMPLE_START,studioExample} from './cityStudioExamples.ts';
 import {TOKYO_PRESETS} from './cityTokyoPresets.ts';
 import {createLandWorld,initialLandDraft} from './cityLand.ts';
 import type {StudioRecipe} from './cityStudioTypes.ts';
@@ -83,7 +83,7 @@ test('Tokyo kit: the medium level matches the kit',()=>{
 });
 
 test('Tokyo modules join the studio v5 catalogue only',()=>{
- assert.equal(studioModules(5).length,STUDIO_MODULES_V5.length+STUDIO_MODULES_TOKYO.length);
+ assert.equal(studioModules(5).length,STUDIO_MODULES_V5.length+STUDIO_MODULES_TOKYO.length+STUDIO_MODULES_STOREFRONT.length);
  for(const part of STUDIO_MODULES_TOKYO){
   assert.ok(STUDIO_MODULE_MAP.has(part.id)&&studioModuleAvailable('synarc-kit-5',part.id));
   assert.ok(!STUDIO_MODULES_V5.some(p=>p.id===part.id),`${part.id} collides with kit v5`);
@@ -98,7 +98,7 @@ test('Tokyo modules join the studio v5 catalogue only',()=>{
  }
  for(const layer of VARIATION_LAYERS)assert.ok(variationChoices(layer).every(c=>!TOKYO_MODULE_IDS.has(c.id)&&!c.id.startsWith('stamp-tokyo-')),layer);
  assert.ok(STOREFRONT_STAMPS.every(s=>!s.id.startsWith('stamp-tokyo-')));
- assert.equal(STUDIO_STOREFRONT_STAMPS.length,STOREFRONT_STAMPS.length+TOKYO_STOREFRONT_STAMPS.length);
+ assert.equal(STUDIO_STOREFRONT_STAMPS.length,STOREFRONT_STAMPS.length+TOKYO_STOREFRONT_STAMPS.length+STOREFRONT_KIT_STAMPS.length);
  for(const s of TOKYO_STOREFRONT_STAMPS){assert.ok(STAMP_MAP.has(s.id));for(const m of [s.window,s.door,s.canopy,s.fascia])if(m)assert.ok(TOKYO_MODULE_IDS.has(m),`${s.id}: ${m}`);}
 });
 
@@ -150,7 +150,7 @@ test('Tokyo rhythm style: kit pieces on the v5 kit, its own shapes elsewhere',()
 });
 
 test('Tokyo starting ideas resolve completely on both plot sizes',()=>{
- assert.equal(STUDIO_EXAMPLES.length-TOKYO_EXAMPLE_START,TOKYO_PRESETS.length);
+ assert.equal(STOREFRONT_EXAMPLE_START-TOKYO_EXAMPLE_START,TOKYO_PRESETS.length);
  const plot=createLandWorld([],72,24).plots[0];
  for(const size of [24,48] as const)for(let i=0;i<TOKYO_PRESETS.length;i++){
   const draft=studioExample(initialLandDraft(plot),TOKYO_EXAMPLE_START+i,size),r=draft.sculpt as StudioRecipe,name=TOKYO_PRESETS[i].name;

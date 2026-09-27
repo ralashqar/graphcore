@@ -1,7 +1,7 @@
-import {STUDIO_MODULE_MAP,STUDIO_MODULES_V5,TOKYO_MODULE_IDS} from './cityStudioCatalog.ts';
+import {STOREFRONT_MODULE_IDS,STUDIO_MODULE_MAP,STUDIO_MODULES_V5,TOKYO_MODULE_IDS,streetModule} from './cityStudioCatalog.ts';
 import {validSculptSide} from './citySculpt.ts';
 import {studioBays} from './cityStudio.ts';
-import {STAMP_MAP,STOREFRONT_STAMPS,TOKYO_STAMP_IDS,faceMatches} from './cityStorefrontStamps.ts';
+import {STAMP_MAP,STOREFRONT_KIT_STAMP_IDS,STOREFRONT_STAMPS,TOKYO_STAMP_IDS,faceMatches} from './cityStorefrontStamps.ts';
 import {VARIATION_LAYERS,type BuildingVariation,type VariationLayer,type VariationLayerRule,type VariationRule,type VariationDiagnostic,type ModularBuilding} from './cityVariationTypes.ts';
 import type {StudioRecipe,StudioBay,StudioAnchor} from './cityStudioTypes.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
@@ -55,9 +55,19 @@ export function expandBuildingVariation(input:StudioRecipe,d:CityBuildingDesignV
  const placeStamp=(stampId:string,run:StudioBay[],id:string)=>{
   const stamp=STAMP_MAP.get(stampId)!;
   let consumed=0;
+  // Storefront-pack stamps pick seeded alternatives per placed stamp (its id), so repeated shops differ.
+  const alt=(key:string,base:string|undefined,list:string[]|undefined)=>base&&list?.length?[base,...list][Math.floor(variationHash(`${id}/${key}`)*(list.length+1))]:base;
+  const shopWindow=alt('window',stamp.window,stamp.alternates?.window)!,canopy=alt('canopy',stamp.canopy,stamp.alternates?.canopy),doorBay=Math.min(stamp.doorBay??0,run.length-1);
   if(stamp.window==='wall-nyc-garage'&&run.length>=2){r.studio.openings.push({id:id+'/garage',anchor:anchorOf(run.slice(0,2)),module:stamp.window,span:2});consumed=2;}
-  for(let i=consumed;i<run.length;i++)r.studio.openings.push({id:id+'/opening/'+i,anchor:run[i].anchor,module:i===0&&stamp.door?stamp.door:stamp.window==='wall-nyc-garage'?'window-collection-bistro':stamp.window});
-  for(const [name,module] of [['canopy',stamp.canopy],['fascia',stamp.fascia]] as const)if(module)r.studio.assemblies.push({id:id+'/'+name,kind:name==='canopy'?'canopy':'ornament',look:'ornate',module,anchors:run.map(b=>b.anchor)});
+  for(let i=consumed;i<run.length;i++)r.studio.openings.push({id:id+'/opening/'+i,anchor:run[i].anchor,module:i===doorBay&&stamp.door?stamp.door:stamp.window==='wall-nyc-garage'?'window-collection-bistro':shopWindow});
+  for(const [name,module] of [['canopy',canopy],['fascia',stamp.fascia],['overhead',stamp.overhead]] as const)if(module)r.studio.assemblies.push({id:id+'/'+name,kind:name==='canopy'?'canopy':'ornament',look:'ornate',module,anchors:run.map(b=>b.anchor)});
+  if(stamp.sign)r.studio.assemblies.push({id:id+'/sign',kind:'ornament',look:'ornate',module:stamp.sign,anchors:[run.at(-1)!.anchor]});
+  // Abstract lettering once per shop, on the bay beside the door (a one-bay shop: its only bay).
+  const letters=alt('letters',stamp.letters,stamp.alternates?.letters),lettersBay=run.length<2||!stamp.door?0:doorBay===0?1:doorBay-1;
+  if(letters)r.studio.assemblies.push({id:id+'/letters',kind:'ornament',look:'ornate',module:letters,anchors:[run[lettersBay].anchor]});
+  // Street objects stand on the ground in front of their bay; the door's bay only takes door-safe ones.
+  stamp.dressing?.forEach((base,i)=>{if(!base||!run[i])return;const door=i===doorBay&&!!stamp.door,pool=(stamp.alternates?.dressing??[]).filter(m=>!door||streetModule(m)?.doorSafe);
+   const module=alt(`dressing/${i}`,base,pool)!;r.studio.assemblies.push({id:`${id}/dressing/${i}`,kind:'ornament',look:'ornate',module,anchors:[run[i].anchor]});});
   run.forEach(b=>occupied.add(b.id));
  };
  for(const s of stamps){const stamp=STAMP_MAP.get(s.stamp),start=bays.filter(b=>faceMatches(b.anchor,s.anchor)).sort((a,b)=>Math.abs(a.anchor.u-s.anchor.u)-Math.abs(b.anchor.u-s.anchor.u))[0],run=stamp&&start?slots(start,stamp.span,bays):[];
@@ -114,14 +124,16 @@ export function validateModularBuilding(value:unknown):value is ModularBuilding{
  if(!object(value)||!keys(value,['version','template','recipe'])||value.version!==1||typeof value.template!=='string'||value.template.length>80||!object(value.recipe))return false;
  const r=value.recipe;if(!keys(r,['version','plotSize','volumes','attachments','studio'])||r.version!==5||r.plotSize!==24||!Array.isArray(r.volumes)||r.volumes.length>32||!Array.isArray(r.attachments)||r.attachments.length||!object(r.studio)||JSON.stringify(value).length>65536)return false;
  const s=r.studio;if(!keys(s,['catalogue','roofRevision','assemblyRevision','defaults','parts','surfaces','openings','assemblies','roofDetails','variation','stamps'])||s.catalogue!=='synarc-kit-5'||!s.variation||validateVariation(s.variation))return false;
- return !usesTokyoKit(s);
+ return !usesStudioOnlyKit(s);
 }
-/** The Tokyo pack (modules and stamps) is local to the construction studio: business recipes never reference it. */
-export function usesTokyoKit(s:Record<string,unknown>){
- const local=(id:unknown)=>typeof id==='string'&&(TOKYO_MODULE_IDS.has(id)||TOKYO_STAMP_IDS.has(id)),list=(v:unknown)=>Array.isArray(v)?v.filter(object):[];
+/** Studio-only packs (Tokyo, storefront: modules and stamps) are local to the construction studio: business recipes never reference them. */
+export function usesStudioOnlyKit(s:Record<string,unknown>){
+ const local=(id:unknown)=>typeof id==='string'&&(TOKYO_MODULE_IDS.has(id)||TOKYO_STAMP_IDS.has(id)||STOREFRONT_MODULE_IDS.has(id)||STOREFRONT_KIT_STAMP_IDS.has(id)),list=(v:unknown)=>Array.isArray(v)?v.filter(object):[];
  const styles=[s.defaults,...(object(s.parts)?Object.values(s.parts):[])].filter(object);
  return styles.some(x=>local(x.window))||list(s.openings).some(o=>local(o.module))||list(s.assemblies).some(a=>local(a.module))||list(s.roofDetails).some(d=>local(d.module))||list(s.stamps).some(x=>local(x.stamp));
 }
+/** Former name, kept for existing callers: covers every studio-only pack. */
+export const usesTokyoKit=usesStudioOnlyKit;
 export function enableBuildingVariation(input:StudioRecipe){const r=structuredClone(input);r.studio.catalogue='synarc-kit-5';r.studio.variation??=newVariation(r.studio.defaults.window);return r;}
 
 /** Atomic stamp replacement. Preview first; manual individual tiles and the entrance are never removed. */
@@ -132,8 +144,8 @@ export function previewStorefront(input:StudioRecipe,d:CityBuildingDesignV3,stam
  if(!stamp||run.length!==stamp.span||!continuous(run,stamp.span*2))return {recipe:r,run,reason:'Not enough adjacent bays for this storefront.',replaced:0};
  const old=r.studio.stamps??[];
  const overlaps=(s:typeof old[number])=>{const spec=STAMP_MAP.get(s.stamp),first=bays.filter(b=>faceMatches(b.anchor,s.anchor)).sort((a,b)=>Math.abs(a.anchor.u-s.anchor.u)-Math.abs(b.anchor.u-s.anchor.u))[0];return !!spec&&!!first&&slots(first,spec.span,bays).some(b=>run.some(x=>x.id===b.id));};
- r.studio.stamps=old.filter(s=>!overlaps(s));const id='storefront-preview';r.studio.stamps.push({id,stamp:stampId,anchor});
+ // The final id is known up front: seeded storefront alternatives (cityStorefrontStamps) follow it, so the preview matches.
+ r.studio.stamps=old.filter(s=>!overlaps(s));const id=`storefront-${Math.round(variationHash(JSON.stringify([stampId,anchor,old]))*1e12)}`;r.studio.stamps.push({id,stamp:stampId,anchor});
  const result=expandBuildingVariation(r,d),reason=result.diagnostics.find(d=>d.id===id)?.reason??null;
- r.studio.stamps.at(-1)!.id=`storefront-${Math.round(variationHash(JSON.stringify([stampId,anchor,old]))*1e12)}`;
  return {recipe:r,run,reason,replaced:old.length-r.studio.stamps.length+1};
 }

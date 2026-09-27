@@ -1,0 +1,5267 @@
+{
+ "version": 1,
+ "id": "storefront-kit-1",
+ "extends": "synarc-kit-5",
+ "families": [
+  "warm-brick",
+  "pastel-stucco",
+  "pale-limestone"
+ ],
+ "parts": [
+  {
+   "id": "window-shop-victorian-books",
+   "category": "window",
+   "label": "Victorian bookshop window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.74,
+    "bottom": 0.55,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-boulangerie",
+   "category": "window",
+   "label": "Boulangerie window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.74,
+    "bottom": 0.6,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-castiron-deli",
+   "category": "window",
+   "label": "Cast-iron deli window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.84,
+    "bottom": 0.4,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-castiron-bodega",
+   "category": "window",
+   "label": "Cast-iron bodega window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.84,
+    "bottom": 0.4,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-stone-arcade",
+   "category": "window",
+   "label": "Stone arcade shop window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.7,
+    "bottom": 0.25,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-steel-mannequins",
+   "category": "window",
+   "label": "Black steel boutique window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.9,
+    "bottom": 0.12,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-aluminium",
+   "category": "window",
+   "label": "Aluminium convenience window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.86,
+    "bottom": 0.3,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-tiled-samples",
+   "category": "window",
+   "label": "Tiled window with food samples",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.6,
+    "bottom": 0.8,
+    "top": 2.25
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "tokyo",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-bay",
+   "category": "window",
+   "label": "Canted bay shop window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.7,
+    "bottom": 0.55,
+    "top": 2.35
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-stall-open",
+   "category": "window",
+   "label": "Open stall counter, shutter up",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.86,
+    "bottom": 0.05,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-kiosk-hatch",
+   "category": "window",
+   "label": "Kiosk serving hatch",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.2,
+    "bottom": 0.95,
+    "top": 2.05
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-florist",
+   "category": "window",
+   "label": "Florist window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.74,
+    "bottom": 0.45,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-pharmacy",
+   "category": "window",
+   "label": "Pharmacy window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.8,
+    "bottom": 0.5,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-laundromat",
+   "category": "window",
+   "label": "Laundromat window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.86,
+    "bottom": 0.35,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-barber",
+   "category": "window",
+   "label": "Barber window with pole",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.74,
+    "bottom": 0.45,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-butcher",
+   "category": "window",
+   "label": "Butcher window, tiled riser",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.8,
+    "bottom": 0.75,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-gelato",
+   "category": "window",
+   "label": "Gelateria counter window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.8,
+    "bottom": 0.35,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-trattoria",
+   "category": "window",
+   "label": "Trattoria window, caf\u00e9 curtain",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.7,
+    "bottom": 0.6,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-pub",
+   "category": "window",
+   "label": "Pub window, etched lights",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.72,
+    "bottom": 0.7,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-shutter-down",
+   "category": "window",
+   "label": "Rolled-down shop shutter",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.86,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-alimentari",
+   "category": "window",
+   "label": "Alimentari window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.74,
+    "bottom": 0.5,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "window-shop-boutique-arched",
+   "category": "window",
+   "label": "Arched boutique window",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.6,
+    "bottom": 0.4,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-victorian",
+   "category": "door",
+   "label": "Victorian shop door, side lights",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.0,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-castiron",
+   "category": "door",
+   "label": "Cast-iron double shop door",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.3,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-steel-pivot",
+   "category": "door",
+   "label": "Steel pivot door",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.3,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-aluminium",
+   "category": "door",
+   "label": "Aluminium double door",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.7,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-cafe-folding",
+   "category": "door",
+   "label": "Caf\u00e9 with folding doors open",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.8,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-recessed",
+   "category": "door",
+   "label": "Recessed splayed entrance",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.84,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-corner-splay",
+   "category": "door",
+   "label": "Splayed corner door",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.84,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-stone-arch",
+   "category": "door",
+   "label": "Stone arched shop door",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.4,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-pub",
+   "category": "door",
+   "label": "Pub door, panelled",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.05,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-tiled-sliding",
+   "category": "door",
+   "label": "Tiled sliding door, strip curtain",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.6,
+    "bottom": 0,
+    "top": 2.25
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "tokyo",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-stall-open",
+   "category": "door",
+   "label": "Open stall front, shutter up",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.86,
+    "bottom": 0,
+    "top": 2.45
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "door-shop-bead-curtain",
+   "category": "door",
+   "label": "Bar door with fly curtain",
+   "size": [
+    2,
+    3,
+    0.3
+   ],
+   "opening": {
+    "width": 1.0,
+    "bottom": 0,
+    "top": 2.35
+   },
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "opening",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     3,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-striped",
+   "category": "trim",
+   "label": "Striped awning",
+   "size": [
+    2,
+    1.05,
+    1.22
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.05,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.05,
+     1.22
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-scalloped",
+   "category": "trim",
+   "label": "Scalloped awning",
+   "size": [
+    2,
+    1.05,
+    1.12
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.05,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.05,
+     1.12
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-retract-open",
+   "category": "trim",
+   "label": "Retractable awning, open",
+   "size": [
+    2,
+    1.05,
+    1.48
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.05,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.05,
+     1.48
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-retract-closed",
+   "category": "trim",
+   "label": "Retractable awning, closed",
+   "size": [
+    2,
+    0.72,
+    0.22
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.72,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.72,
+     0.22
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-dome",
+   "category": "trim",
+   "label": "Dome awning",
+   "size": [
+    2,
+    1.22,
+    0.58
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.22,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.22,
+     0.58
+    ]
+   }
+  },
+  {
+   "id": "shop-canopy-glass",
+   "category": "trim",
+   "label": "Glass canopy",
+   "size": [
+    2,
+    1.1,
+    1.18
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.1,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.1,
+     1.18
+    ]
+   }
+  },
+  {
+   "id": "shop-awning-boxed",
+   "category": "trim",
+   "label": "Boxed fabric awning",
+   "size": [
+    2,
+    1.1,
+    1.06
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.1,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.1,
+     1.06
+    ]
+   }
+  },
+  {
+   "id": "shop-fascia-timber",
+   "category": "trim",
+   "label": "Timber fascia with cornice",
+   "size": [
+    2,
+    0.55,
+    0.31
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.55,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.55,
+     0.31
+    ]
+   }
+  },
+  {
+   "id": "shop-fascia-steel",
+   "category": "trim",
+   "label": "Steel fascia band",
+   "size": [
+    2,
+    0.42,
+    0.12
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.42,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.42,
+     0.12
+    ]
+   }
+  },
+  {
+   "id": "shop-fascia-gilt",
+   "category": "trim",
+   "label": "Painted fascia, gilt line",
+   "size": [
+    2,
+    0.55,
+    0.17
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.55,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.55,
+     0.17
+    ]
+   }
+  },
+  {
+   "id": "shop-fascia-dark",
+   "category": "trim",
+   "label": "Dark fascia board",
+   "size": [
+    2,
+    0.5,
+    0.12
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.5,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.5,
+     0.12
+    ]
+   }
+  },
+  {
+   "id": "shop-fascia-lightbox",
+   "category": "trim",
+   "label": "Light-box fascia",
+   "size": [
+    2,
+    0.52,
+    0.25
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.52,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.52,
+     0.25
+    ]
+   }
+  },
+  {
+   "id": "shop-letters-raised",
+   "category": "trim",
+   "label": "Raised letters (abstract)",
+   "size": [
+    2,
+    0.7,
+    0.16
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "modern",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.7,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.7,
+     0.16
+    ]
+   }
+  },
+  {
+   "id": "shop-letters-gilt",
+   "category": "trim",
+   "label": "Gilt letters (abstract)",
+   "size": [
+    2,
+    0.7,
+    0.16
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.7,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.7,
+     0.16
+    ]
+   }
+  },
+  {
+   "id": "shop-letters-gilt-short",
+   "category": "trim",
+   "label": "Short gilt letters (abstract)",
+   "size": [
+    2,
+    0.7,
+    0.16
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.7,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.7,
+     0.16
+    ]
+   }
+  },
+  {
+   "id": "shop-neon-script",
+   "category": "trim",
+   "label": "Neon script (abstract)",
+   "size": [
+    2,
+    0.7,
+    0.17
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.7,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.7,
+     0.17
+    ]
+   }
+  },
+  {
+   "id": "shop-letters-script",
+   "category": "trim",
+   "label": "Painted script (abstract)",
+   "size": [
+    2,
+    0.7,
+    0.16
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.7,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.7,
+     0.16
+    ]
+   }
+  },
+  {
+   "id": "shop-sign-blade-bracket",
+   "category": "trim",
+   "label": "Hanging sign on bracket",
+   "size": [
+    2,
+    1.3,
+    0.86
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.3,
+     0.86
+    ]
+   }
+  },
+  {
+   "id": "shop-sign-blade-neon",
+   "category": "trim",
+   "label": "Neon blade sign",
+   "size": [
+    2,
+    1.4,
+    0.55
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.4,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.4,
+     0.55
+    ]
+   }
+  },
+  {
+   "id": "shop-sign-cross",
+   "category": "trim",
+   "label": "Projecting cross sign",
+   "size": [
+    2,
+    1.0,
+    0.8
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.0,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  {
+   "id": "shop-sign-barber-pole",
+   "category": "trim",
+   "label": "Barber pole",
+   "size": [
+    2,
+    1.2,
+    0.3
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.2,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.2,
+     0.3
+    ]
+   }
+  },
+  {
+   "id": "shop-string-lights",
+   "category": "trim",
+   "label": "String lights",
+   "size": [
+    2,
+    0.96,
+    0.6
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [
+    "x"
+   ],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "italian",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.96,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.96,
+     0.6
+    ]
+   }
+  },
+  {
+   "id": "shop-hanging-baskets",
+   "category": "trim",
+   "label": "Hanging baskets",
+   "size": [
+    2,
+    1.2,
+    0.62
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.2,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.2,
+     0.62
+    ]
+   }
+  },
+  {
+   "id": "shop-lanterns-pair",
+   "category": "trim",
+   "label": "Wall lanterns, pair",
+   "size": [
+    2,
+    1.1,
+    0.4
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.1,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.1,
+     0.4
+    ]
+   }
+  },
+  {
+   "id": "street-aboard",
+   "category": "trim",
+   "label": "A-frame sidewalk board",
+   "size": [
+    2,
+    1.0,
+    0.8
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.0,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.0,
+     0.8
+    ]
+   },
+   "obstacles": [
+    [
+     0.6,
+     0.96,
+     0.15,
+     0.75,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-menu-stand",
+   "category": "trim",
+   "label": "Menu stand",
+   "size": [
+    2,
+    1.46,
+    0.6
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.46,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.46,
+     0.6
+    ]
+   },
+   "obstacles": [
+    [
+     -0.98,
+     -0.58,
+     0.15,
+     0.55,
+     1.4
+    ]
+   ]
+  },
+  {
+   "id": "street-cafe-set",
+   "category": "trim",
+   "label": "Caf\u00e9 table and chairs",
+   "size": [
+    2,
+    0.9,
+    0.95
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.9,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.9,
+     0.95
+    ]
+   },
+   "obstacles": [
+    [
+     -0.8,
+     0.8,
+     0.3,
+     0.9,
+     0.9
+    ]
+   ]
+  },
+  {
+   "id": "street-cafe-parasol",
+   "category": "trim",
+   "label": "Caf\u00e9 table with parasol",
+   "size": [
+    2,
+    2.4,
+    1.66
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     2.4,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     2.4,
+     1.66
+    ]
+   },
+   "obstacles": [
+    [
+     -0.82,
+     0.82,
+     0.5,
+     1.2,
+     0.9
+    ]
+   ]
+  },
+  {
+   "id": "street-bistro-row",
+   "category": "trim",
+   "label": "Bistro tables facing the street",
+   "size": [
+    2,
+    0.9,
+    1.1
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.9,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.9,
+     1.1
+    ]
+   },
+   "obstacles": [
+    [
+     -0.95,
+     0.95,
+     0.12,
+     1.05,
+     0.9
+    ]
+   ]
+  },
+  {
+   "id": "street-planters-pair",
+   "category": "trim",
+   "label": "Planters flanking the door",
+   "size": [
+    2,
+    1.2,
+    0.56
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.2,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.2,
+     0.56
+    ]
+   },
+   "obstacles": [
+    [
+     -0.97,
+     -0.59,
+     0.16,
+     0.54,
+     0.5
+    ],
+    [
+     0.59,
+     0.97,
+     0.16,
+     0.54,
+     0.5
+    ]
+   ]
+  },
+  {
+   "id": "street-planter-trough",
+   "category": "trim",
+   "label": "Planter trough",
+   "size": [
+    2,
+    0.8,
+    0.56
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.8,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.8,
+     0.56
+    ]
+   },
+   "obstacles": [
+    [
+     -0.87,
+     0.87,
+     0.1,
+     0.54,
+     0.5
+    ]
+   ]
+  },
+  {
+   "id": "street-flower-buckets",
+   "category": "trim",
+   "label": "Flower bucket stand",
+   "size": [
+    2,
+    1.3,
+    1.02
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.3,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.3,
+     1.02
+    ]
+   },
+   "obstacles": [
+    [
+     -0.82,
+     0.82,
+     0.2,
+     1.0,
+     1.1
+    ]
+   ]
+  },
+  {
+   "id": "street-flower-cart",
+   "category": "trim",
+   "label": "Flower cart",
+   "size": [
+    2,
+    1.05,
+    1.06
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.05,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.05,
+     1.06
+    ]
+   },
+   "obstacles": [
+    [
+     -0.75,
+     0.8,
+     0.2,
+     1.0,
+     1.0
+    ]
+   ]
+  },
+  {
+   "id": "street-fruit-trestle",
+   "category": "trim",
+   "label": "Fruit crates on trestles",
+   "size": [
+    2,
+    1.0,
+    0.87
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.0,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.0,
+     0.87
+    ]
+   },
+   "obstacles": [
+    [
+     -0.9,
+     0.9,
+     0.15,
+     0.85,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-veg-crates",
+   "category": "trim",
+   "label": "Tilted vegetable crates",
+   "size": [
+    2,
+    0.5,
+    0.82
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.5,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.5,
+     0.82
+    ]
+   },
+   "obstacles": [
+    [
+     -0.88,
+     0.88,
+     0.15,
+     0.85,
+     0.5
+    ]
+   ]
+  },
+  {
+   "id": "street-newspaper-rack",
+   "category": "trim",
+   "label": "Newspaper rack",
+   "size": [
+    2,
+    1.06,
+    0.5
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.06,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.06,
+     0.5
+    ]
+   },
+   "obstacles": [
+    [
+     0.56,
+     1.0,
+     0.15,
+     0.5,
+     1.0
+    ]
+   ]
+  },
+  {
+   "id": "street-newsboxes",
+   "category": "trim",
+   "label": "Street news boxes",
+   "size": [
+    2,
+    0.96,
+    0.52
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "new-york",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.96,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.96,
+     0.52
+    ]
+   },
+   "obstacles": [
+    [
+     0.56,
+     0.98,
+     0.15,
+     0.52,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-bike-rack",
+   "category": "trim",
+   "label": "Bike rack with bicycle",
+   "size": [
+    2,
+    0.95,
+    1.1
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.95,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.95,
+     1.1
+    ]
+   },
+   "obstacles": [
+    [
+     -0.9,
+     0.9,
+     0.3,
+     1.0,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-bicycle",
+   "category": "trim",
+   "label": "Parked bicycle with basket",
+   "size": [
+    2,
+    0.95,
+    0.6
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "tokyo",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.95,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.95,
+     0.6
+    ]
+   },
+   "obstacles": [
+    [
+     -0.88,
+     0.88,
+     0.2,
+     0.44,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-bench",
+   "category": "trim",
+   "label": "Street bench",
+   "size": [
+    2,
+    0.86,
+    0.7
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.86,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.86,
+     0.7
+    ]
+   },
+   "obstacles": [
+    [
+     -0.9,
+     0.9,
+     0.2,
+     0.68,
+     0.85
+    ]
+   ]
+  },
+  {
+   "id": "street-bin",
+   "category": "trim",
+   "label": "Litter bin",
+   "size": [
+    2,
+    0.9,
+    0.56
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.9,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.9,
+     0.56
+    ]
+   },
+   "obstacles": [
+    [
+     0.58,
+     0.98,
+     0.1,
+     0.54,
+     0.9
+    ]
+   ]
+  },
+  {
+   "id": "street-bollards",
+   "category": "trim",
+   "label": "Bollards, pair",
+   "size": [
+    2,
+    0.96,
+    0.46
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "modern",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.96,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.96,
+     0.46
+    ]
+   },
+   "obstacles": [
+    [
+     -0.92,
+     -0.72,
+     0.25,
+     0.45,
+     0.95
+    ],
+    [
+     0.72,
+     0.92,
+     0.25,
+     0.45,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-milk-crates",
+   "category": "trim",
+   "label": "Stacked delivery crates",
+   "size": [
+    2,
+    0.96,
+    0.56
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "new-york",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.96,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.96,
+     0.56
+    ]
+   },
+   "obstacles": [
+    [
+     0.6,
+     1.0,
+     0.15,
+     0.55,
+     0.95
+    ]
+   ]
+  },
+  {
+   "id": "street-delivery-cart",
+   "category": "trim",
+   "label": "Hand truck with boxes",
+   "size": [
+    2,
+    1.28,
+    0.78
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "new-york",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.28,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.28,
+     0.78
+    ]
+   },
+   "obstacles": [
+    [
+     0.56,
+     0.98,
+     0.2,
+     0.75,
+     1.25
+    ]
+   ]
+  },
+  {
+   "id": "street-ice-cream-freezer",
+   "category": "trim",
+   "label": "Ice-cream freezer",
+   "size": [
+    2,
+    0.9,
+    0.82
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.9,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.9,
+     0.82
+    ]
+   },
+   "obstacles": [
+    [
+     -0.56,
+     0.56,
+     0.15,
+     0.82,
+     0.9
+    ]
+   ]
+  },
+  {
+   "id": "street-postcard-rack",
+   "category": "trim",
+   "label": "Postcard spinner rack",
+   "size": [
+    2,
+    1.56,
+    0.58
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.56,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.56,
+     0.58
+    ]
+   },
+   "obstacles": [
+    [
+     0.58,
+     0.98,
+     0.15,
+     0.55,
+     1.55
+    ]
+   ]
+  },
+  {
+   "id": "street-sunglasses-rack",
+   "category": "trim",
+   "label": "Sunglasses rack",
+   "size": [
+    2,
+    1.6,
+    0.54
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.6,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.6,
+     0.54
+    ]
+   },
+   "obstacles": [
+    [
+     -0.95,
+     -0.61,
+     0.18,
+     0.52,
+     1.6
+    ]
+   ]
+  },
+  {
+   "id": "street-floor-lanterns",
+   "category": "trim",
+   "label": "Floor lanterns flanking the door",
+   "size": [
+    2,
+    0.68,
+    0.5
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "tokyo",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.68,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.68,
+     0.5
+    ]
+   },
+   "obstacles": [
+    [
+     -0.95,
+     -0.69,
+     0.22,
+     0.48,
+     0.65
+    ],
+    [
+     0.69,
+     0.95,
+     0.22,
+     0.48,
+     0.65
+    ]
+   ]
+  },
+  {
+   "id": "street-bay-trees",
+   "category": "trim",
+   "label": "Clipped bay trees, pair",
+   "size": [
+    2,
+    1.6,
+    0.56
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.6,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.6,
+     0.56
+    ]
+   },
+   "obstacles": [
+    [
+     -0.98,
+     -0.58,
+     0.15,
+     0.55,
+     1.5
+    ],
+    [
+     0.58,
+     0.98,
+     0.15,
+     0.55,
+     1.5
+    ]
+   ]
+  },
+  {
+   "id": "street-barrel-tables",
+   "category": "trim",
+   "label": "Pub barrel tables and stools",
+   "size": [
+    2,
+    1.05,
+    1.08
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "london",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.05,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.05,
+     1.08
+    ]
+   },
+   "obstacles": [
+    [
+     -0.85,
+     0.85,
+     0.18,
+     0.83,
+     1.0
+    ]
+   ]
+  },
+  {
+   "id": "street-produce-baskets",
+   "category": "trim",
+   "label": "Produce baskets on a bench",
+   "size": [
+    2,
+    0.75,
+    0.72
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.75,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.75,
+     0.72
+    ]
+   },
+   "obstacles": [
+    [
+     -0.86,
+     0.86,
+     0.18,
+     0.72,
+     0.75
+    ]
+   ]
+  },
+  {
+   "id": "street-bakery-rack",
+   "category": "trim",
+   "label": "Bread crate rack",
+   "size": [
+    2,
+    1.12,
+    0.7
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "paris",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.12,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.12,
+     0.7
+    ]
+   },
+   "obstacles": [
+    [
+     -0.63,
+     0.63,
+     0.18,
+     0.7,
+     1.1
+    ]
+   ]
+  },
+  {
+   "id": "street-bench-planter",
+   "category": "trim",
+   "label": "Bench between planters",
+   "size": [
+    2,
+    1.2,
+    0.62
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "modern",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.2,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.2,
+     0.62
+    ]
+   },
+   "obstacles": [
+    [
+     -0.99,
+     0.99,
+     0.19,
+     0.61,
+     0.5
+    ]
+   ]
+  },
+  {
+   "id": "street-scooter",
+   "category": "trim",
+   "label": "Parked scooter",
+   "size": [
+    2,
+    1.1,
+    0.9
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "medium",
+   "style": "italian",
+   "mount": "ground",
+   "doorSafe": false,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     1.1,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     1.1,
+     0.9
+    ]
+   },
+   "obstacles": [
+    [
+     -0.8,
+     0.82,
+     0.32,
+     0.78,
+     1.1
+    ]
+   ]
+  },
+  {
+   "id": "street-tokyo-pots",
+   "category": "trim",
+   "label": "Potted plants by the door",
+   "size": [
+    2,
+    0.6,
+    0.62
+   ],
+   "opening": null,
+   "front": "+Z",
+   "origin": "bottom-centre",
+   "stretch": [],
+   "channels": [
+    "wall",
+    "trim",
+    "frame",
+    "door",
+    "glass"
+   ],
+   "collision": "solid",
+   "minDetail": "near",
+   "style": "tokyo",
+   "mount": "ground",
+   "doorSafe": true,
+   "connectors": {
+    "left": [
+     -1.0,
+     0,
+     0
+    ],
+    "right": [
+     1.0,
+     0,
+     0
+    ],
+    "top": [
+     0,
+     0.6,
+     0
+    ],
+    "bottom": [
+     0,
+     0,
+     0
+    ]
+   },
+   "clearance": {
+    "size": [
+     2,
+     0.6,
+     0.62
+    ]
+   },
+   "obstacles": [
+    [
+     -0.95,
+     -0.55,
+     0.12,
+     0.6,
+     0.5
+    ],
+    [
+     0.55,
+     0.95,
+     0.12,
+     0.6,
+     0.5
+    ]
+   ]
+  }
+ ]
+}

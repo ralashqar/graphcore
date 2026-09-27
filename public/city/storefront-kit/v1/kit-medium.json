@@ -1,0 +1,725 @@
+{
+ "rules": "kit-medium-2",
+ "version": "storefront",
+ "source": "kit.glb",
+ "sourceSha256": "1d446d331d199c481b2b02f1f1d1ae7cc405820384325aff272f7795f35d11a7",
+ "glbSha256": "123205da16264ee676ec0f57cdc1d560fb7516e982929524d18638995fbb7bd9",
+ "triangles": {
+  "full": 37592,
+  "medium": 30301
+ },
+ "modules": [
+  {
+   "id": "door-shop-aluminium",
+   "full": 352,
+   "medium": 336,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 13
+  },
+  {
+   "id": "door-shop-bead-curtain",
+   "full": 340,
+   "medium": 330,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 7
+  },
+  {
+   "id": "door-shop-cafe-folding",
+   "full": 720,
+   "medium": 672,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 45
+  },
+  {
+   "id": "door-shop-castiron",
+   "full": 620,
+   "medium": 572,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 31
+  },
+  {
+   "id": "door-shop-corner-splay",
+   "full": 480,
+   "medium": 416,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 51
+  },
+  {
+   "id": "door-shop-pub",
+   "full": 560,
+   "medium": 498,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 34
+  },
+  {
+   "id": "door-shop-recessed",
+   "full": 536,
+   "medium": 485,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 25
+  },
+  {
+   "id": "door-shop-stall-open",
+   "full": 808,
+   "medium": 744,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 23
+  },
+  {
+   "id": "door-shop-steel-pivot",
+   "full": 248,
+   "medium": 202,
+   "unbevelled": 0,
+   "dropped": 2,
+   "facesRemoved": 16
+  },
+  {
+   "id": "door-shop-stone-arch",
+   "full": 644,
+   "medium": 613,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 28
+  },
+  {
+   "id": "door-shop-tiled-sliding",
+   "full": 696,
+   "medium": 418,
+   "unbevelled": 0,
+   "dropped": 22,
+   "facesRemoved": 12
+  },
+  {
+   "id": "door-shop-victorian",
+   "full": 500,
+   "medium": 442,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 26
+  },
+  {
+   "id": "shop-awning-boxed",
+   "full": 72,
+   "medium": 66,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "shop-awning-dome",
+   "full": 424,
+   "medium": 336,
+   "unbevelled": 0,
+   "dropped": 7,
+   "facesRemoved": 3
+  },
+  {
+   "id": "shop-awning-retract-closed",
+   "full": 92,
+   "medium": 54,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 3
+  },
+  {
+   "id": "shop-awning-retract-open",
+   "full": 168,
+   "medium": 114,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 16
+  },
+  {
+   "id": "shop-awning-scalloped",
+   "full": 484,
+   "medium": 354,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 95
+  },
+  {
+   "id": "shop-awning-striped",
+   "full": 280,
+   "medium": 186,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 39
+  },
+  {
+   "id": "shop-canopy-glass",
+   "full": 156,
+   "medium": 125,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 20
+  },
+  {
+   "id": "shop-fascia-dark",
+   "full": 36,
+   "medium": 30,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 3
+  },
+  {
+   "id": "shop-fascia-gilt",
+   "full": 72,
+   "medium": 68,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "shop-fascia-lightbox",
+   "full": 80,
+   "medium": 36,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 6
+  },
+  {
+   "id": "shop-fascia-steel",
+   "full": 24,
+   "medium": 20,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "shop-fascia-timber",
+   "full": 92,
+   "medium": 76,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 13
+  },
+  {
+   "id": "shop-hanging-baskets",
+   "full": 320,
+   "medium": 310,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 8
+  },
+  {
+   "id": "shop-lanterns-pair",
+   "full": 208,
+   "medium": 160,
+   "unbevelled": 0,
+   "dropped": 4,
+   "facesRemoved": 6
+  },
+  {
+   "id": "shop-letters-gilt",
+   "full": 288,
+   "medium": 0,
+   "unbevelled": 0,
+   "dropped": 24,
+   "facesRemoved": 0
+  },
+  {
+   "id": "shop-letters-gilt-short",
+   "full": 180,
+   "medium": 0,
+   "unbevelled": 0,
+   "dropped": 15,
+   "facesRemoved": 0
+  },
+  {
+   "id": "shop-letters-raised",
+   "full": 300,
+   "medium": 0,
+   "unbevelled": 0,
+   "dropped": 25,
+   "facesRemoved": 0
+  },
+  {
+   "id": "shop-letters-script",
+   "full": 276,
+   "medium": 84,
+   "unbevelled": 0,
+   "dropped": 16,
+   "facesRemoved": 0
+  },
+  {
+   "id": "shop-neon-script",
+   "full": 296,
+   "medium": 64,
+   "unbevelled": 0,
+   "dropped": 16,
+   "facesRemoved": 0
+  },
+  {
+   "id": "shop-sign-barber-pole",
+   "full": 148,
+   "medium": 146,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "shop-sign-blade-bracket",
+   "full": 116,
+   "medium": 89,
+   "unbevelled": 0,
+   "dropped": 2,
+   "facesRemoved": 10
+  },
+  {
+   "id": "shop-sign-blade-neon",
+   "full": 332,
+   "medium": 232,
+   "unbevelled": 1,
+   "dropped": 5,
+   "facesRemoved": 4
+  },
+  {
+   "id": "shop-sign-cross",
+   "full": 112,
+   "medium": 46,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 1
+  },
+  {
+   "id": "shop-string-lights",
+   "full": 412,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 31,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-aboard",
+   "full": 64,
+   "medium": 60,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "street-bakery-rack",
+   "full": 732,
+   "medium": 584,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 134
+  },
+  {
+   "id": "street-barrel-tables",
+   "full": 480,
+   "medium": 480,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-bay-trees",
+   "full": 256,
+   "medium": 256,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-bench",
+   "full": 120,
+   "medium": 116,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "street-bench-planter",
+   "full": 336,
+   "medium": 242,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 19
+  },
+  {
+   "id": "street-bicycle",
+   "full": 284,
+   "medium": 282,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "street-bike-rack",
+   "full": 472,
+   "medium": 470,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 2
+  },
+  {
+   "id": "street-bin",
+   "full": 108,
+   "medium": 108,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-bistro-row",
+   "full": 608,
+   "medium": 608,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-bollards",
+   "full": 168,
+   "medium": 168,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-cafe-parasol",
+   "full": 392,
+   "medium": 392,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-cafe-set",
+   "full": 304,
+   "medium": 304,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-delivery-cart",
+   "full": 156,
+   "medium": 136,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 6
+  },
+  {
+   "id": "street-floor-lanterns",
+   "full": 192,
+   "medium": 172,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 10
+  },
+  {
+   "id": "street-flower-buckets",
+   "full": 504,
+   "medium": 442,
+   "unbevelled": 0,
+   "dropped": 2,
+   "facesRemoved": 37
+  },
+  {
+   "id": "street-flower-cart",
+   "full": 424,
+   "medium": 396,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 27
+  },
+  {
+   "id": "street-fruit-trestle",
+   "full": 420,
+   "medium": 402,
+   "unbevelled": 0,
+   "dropped": 1,
+   "facesRemoved": 5
+  },
+  {
+   "id": "street-ice-cream-freezer",
+   "full": 132,
+   "medium": 32,
+   "unbevelled": 1,
+   "dropped": 4,
+   "facesRemoved": 2
+  },
+  {
+   "id": "street-menu-stand",
+   "full": 80,
+   "medium": 80,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-milk-crates",
+   "full": 168,
+   "medium": 155,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 7
+  },
+  {
+   "id": "street-newsboxes",
+   "full": 136,
+   "medium": 60,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 6
+  },
+  {
+   "id": "street-newspaper-rack",
+   "full": 156,
+   "medium": 156,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-planter-trough",
+   "full": 140,
+   "medium": 103,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 4
+  },
+  {
+   "id": "street-planters-pair",
+   "full": 288,
+   "medium": 216,
+   "unbevelled": 2,
+   "dropped": 0,
+   "facesRemoved": 6
+  },
+  {
+   "id": "street-postcard-rack",
+   "full": 236,
+   "medium": 236,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-produce-baskets",
+   "full": 260,
+   "medium": 230,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 27
+  },
+  {
+   "id": "street-scooter",
+   "full": 240,
+   "medium": 190,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 17
+  },
+  {
+   "id": "street-sunglasses-rack",
+   "full": 180,
+   "medium": 32,
+   "unbevelled": 0,
+   "dropped": 12,
+   "facesRemoved": 2
+  },
+  {
+   "id": "street-tokyo-pots",
+   "full": 576,
+   "medium": 576,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 0
+  },
+  {
+   "id": "street-veg-crates",
+   "full": 252,
+   "medium": 234,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 15
+  },
+  {
+   "id": "window-shop-alimentari",
+   "full": 1028,
+   "medium": 818,
+   "unbevelled": 0,
+   "dropped": 15,
+   "facesRemoved": 45
+  },
+  {
+   "id": "window-shop-aluminium",
+   "full": 564,
+   "medium": 494,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 43
+  },
+  {
+   "id": "window-shop-barber",
+   "full": 892,
+   "medium": 564,
+   "unbevelled": 4,
+   "dropped": 10,
+   "facesRemoved": 68
+  },
+  {
+   "id": "window-shop-bay",
+   "full": 476,
+   "medium": 402,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 29
+  },
+  {
+   "id": "window-shop-boulangerie",
+   "full": 1128,
+   "medium": 1054,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 71
+  },
+  {
+   "id": "window-shop-boutique-arched",
+   "full": 704,
+   "medium": 640,
+   "unbevelled": 0,
+   "dropped": 3,
+   "facesRemoved": 20
+  },
+  {
+   "id": "window-shop-butcher",
+   "full": 600,
+   "medium": 506,
+   "unbevelled": 0,
+   "dropped": 5,
+   "facesRemoved": 40
+  },
+  {
+   "id": "window-shop-castiron-bodega",
+   "full": 1224,
+   "medium": 922,
+   "unbevelled": 0,
+   "dropped": 11,
+   "facesRemoved": 71
+  },
+  {
+   "id": "window-shop-castiron-deli",
+   "full": 1032,
+   "medium": 790,
+   "unbevelled": 0,
+   "dropped": 9,
+   "facesRemoved": 95
+  },
+  {
+   "id": "window-shop-florist",
+   "full": 756,
+   "medium": 684,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 65
+  },
+  {
+   "id": "window-shop-gelato",
+   "full": 408,
+   "medium": 374,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 24
+  },
+  {
+   "id": "window-shop-kiosk-hatch",
+   "full": 524,
+   "medium": 362,
+   "unbevelled": 1,
+   "dropped": 6,
+   "facesRemoved": 51
+  },
+  {
+   "id": "window-shop-laundromat",
+   "full": 984,
+   "medium": 668,
+   "unbevelled": 6,
+   "dropped": 0,
+   "facesRemoved": 117
+  },
+  {
+   "id": "window-shop-pharmacy",
+   "full": 600,
+   "medium": 528,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 43
+  },
+  {
+   "id": "window-shop-pub",
+   "full": 600,
+   "medium": 544,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 48
+  },
+  {
+   "id": "window-shop-shutter-down",
+   "full": 440,
+   "medium": 314,
+   "unbevelled": 1,
+   "dropped": 2,
+   "facesRemoved": 40
+  },
+  {
+   "id": "window-shop-stall-open",
+   "full": 656,
+   "medium": 570,
+   "unbevelled": 1,
+   "dropped": 0,
+   "facesRemoved": 35
+  },
+  {
+   "id": "window-shop-steel-mannequins",
+   "full": 644,
+   "medium": 574,
+   "unbevelled": 0,
+   "dropped": 2,
+   "facesRemoved": 30
+  },
+  {
+   "id": "window-shop-stone-arcade",
+   "full": 900,
+   "medium": 823,
+   "unbevelled": 1,
+   "dropped": 2,
+   "facesRemoved": 20
+  },
+  {
+   "id": "window-shop-tiled-samples",
+   "full": 904,
+   "medium": 560,
+   "unbevelled": 0,
+   "dropped": 22,
+   "facesRemoved": 78
+  },
+  {
+   "id": "window-shop-trattoria",
+   "full": 932,
+   "medium": 762,
+   "unbevelled": 0,
+   "dropped": 10,
+   "facesRemoved": 49
+  },
+  {
+   "id": "window-shop-victorian-books",
+   "full": 1260,
+   "medium": 1074,
+   "unbevelled": 0,
+   "dropped": 0,
+   "facesRemoved": 114
+  }
+ ]
+}
