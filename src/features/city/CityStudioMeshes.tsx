@@ -1,4 +1,5 @@
 import {CITY_LIGHT_MODE} from './cityRenderMode';
+import {pieceTexture,pieceTint} from '../../domain/cityStudioPieceSurface';
 import {useCityVisibility} from './CityVisibility';
 import {useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {BoxGeometry,BufferGeometry,Color,Float32BufferAttribute,Group,Vector3,InstancedMesh,Mesh,Object3D,type Material} from 'three';
@@ -7,9 +8,9 @@ import {CityStudioKitDoorLeaves} from './CityStudioKitDoorLeaves';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
 import {useFrame,useThree} from '@react-three/fiber';
-import {STOREFRONT_MODULE_IDS,STUDIO_FAMILIES,STUDIO_MODULE_MAP,studioModules} from '../../domain/cityStudioCatalog';
+import {STOREFRONT_MODULE_IDS,STUDIO_MODULE_MAP,studioModules} from '../../domain/cityStudioCatalog';
 import {seeThroughGlass} from './CityStudioOpeningInstances';
-import type {StudioPiece,StudioChannel} from '../../domain/cityStudioTypes';
+import type {StudioPiece} from '../../domain/cityStudioTypes';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {viewDistance} from './CityStudioDetailBatches';
@@ -77,7 +78,7 @@ export function loadStudioKit(version:2|3|4|5=2,detail:StudioKitDetail='full',st
 export function StudioInstances({geometry,channel,placements,texture,onSelect,representation,seeThrough=false}:{geometry:BufferGeometry;channel:string;placements:StudioPiece[];texture?:string;onSelect?:(p:StudioPiece)=>void;representation?:'full'|'simple';/** Transparent glazing (storefront displays behind the glass). */seeThrough?:boolean}){
  const visibility=useCityVisibility(),revision=useRef(-1),visibleIndices=useRef<number[]>([]),ref=useRef<InstancedMesh>(null),invalidate=useThree(s=>s.invalidate);
  const material=useMemo(()=>{const m=citySurfaceMaterial(channel==='glass',texture as CityTextureId);if(seeThrough&&channel==='glass')seeThroughGlass(m);return m;},[channel,texture,seeThrough]);useEffect(()=>()=>material.dispose(),[material]);
- const data=useMemo(()=>{const matrices=new Float32Array(placements.length*16),colors=new Float32Array(placements.length*3),dummy=new Object3D(),color=new Color();for(const [i,p] of placements.entries()){dummy.position.set(p.x,p.y,p.z);dummy.rotation.set(0,p.rotation,0);dummy.scale.set(...p.scale);dummy.updateMatrix();dummy.matrix.toArray(matrices,i*16);const palette=STUDIO_FAMILIES[p.family];color.set(p.finishes?.[channel as StudioChannel]?.color??palette[channel as keyof typeof palette]??palette.trim).toArray(colors,i*3);}return {matrices,colors};},[placements,channel]);
+ const data=useMemo(()=>{const matrices=new Float32Array(placements.length*16),colors=new Float32Array(placements.length*3),dummy=new Object3D(),color=new Color();for(const [i,p] of placements.entries()){dummy.position.set(p.x,p.y,p.z);dummy.rotation.set(0,p.rotation,0);dummy.scale.set(...p.scale);dummy.updateMatrix();dummy.matrix.toArray(matrices,i*16);color.set(pieceTint(p,channel)).toArray(colors,i*3);}return {matrices,colors};},[placements,channel]);
  useLayoutEffect(()=>{if(!ref.current)return;ref.current.count=placements.length;ref.current.instanceMatrix.array.set(data.matrices);if(placements.length&&!ref.current.instanceColor)ref.current.setColorAt(0,new Color());ref.current.instanceColor?.array.set(data.colors);ref.current.computeBoundingSphere();revision.current=-1;invalidate();},[data,placements,invalidate]);
  useFrame(()=>{if(!ref.current||revision.current===(visibility?.revision??0))return;revision.current=visibility?.revision??0;let count=0;const indices:number[]=[];placements.forEach((p,i)=>{const level=p.propertyId?(visibility?.levels.get(p.propertyId)??'full'):'full',show=level!=='hidden'&&(level!=='simple'||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near')&&(!representation||level===representation);if(!show)return;ref.current!.instanceMatrix.array.set(data.matrices.subarray(i*16,i*16+16),count*16);ref.current!.instanceColor?.array.set(data.colors.subarray(i*3,i*3+3),count*3);indices.push(i);count++;});visibleIndices.current=indices;ref.current.count=count;ref.current.instanceMatrix.needsUpdate=true;if(ref.current.instanceColor)ref.current.instanceColor.needsUpdate=true;});
  return <instancedMesh ref={ref} args={[geometry,material,placements.length]} frustumCulled onClick={onSelect?e=>{if(e.instanceId!==undefined){e.stopPropagation();onSelect(placements[visibleIndices.current[e.instanceId]]);}}:undefined}/>;
@@ -107,7 +108,7 @@ export function CityStudioMeshes({pieces,version=2,plotId}:{pieces:StudioPiece[]
   for(const p of pieces.filter(p=>p.propertyId||near||STUDIO_MODULE_MAP.get(p.module)?.minDetail!=='near'))for(const [i,piece] of (kit.get(p.module)??[]).entries()){
    // Kit pieces in generated walls leave out their wall slab; portal door leaves animate near (CityStudioKitDoorLeaves).
    if(p.omit?.includes(piece.channel)||piece.leaf!==undefined&&p.portal&&near&&plotId)continue;
-   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,key=`${p.module}/${kit===pack?i:'medium:'+piece.channel}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture,see:STOREFRONT_MODULE_IDS.has(p.module)};group.placements.push(p);out.set(key,group);
+   const texture=pieceTexture(p,piece.channel),key=`${p.module}/${kit===pack?i:'medium:'+piece.channel}/${texture??''}`,group=out.get(key)??{piece,placements:[],texture,see:STOREFRONT_MODULE_IDS.has(p.module)};group.placements.push(p);out.set(key,group);
   }return out;
  },[pieces,pack,near,medium,mediumPack,plotId]);
  const fallbackCube=useMemo(()=>new BoxGeometry(1,1,1),[]);
@@ -123,7 +124,7 @@ export function CityStudioMeshes({pieces,version=2,plotId}:{pieces:StudioPiece[]
 
  const proxies=useMemo(()=>{const groups=new Map<string,{geometry:BufferGeometry;channel:string;placements:StudioPiece[];texture?:string}>();
   const add=(key:string,channel:string,p:StudioPiece,boxes:number[][],texture?:string)=>{let group=groups.get(key);if(!group){const parts=boxes.filter(b=>b[3]>.001&&b[4]>.001).map(([x,y,z,w,h,d])=>new BoxGeometry(w,h,d).translate(x,y,z));if(!parts.length)return;const geometry=parts.length===1?parts[0]:mergeGeometries(parts)!;if(parts.length>1)parts.forEach(g=>g.dispose());group={geometry,channel,placements:[],texture};groups.set(key,group);}group.placements.push(p);};
-  for(const p of pieces){if(!p.propertyId)continue;const part=STUDIO_MODULE_MAP.get(p.module);if(!part||part.minDetail==='near')continue;const [w,h,d]=part.size,o=part.collision==='solid'&&!p.omit?.includes('wall')?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=p.finishes?.[channel]?.texture;
+  for(const p of pieces){if(!p.propertyId)continue;const part=STUDIO_MODULE_MAP.get(p.module);if(!part||part.minDetail==='near')continue;const [w,h,d]=part.size,o=part.collision==='solid'&&!p.omit?.includes('wall')?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=pieceTexture(p,channel);
    const boxes=o?[[-w/2+(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[w/2-(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[0,o.bottom/2,0,o.width,o.bottom,d],[0,(h+o.top)/2,0,o.width,h-o.top,d]]:[[0,h/2,0,w,h,d]];
    if(!p.omit?.includes('wall'))add(JSON.stringify([boxes,channel,texture]),channel,p,boxes,texture);
    if(o&&!p.omit?.includes('glass'))add(JSON.stringify(['glass',o.width,o.bottom,o.top]),'glass',p,[[0,(o.bottom+o.top)/2,-.1,o.width,o.top-o.bottom,.04]]);

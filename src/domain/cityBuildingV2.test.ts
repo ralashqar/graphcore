@@ -106,7 +106,8 @@ test("legacy recipe keeps its silhouette with recessed ribbon windows", () => {
   ).digest("hex");
   assert.equal(
     hash,
-    "fa22e7d3edc03fef537383bdab7146eb7e5cec5768bf83935c17f1a03b296f58",
+    // The foundation reaches below the plot surface since the ground-contact correction (docs/city-ground-contact.md).
+    "ba5be8cc0286b292a5de0ee22eec3f540051423ce866c2ac0326aae355bf00ff",
   );
 });
 

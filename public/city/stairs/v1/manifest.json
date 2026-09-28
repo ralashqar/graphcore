@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "city-stair-parts-1",
+  "source": "scripts/build-city-stair-parts.py",
+  "blender": "5.0.1",
+  "files": {
+    "kit.glb": "481a453f0bf496cb113095e76c4990d58246d16bf498bf33303ae0040b8a9a4e",
+    "kit-medium.glb": "18ffec1499e97fdc43bcadea4a1cebe339cb86ca31234e836966eef0a4b2383d"
+  },
+  "scriptHash": "52e8a9a5abce471c411b2f210d48794b5b2d5e46e391b3d1d53a8124f4d816b5",
+  "parts": [
+    "newel-timber",
+    "newel-iron",
+    "newel-stone",
+    "baluster-timber",
+    "baluster-iron",
+    "baluster-stone",
+    "panel-iron-scroll",
+    "porch-column",
+    "bracket-console",
+    "pediment",
+    "urn-finial",
+    "newel-lamp"
+  ],
+  "triangles": {
+    "full": 5210,
+    "medium": 2862
+  },
+  "license": "Authored for SynArc City; CC0"
+}

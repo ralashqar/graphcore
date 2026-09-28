@@ -13,6 +13,7 @@
  * front wall's outer skin. The slope is y = y0 + k*dq.
  */
 // @deno-types="npm:@types/three@0.186.0"
+import {finishRenderTexture} from './cityStudioSurfaces.ts';
 import {Color,ShapeUtils,Vector2} from 'three';
 import {resolveFreeOpenings} from './cityStudioFreeOpenings.ts';
 import {buildFreeOpeningFaceGeometry,DEFAULT_FREE_PALETTE,FREE_FACE,type FreeFaceBuffers,type FreeFacePalette} from './cityStudioFreeOpeningGeometry.ts';
@@ -149,7 +150,7 @@ export function studioRoofOpeningPass(r:StudioRecipe,faces:StudioRoofFace[]):Roo
    else{buildSkylight(g,l);openings.push({id:l.o.id,kind:'skylight',center:slopePoint(l.slope,l.xc,l.qc,.06)});}
   }
   const geometry=Object.fromEntries(Object.entries(g).map(([k,b])=>[k,pack(b)])) as Record<RoofOpeningChannel,FreeFaceBuffers>;
-  parts.push({partId,family,wallColor:style.finishes.wall?.color??tones.wall,...(style.finishes.wall?.texture?{wallTexture:style.finishes.wall.texture}:{}),finish:settings.finish,...(settings.color?{color:settings.color}:{}),openings,geometry:{...geometry,triangles:Object.values(geometry).reduce((n,b)=>n+b.indices.length/3,0)}});
+  parts.push({partId,family,wallColor:style.finishes.wall?.color??tones.wall,...(finishRenderTexture(style.finishes.wall,tones.wall)?{wallTexture:finishRenderTexture(style.finishes.wall,tones.wall)}:{}),finish:settings.finish,...(settings.color?{color:settings.color}:{}),openings,geometry:{...geometry,triangles:Object.values(geometry).reduce((n,b)=>n+b.indices.length/3,0)}});
  }
  return {faces:cut.faces,keepEdge:cut.keepEdge,parts,inactive,blockers};
 }

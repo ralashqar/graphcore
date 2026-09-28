@@ -33,9 +33,11 @@ export const effectiveThemeRef=(r:StudioRecipe,partId:string)=>themeRefAt(r,part
 const finishesOf=(t:FacadeTheme,palette:number):Partial<Record<StudioChannel,StudioFinish>>=>{const p=t.look.palettes[palette%t.look.palettes.length];return {wall:{...p.wall},trim:{color:p.trim},frame:{color:p.frame},door:{color:p.door}};};
 /** A rhythm rule without its styling: only its wall target and the plain / keep-manual switches survive. */
 const strip=(x:FacadeRhythmRule):FacadeRhythmRule|null=>{const out:FacadeRhythmRule={};for(const k of ['partId','side','fromFloor','toFloor','x0','x1','off','manual'] as const)if(x[k]!==undefined)(out as Record<string,unknown>)[k]=x[k];return out.off!==undefined||out.manual!==undefined?out:null;};
-const rhythmFields=(t:FacadeTheme)=>{const x=t.rhythm;return {style:x.style,variety:x.variety,trims:x.trims,...(x.bay!==undefined?{bay:x.bay}:{}),...(x.density!==undefined?{density:x.density}:{}),...(x.layers?{layers:structuredClone(x.layers)}:{})};};
+const rhythmFields=(t:FacadeTheme,layers?:FacadeRhythm['layers'])=>{const x=t.rhythm,l=layers??x.layers;return {style:x.style,variety:x.variety,trims:x.trims,...(x.bay!==undefined?{bay:x.bay}:{}),...(x.density!==undefined?{density:x.density}:{}),...(l?{layers:structuredClone(l)}:{})};};
 
-export function applyFacadeTheme(input:StudioRecipe,d:CityBuildingDesignV3,themeId:string,options:{partId?:string;seed?:number;palette?:number}={}):{recipe:StudioRecipe;label:string}|{reason:string}{
+/** Options for applying a theme. tune/locks/seeds/layers carry a picked-up look (the theme brush eyedropper). */
+export type ApplyThemeOptions={partId?:string;seed?:number;palette?:number;tune?:StudioThemeRef['tune'];locks?:ThemeAspect[];seeds?:StudioThemeRef['seeds'];layers?:FacadeRhythm['layers']};
+export function applyFacadeTheme(input:StudioRecipe,d:CityBuildingDesignV3,themeId:string,options:ApplyThemeOptions={}):{recipe:StudioRecipe;label:string}|{reason:string}{
  const t=THEME_MAP.get(themeId);if(!t)return {reason:'This theme is unavailable.'};
  const partId=options.partId;
  if(partId&&!input.volumes.some(v=>v.id===partId&&v.operation==='add'))return {reason:'Choose a solid part to theme.'};
@@ -48,16 +50,18 @@ export function applyFacadeTheme(input:StudioRecipe,d:CityBuildingDesignV3,theme
  r=structuredClone(r);const s=r.studio;
  s.catalogue='synarc-kit-5';s.assemblyRevision??='connected-access-1';s.roofRevision='roof-envelope-2';
  const seed=options.seed??Math.floor(Math.random()*1000000),palette=(options.palette??seed)%t.look.palettes.length;
- const ref:StudioThemeRef={id:scopeId(partId),theme:t.id,...(partId?{partId}:{}),seed,palette};
+ const aspects=new Set<ThemeAspect>(themeAspects(t)),only=<V,>(o:Partial<Record<ThemeAspect,V>>|undefined)=>{const out=Object.fromEntries(Object.entries(o??{}).filter(([a])=>aspects.has(a as ThemeAspect)));return Object.keys(out).length?out as Partial<Record<ThemeAspect,V>>:undefined;};
+ const tune=only(options.tune),seeds=only(options.seeds),locks=options.locks?.filter(a=>aspects.has(a));
+ const ref:StudioThemeRef={id:scopeId(partId),theme:t.id,...(partId?{partId}:{}),seed,palette,...(tune?{tune}:{}),...(locks?.length?{locks}:{}),...(seeds?{seeds}:{})};
  s.facadeThemes=[...(partId?(s.facadeThemes??[]).filter(x=>x.partId!==partId):[]),ref];
  // Rhythm: the theme's settings at its scope; styling below that scope is replaced (plain/manual walls stay).
  const base:FacadeRhythm=s.facadeRhythm?{...s.facadeRhythm,version:2}:newFacadeRhythm(t.rhythm.style,seed%100000);
  if(!partId){
   const rules=(base.rules??[]).map(strip).filter((x):x is FacadeRhythmRule=>!!x);
-  s.facadeRhythm={version:2,seed:base.seed,...rhythmFields(t),...(base.locks?{locks:base.locks}:{}),...(rules.length?{rules}:{})};
+  s.facadeRhythm={version:2,seed:base.seed,...rhythmFields(t,options.layers),...(base.locks?{locks:base.locks}:{}),...(rules.length?{rules}:{})};
  }else{
   const rules=(base.rules??[]).map(x=>x.partId===partId?strip(x):x).filter((x):x is FacadeRhythmRule=>!!x),at=rules.findIndex(x=>x.partId===partId&&x.side===undefined&&x.fromFloor===undefined&&x.x0===undefined);
-  const rule:FacadeRhythmRule={...(at>=0?rules[at]:{partId}),...rhythmFields(t),seed:seed%1000000};
+  const rule:FacadeRhythmRule={...(at>=0?rules[at]:{partId}),...rhythmFields(t,options.layers),seed:seed%1000000};
   if(at>=0)rules[at]=rule;else rules.push(rule);
   s.facadeRhythm={...base,rules};
  }

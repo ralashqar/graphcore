@@ -302,7 +302,8 @@ export function resolveDesign(
   box(0, .29, (entrance.z + 11.4) / 2, 3.2, .08, 11.4 - entrance.z, p.trim);
   // Floor plates tessellate the union without overlapping faces at joined wings.
   for (const m of masses) {
-    if (m.y === .65) box(m.x, .45, m.z, m.width, .4, m.depth, p.trim);
+    // Foundation skirt below the plot surface (docs/city-ground-contact.md).
+    if (m.y === .65) box(m.x, .4, m.z, m.width, .5, m.depth, p.trim);
     box(m.x, m.y + .09, m.z, m.width, .18, m.depth, p.trim);
     box(m.x, m.y + m.height - .09, m.z, m.width, .18, m.depth, p.roof);
   }

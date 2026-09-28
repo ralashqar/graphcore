@@ -14,12 +14,13 @@
  * Each plot's instance matrices and colours are computed once, in world space; a level change only copies the
  * plot's blocks into the shared instance buffers (compaction, like CityInstances) and uploads the used range.
  */
+import {pieceTexture,pieceTint} from '../../domain/cityStudioPieceSurface';
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type MutableRefObject} from 'react';
 import {useFrame,useThree} from '@react-three/fiber';
 import {Box3,BoxGeometry,BufferGeometry,Color,InstancedBufferAttribute,InstancedMesh,Matrix4,Quaternion,Vector3,type Material} from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {STOREFRONT_MODULE_IDS,STUDIO_FAMILIES,STUDIO_MODULE_MAP} from '../../domain/cityStudioCatalog';
-import type {StudioChannel,StudioPiece} from '../../domain/cityStudioTypes';
+import {STOREFRONT_MODULE_IDS,STUDIO_MODULE_MAP} from '../../domain/cityStudioCatalog';
+import type {StudioPiece} from '../../domain/cityStudioTypes';
 import type {CityPlotTransform} from '../../domain/citySculptCityBake';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
@@ -53,7 +54,7 @@ function proxy(key:string,boxes:number[][]){let g=proxyGeometry.get(key);if(!g){
 /** The far proxy boxes of one piece (as CityStudioMeshes' business proxies): [key, channel, geometry][]. */
 export function studioPieceProxies(p:StudioPiece):{key:string;channel:string;texture?:string;geometry:BufferGeometry}[]{
  const part=STUDIO_MODULE_MAP.get(p.module);if(!part||part.minDetail==='near')return [];
- const [w,h,d]=part.size,o=part.collision==='solid'&&!p.omit?.includes('wall')?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=p.finishes?.[channel as StudioChannel]?.texture,out=[];
+ const [w,h,d]=part.size,o=part.collision==='solid'&&!p.omit?.includes('wall')?null:part.opening,channel=['window','wall','door'].includes(part.category)?'wall':'trim',texture=pieceTexture(p,channel),out=[];
  const boxes=(o?[[-w/2+(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[w/2-(w-o.width)/4,h/2,0,(w-o.width)/2,h,d],[0,o.bottom/2,0,o.width,o.bottom,d],[0,(h+o.top)/2,0,o.width,h-o.top,d]]:[[0,h/2,0,w,h,d]]).filter(b=>b[3]>.001&&b[4]>.001);
  if(!p.omit?.includes('wall')&&boxes.length){const key=JSON.stringify([boxes,channel,texture]);out.push({key,channel,texture,geometry:proxy(key,boxes)});}
  if(o&&!p.omit?.includes('glass')){const glass=[[0,(o.bottom+o.top)/2,-.1,o.width,o.top-o.bottom,.04]],key=JSON.stringify(['glass',o.width,o.bottom,o.top]);out.push({key,channel:'glass',geometry:proxy(key,glass)});}
@@ -69,13 +70,13 @@ function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
   for(const [i,piece] of (pack.get(p.module)??[]).entries()){
    // Kit pieces in generated walls leave out their wall slab (and, for portal doors, their leaf).
    if(p.omit?.includes(piece.channel))continue;
-   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture,tier:Tier=piece.leaf!==undefined&&p.portal?'leaf':near?'near':'full';
+   const texture=pieceTexture(p,piece.channel),tier:Tier=piece.leaf!==undefined&&p.portal?'leaf':near?'near':'full';
    push(`${plot.version}/${p.module}/${i}/${texture??''}/${tier}`,{geometry:piece.geometry,channel:piece.channel,texture,tier,see:piece.channel==='glass'&&STOREFRONT_MODULE_IDS.has(p.module)},p);
   }
   // Medium kit: the same modules and channels (near-only modules stay out, as at the full level).
   if(medium&&!near)for(const piece of medium.get(p.module)??[]){
    if(p.omit?.includes(piece.channel))continue;
-   const texture=p.finishes?.[piece.channel as StudioChannel]?.texture;
+   const texture=pieceTexture(p,piece.channel);
    push(`${plot.version}/${p.module}/medium:${piece.channel}/${texture??''}/medium`,{geometry:piece.geometry,channel:piece.channel,texture,tier:'medium',see:piece.channel==='glass'&&STOREFRONT_MODULE_IDS.has(p.module)},p);
   }
   for(const x of studioPieceProxies(p))push(`proxy/${x.key}`,{geometry:x.geometry,channel:x.channel,texture:x.texture,tier:'proxy'},p);
@@ -85,7 +86,7 @@ function plotBlocks(plot:KitPlot,pack:Pack,medium:Pack|undefined){
   const n=s.placements.length,matrices=new Float32Array(n*16),colors=new Float32Array(n*3);
   s.placements.forEach((p,i)=>{
    local.compose(pos.set(p.x,p.y,p.z),q.setFromAxisAngle(up,p.rotation),scale.set(...p.scale));local.premultiply(world).toArray(matrices,i*16);
-   const palette=STUDIO_FAMILIES[p.family];color.set(p.finishes?.[s.channel as StudioChannel]?.color??palette[s.channel as keyof typeof palette]??palette.trim).toArray(colors,i*3);
+   color.set(pieceTint(p,s.channel)).toArray(colors,i*3);
   });
   out.set(key,{geometry:s.geometry,channel:s.channel,texture:s.texture,tier:s.tier,see:s.see,block:{plot:plot.id,matrices,colors,count:n}});
  }

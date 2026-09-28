@@ -26,3 +26,21 @@
 .city-studio .studio-theme-row button{min-height:22px;min-width:22px;padding:2px;display:inline-grid;place-items:center;background:transparent}
 .city-studio .studio-theme-row button[aria-pressed=true]{background:#f3e3cc;color:#8a5a1f}
 .city-studio .rhythm-full-theme{margin:4px 0 2px;background:#f3e3cc;font-weight:700}
+/* Theme cards in the Paint › Themes palette, and card drag onto the view. */
+.studio-theme-cards{display:flex;flex-direction:column;min-height:0}
+.studio-theme-cards.is-compact .studio-theme-filters{padding:0 0 6px}
+.studio-theme-cards.is-compact .studio-theme-search{min-width:0;flex:1 1 140px}
+.studio-theme-cards.is-compact .studio-theme-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:2px 0 6px;overflow:visible}
+.studio-theme-cards.is-compact .studio-theme-card>span{padding:4px 6px 5px}
+.studio-theme-cards.is-compact .studio-theme-card b{font-size:11px;line-height:1.2}
+.city-studio .studio-theme-card{touch-action:pan-y;-webkit-user-drag:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+body.studio-theme-dragging,body.studio-theme-dragging *{cursor:grabbing!important;user-select:none}
+.studio-theme-drag-ghost{position:fixed;z-index:1000;pointer-events:none;display:flex;align-items:center;gap:8px;padding:4px 10px 4px 4px;border-radius:12px;background:rgba(255,255,255,.95);box-shadow:0 8px 24px rgba(30,40,30,.28);border:2px solid #b6772b;font:600 12px/1.2 system-ui,sans-serif;color:#2d372f;max-width:280px}
+.studio-theme-drag-ghost img,.studio-theme-drag-ghost .studio-theme-swatch{width:56px;height:42px;object-fit:cover;border-radius:8px;display:block}
+.studio-theme-drag-ghost.is-none{border-color:#c9c3b4;opacity:.85}
+.studio-theme-drag-ghost.is-starter{border-color:#6f9f78}
+.studio-theme-hover-label{background:rgba(255,248,232,.95);border:1.5px solid #b6772b;border-radius:10px;padding:3px 8px;font:600 12px/1.2 system-ui,sans-serif;color:#3d2f1a;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,.2)}
+.studio-theme-hover-label.is-erase{border-color:#e0705f;color:#7b2d20}
+.studio-theme-brush-note{display:flex;align-items:center;gap:8px}
+.studio-theme-brush-note img,.studio-theme-brush-note .studio-theme-swatch{width:48px;height:36px;border-radius:6px;object-fit:cover;flex:none}
+.studio-slot-theme img,.studio-slot-theme .studio-theme-swatch{width:30px;height:24px;object-fit:cover;border-radius:5px;display:block}

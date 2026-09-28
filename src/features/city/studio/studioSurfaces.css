@@ -1,0 +1,19 @@
+/* Surface library and floor finishes (docs/city-surfaces.md). */
+.studio-surface-library{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.studio-surface-recents{display:flex;flex-wrap:wrap;gap:4px}.studio-surface-recents button{padding:2px;min-height:0;border-radius:8px;background:#f0eee3}
+.studio-surface-groups{flex-wrap:wrap}.studio-surface-groups button{font-size:10px;padding:4px 7px;min-height:26px}
+.studio-surface-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:5px;max-height:236px;overflow-y:auto;padding:2px;scrollbar-width:thin}
+.studio-surface-grid button{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:74px;padding:4px 3px;font-size:9.5px;line-height:1.15;background:#f0eee3;text-align:center}
+.studio-surface-grid button[aria-pressed=true]{outline:2px solid #718365;outline-offset:1px;background:#e6ecd9}
+.studio-surface-grid .studio-surface-swatch,.studio-surface-grid .studio-material-sample{width:48px;height:40px}
+.studio-surface-swatch{display:inline-block;border-radius:6px;box-shadow:inset 0 0 0 1px #0000001f;background-size:cover;flex:none}
+.studio-surface-current{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:10px;background:#f6f4ea}
+.studio-surface-current>span{display:flex;flex-direction:column;font-size:11px;font-weight:600;flex:1;min-width:0}.studio-surface-current small{font-weight:400;color:#6f7868}
+.studio-surface-current button{font-size:10px;display:flex;gap:4px;align-items:center;min-height:28px}
+.studio-surface-row{display:flex;align-items:center;gap:6px;font-size:10.5px}.studio-surface-row input[type=color]{width:28px;height:24px;padding:0;border:0;background:none}.studio-surface-row button{font-size:10px;min-height:24px;padding:3px 7px}
+.studio-surface-tune{border-radius:10px;background:#f6f4ea;padding:4px 7px}.studio-surface-tune summary{font-size:10.5px;font-weight:600;cursor:pointer;padding:3px 0}
+.studio-surface-tune .studio-segment{flex-wrap:wrap}.studio-surface-tune .studio-segment button{font-size:10px;min-height:26px;padding:3px 7px}
+.studio-surface-slider{display:grid;grid-template-columns:74px 1fr 46px;align-items:center;gap:6px;font-size:10.5px;padding:2px 0}.studio-surface-slider input{width:100%}.studio-surface-slider output{text-align:right;font-variant-numeric:tabular-nums;color:#5d6657}
+.studio-floor-surfaces{display:flex;flex-direction:column;gap:5px}.studio-floor-surfaces .studio-surface-grid{max-height:168px}
+.studio-floor-brush{display:flex;flex-wrap:wrap;gap:5px;align-items:center}.studio-floor-brush button{font-size:10px;min-height:26px}
+@media(max-width:600px){.studio-surface-grid{grid-template-columns:repeat(auto-fill,minmax(54px,1fr));max-height:180px}.studio-surface-grid button{min-height:64px;font-size:8.5px}.studio-surface-slider{grid-template-columns:62px 1fr 40px}}

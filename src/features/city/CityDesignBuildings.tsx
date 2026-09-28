@@ -1,4 +1,5 @@
 import {CityModularBuildings} from './CityModularBuildings';
+import { isGroundPart } from "../../domain/cityPlotGround";
 import {useCityLook} from "./CityLook";
 import { useCityReflection } from "./cityReflections";
 import { CityBuildingGrounding } from "./CityBuildingGrounding";
@@ -159,8 +160,8 @@ function BuildingBatches(
       (resolved ? resolved.parts : buildingParts(d, p.profile.color)).forEach(
         (part, index) => {
           // Tile surfaces and perimeter rails belong to the stationary plot, not its building.
-          const ground = part.sceneLayer==="grounds" || ("textureRole" in part && part.textureRole === "groundBorder") ||
-            (part.position[1] + part.size[1]/2 <= .34 && !("textureRole" in part && part.textureRole === "wall"));
+          // Shared with plot walking (cityPlotGround), so the character stands on exactly these parts.
+          const ground = isGroundPart(part);
           if(layer!=="all" && ground!==(layer==="grounds"))return;
           if(synarcPack && d.version===3 && d.synarcKit && "fallback" in part && part.fallback==="facade")return;
           if (kit && "fallback" in part && part.fallback &&

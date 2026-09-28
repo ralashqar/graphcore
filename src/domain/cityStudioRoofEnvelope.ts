@@ -1,3 +1,4 @@
+import {finishRenderTexture} from './cityStudioSurfaces.ts';
 import {STUDIO_FAMILIES,STUDIO_MODULE_MAP} from './cityStudioCatalog.ts';
 import polygonClipping,{type MultiPolygon} from 'polygon-clipping';
 // @deno-types="npm:@types/three@0.186.0"
@@ -202,7 +203,7 @@ export function connectedStudioRoofs(r:StudioRecipe,d:CityBuildingDesignV3,floor
  for(const face of solid){
   let patch=patches.get(face.partId);
   if(!patch){const s=roofChoice(r,face.partId).settings,style={...r.studio.defaults,...r.studio.parts[face.partId]},finish=r.studio.parts[face.partId]?.finishes?.wall??r.studio.defaults.finishes?.wall;
-   patch={partId:face.partId,vertices:[],wallVertices:[],finish:s.finish,color:s.color,wallColor:finish?.color??STUDIO_FAMILIES[style.family??'pastel-stucco'].wall,wallTexture:finish?.texture};patches.set(face.partId,patch);
+   patch={partId:face.partId,vertices:[],wallVertices:[],finish:s.finish,color:s.color,wallColor:finish?.color??STUDIO_FAMILIES[style.family??'pastel-stucco'].wall,wallTexture:finishRenderTexture(finish,STUDIO_FAMILIES[style.family??'pastel-stucco'].wall)};patches.set(face.partId,patch);
   }
   const rings=face.polygon,points=rings.flat(),triangles=ShapeUtils.triangulateShape(rings[0].map(p=>new Vector2(...p)),rings.slice(1).map(r=>r.map(p=>new Vector2(...p))));
   const xyz=(p:Point):[number,number,number]=>[p[0],at(face.plane,p),p[1]];

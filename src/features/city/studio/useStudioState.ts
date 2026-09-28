@@ -7,7 +7,11 @@ import type {PerspectiveCamera} from 'three';
 import {STAMP_MAP,STUDIO_STOREFRONT_STAMPS,protectedStorefrontAtBay} from '../../../domain/cityStorefrontStamps';
 import {enableBuildingVariation,previewStorefront,shuffleVariation} from '../../../domain/cityBuildingVariation';
 import {shuffleFacadeRhythm} from '../../../domain/cityStudioFacadeRhythm';
-import {applyFacadeTheme,rerollTheme,themeStarterRecipe} from '../../../domain/cityStudioThemes';
+import {applyFacadeTheme,rerollTheme,themeStarterRecipe,type ApplyThemeOptions} from '../../../domain/cityStudioThemes';
+import {FACADE_THEMES,THEME_MAP} from '../../../domain/cityStudioThemeCatalog';
+import {eraseThemeAt,sampleThemeBrush,themeBrushOptions,type ThemeBrush} from '../../../domain/cityStudioThemeBrush';
+import {themeBrushScope,type ThemeDropOutcome} from '../studioThemeBrush';
+import {setThemeDrag,themeDragState} from './themeDrag';
 import {removeFreeOpening} from '../../../domain/cityStudioFreeOpenings';
 import {pruneFreeTrims,toggleFreeTrim,freeTrimKinds,type TrimKind} from '../../../domain/cityStudioTrimParts';
 import {ROOF_OPENING_PRESETS,removeRoofOpening} from '../../../domain/cityStudioRoofOpenings';
@@ -23,6 +27,7 @@ import {ISOLATE_OFF,isolatePreference,saveIsolatePreference,setStudioIsolate} fr
 import type {SculptVolume} from '../../../domain/citySculpt';
 import type {StudioAnchor,StudioAssemblyKind,StudioBay,StudioChannel,StudioFurnitureKind,StudioRecipe,StudioRoom,StudioRoomFinish} from '../../../domain/cityStudioTypes';
 import {useStudioInteraction,studioOutlineHandles,type StudioPick,type StudioTool} from '../useStudioInteraction';
+import {useSurfaceBrush} from './useSurfaceBrush';
 import type {OutlineCornerMode,OutlineEdgeMode} from './studioHandles';
 import {outlineRemovalSummary,splitStudioPartAtStorey} from '../../../domain/cityStudioOutlineEdit';
 import {preparedStudioPlot} from '../cityStudioRegistry';
@@ -52,7 +57,7 @@ export type RoofMode='roof'|'roof-opening'|'roof-detail';
 type RoomsTool='interior-room'|'interior-partition'|'interior-door'|'interior-stair';
 type FurnishTool='interior-furniture-select'|'interior-furniture';
 const ASSEMBLY_KINDS:readonly StudioAssemblyKind[]=['balcony','cornice','canopy','stair','pilaster','ornament','planter','light'];
-const ERASE_BY_TARGET:Record<StudioBrushTarget,StudioEraseWhat>={material:'paint',openings:'openings',storefronts:'storefronts',trims:'trims',decor:'decor',roof:'roof'};
+const ERASE_BY_TARGET:Record<Exclude<StudioBrushTarget,'themes'>,StudioEraseWhat>={material:'paint',openings:'openings',storefronts:'storefronts',trims:'trims',decor:'decor',roof:'roof'};
 
 export function useStudioState({land,session,camera,reduced}:{land:CityLandController;session:ExplorationSession;camera:PerspectiveCamera;reduced:boolean}){
  const plot=land.selected!,draft=land.draft!,recipe=draft.sculpt?.version===5||draft.sculpt?.version===6?draft.sculpt:null,walking=land.phase==='walkthrough';
@@ -80,8 +85,12 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const [furnishTool,setFurnishTool]=useState<FurnishTool>('interior-furniture-select');
  const [detailModule,setDetailModule]=useState(''),[roofPresetId,setRoofPresetId]=useState('skylight'),[roofModule,setRoofModule]=useState<string|null>(null),[roofRotation,setRoofRotation]=useState(0);
  const [floor,setFloor]=useState(0),[channel,setChannel]=useState<StudioChannel>('wall'),[color,setColor]=useState('#bdc8ad'),[texture,setTexture]=useState(''),[eyedropper,setEyedropper]=useState(false);
+ // Surface library brush (docs/city-surfaces.md): pattern, tint and effects on top of colour/texture.
+ const surfaceBrush=useSurfaceBrush();
  const [destination,setDestination]=useState(1),[exitKind,setExitKind]=useState<'door'|'balcony'|'terrace'>('door'),[flip,setFlip]=useState(false),[look,setLook]=useState<'simple'|'ornate'>('simple');
  const [roofScope,setRoofScope]=useState<'part'|'connected'>('part');
+ // Theme brush (docs/city-studio-themes.md › Theme brush): the theme held like paint, with an eyedropped look.
+ const [themeBrush,setThemeBrush]=useState<ThemeBrush>({theme:FACADE_THEMES[0].id}),[themeNote,setThemeNote]=useState('');
  // Freeform brush: dab size in metres, full-width band mode, building-wide bands.
  const [freeBrush,setFreeBrush]=useState<number>(1),[band,setBand]=useState(false),[bandAround,setBandAround]=useState(false);
  const [outlineCornerMode,setOutlineCornerMode]=useState<OutlineCornerMode>('move'),[outlineEdgeMode,setOutlineEdgeMode]=useState<OutlineEdgeMode>('extrude');
@@ -106,7 +115,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const openingTool:StudioTool=openingKind==='free'||unified?'free-opening':'opening';
  const tool:StudioTool=rail==='select'?(level==='part'?'select':'pick')
   :rail==='build'?buildShape
-  :rail==='paint'?(target==='material'?'surface':target==='openings'?openingTool:target==='storefronts'?'opening':target==='trims'?'pick':target==='decor'?decorKind:roofMode==='roof'?'roof-opening':roofMode)
+  :rail==='paint'?(target==='material'?'surface':target==='openings'?openingTool:target==='storefronts'?'opening':target==='trims'||target==='themes'?'pick':target==='decor'?decorKind:roofMode==='roof'?'roof-opening':roofMode)
   :rail==='erase'?(target==='material'&&(brushSize==='tile'||brushSize==='free')?'surface':'pick')
   :rail==='roof'?roofMode
   :rail==='garden'?'select'
@@ -168,7 +177,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  // ---- Brush picks: erase and trims ------------------------------------------------------------------------------
  const eraseWhere=(pick:StudioPick,sizeNow:StudioBrushSize)=>{const part=pick.bay?.anchor.shapeId??pick.roofPartId;return sizeNow==='part'&&part?{parts:[part]}:sizeNow==='wall'&&pick.bay?{walls:[bayWall(pick.bay)]}:null;};
  const eraseItems=(what:StudioEraseWhat,where:{walls?:WallRef[];parts?:string[]},place:string)=>{if(!recipe)return false;const next=eraseStudioItems(recipe,what,where);if(next===recipe){interaction.setIssue(`No ${ERASE_LABELS[what]} to erase on this ${place}.`);return false;}return commit(next,`Remove ${ERASE_LABELS[what]} on ${place==='part'?'this part':place==='wall'?'this wall':place}`);};
- const erasePick=(pick:StudioPick)=>{if(!recipe)return;const what=ERASE_BY_TARGET[target],where=eraseWhere(pick,brushSize);
+ const erasePick=(pick:StudioPick)=>{if(!recipe)return;if(target==='themes'){eraseThemePick(pick);return;}const what=ERASE_BY_TARGET[target],where=eraseWhere(pick,brushSize);
   if(where){eraseItems(what,where,where.parts?'part':'wall');return;}
   const bay=pick.bay;
   if(target==='openings'){const ref=openingAt(pick);if(!ref||ref.kind==='stamp'){interaction.setIssue(ref?'Storefronts are erased with the Storefronts target.':'Click a window or door to erase it.');return;}if(ref.kind==='kit'&&bay?.entrance){interaction.setIssue('Keep a door at the main entrance.');return;}commit(removeStudioOpenings(recipe,[ref]),'Remove opening');return;}
@@ -180,16 +189,25 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
   if(bay){const owned=pick.point&&ownedPaintHit(plot.id,bay.anchor,{x:pick.point[0],y:pick.point[1],z:pick.point[2]});if(owned){const next=erasePaintAt(recipe,owned.shapeId,owned.side,owned.x,owned.y,channel==='trim'?'trim':'wall');if(next!==recipe){commit(next);return;}}commit(paintStudioStroke(recipe,[bay.anchor],'spot',channel,null));}
  };
  const trimPick=(pick:StudioPick)=>{if(!recipe)return;const id=pick.freeOpeningId;if(!id){interaction.setIssue('Click a free window or door to dress it.');return;}const choices=freeOpeningTrimChoices(recipe,draft.design,id,interaction.bays);if(!choices?.kinds.includes(trimKind)){interaction.setIssue(`${TRIM_LABELS[trimKind]} do not suit this opening.`);return;}const wall={shapeId:recipe.studio.freeOpenings!.find(o=>o.id===id)!.shapeId,side:recipe.studio.freeOpenings!.find(o=>o.id===id)!.side};commit(toggleFreeTrim(recipe,id,trimKind));select({level:'opening',partId:wall.shapeId,wall,openings:[{kind:'free',id}]});};
- const onPick=(pick:StudioPick)=>{if(rail==='select'){if(pick.detail>=2){const next=drillSelectLevel(level);if(next){setLevelState(next);selectAt(next,pick);return;}}selectAt(level,pick);return;}if(rail==='erase'){erasePick(pick);return;}if(rail==='paint'&&target==='trims')trimPick(pick);};
+ /** The part a theme click lands on: the wall in front, else the roof under the pointer. */
+ const themePart=(pick:StudioPick)=>pick.bay?.anchor.shapeId??pick.roofPartId??pick.partId??null;
+ /** Paint → Themes: click a part (Shift or Building size: the building); Alt-click picks the theme up. */
+ const themePick=(pick:StudioPick)=>{if(!recipe)return;const part=themePart(pick);
+  if(pick.alt||eyedropper){if(!part){interaction.setIssue('Alt-click a themed part to pick up its theme.');return;}const got=sampleThemeBrush(recipe,part);if(!got){interaction.setIssue('This part has no theme to pick up.');return;}setThemeBrush(got);setEyedropper(false);const label=THEME_MAP.get(got.theme)?.label??got.theme;setThemeNote(`Picked up ${label} from ${partName(part)}: seed, colours and tuning.`);hotbar.record({id:`theme:${got.theme}`,target:'themes',label,theme:got.theme});interaction.setIssue('');playStudioCue('tick');return;}
+  const scopeNow=themeBrushScope(brushSize,pick.shift,part);if(!scopeNow){interaction.setIssue('Click a part to theme it · Shift-click themes the whole building.');return;}
+  applyTheme(themeBrush.theme,scopeNow,themeBrushOptions(themeBrush));};
+ const eraseThemePick=(pick:StudioPick)=>{if(!recipe)return;const part=themePart(pick),building=pick.shift||brushSize==='building';if(!part&&!building){interaction.setIssue('Click a themed part to remove its theme.');return;}
+  const out=eraseThemeAt(recipe,building?{building:true}:{partId:part!});if('reason' in out){interaction.setIssue(out.reason);return;}commit(out.recipe,out.label);};
+ const onPick=(pick:StudioPick)=>{if(rail==='paint'&&target==='themes'){themePick(pick);return;}if(rail==='select'){if(pick.detail>=2){const next=drillSelectLevel(level);if(next){setLevelState(next);selectAt(next,pick);return;}}selectAt(level,pick);return;}if(rail==='erase'){erasePick(pick);return;}if(rail==='paint'&&target==='trims')trimPick(pick);};
 
  // ---- Interaction ---------------------------------------------------------------------------------------------
- const sample=(bay:StudioBay)=>{setColor(bay.finishes[channel]?.color??STUDIO_FAMILIES[bay.family][channel]);setTexture(bay.finishes[channel]?.texture??'');setEyedropper(false);};
+ const sample=(bay:StudioBay)=>{const got=surfaceBrush.adopt(bay.finishes[channel],STUDIO_FAMILIES[bay.family][channel]);setColor(got.color);setTexture(got.texture);setEyedropper(false);};
  const highestStorey=cam.highestStorey;
  const interaction=useStudioInteraction({onPick,onSelectPick,onEscape:()=>onEscape(),onRhythmFace:(shapeId,side,info)=>rhythmPanel.onWall(shapeId,side,info),roofOpeningPreset:(ROOF_OPENING_PRESETS.find(p=>p.id===roofPresetId)??ROOF_OPENING_PRESETS[0]).preset,
   onRoofOpeningSelect:id=>{const o=id?latestRecipe()?.studio.roofOpenings?.find(x=>x.id===id):null;if(o)select({level:'object',partId:o.partId,object:{kind:'roof-opening',id:o.id}});else if(selection.level==='object'&&selection.object.kind==='roof-opening')goTo(stepUpSelection(selection));},
   onFreeOpeningSelect:id=>{const o=id?latestRecipe()?.studio.freeOpenings?.find(x=>x.id===id):null;if(o){const wall={shapeId:o.shapeId,side:o.side};select({level:'opening',partId:o.shapeId,wall,openings:[{kind:'free',id:o.id}]});}else if(selection.level==='opening')goTo(stepUpSelection(selection));},
   freeArcade,roofDetail:effectiveTool==='roof-detail'&&roofModule?{module:roofModule,size:(STUDIO_MODULE_MAP.get(roofModule)?.size??[1,1,1]) as [number,number,number],rotation:roofRotation}:undefined,onRoofDetailPlace:(partId,u,v)=>void placeRoofDetail(partId,u,v),onRoofDetailRotate:()=>setRoofRotation(r=>(r+1)%4),
-  freePreset,paintBrush,paintBand,paintBandAround:bandAround,onPaintPick:paintPicking?paintRules.onWall:undefined,land,plot,draft,recipe,camera,tool:effectiveTool,setTool:t=>setToolFromGesture(t),outlineCornerMode,outlineEdgeMode,floor,opening,scope,channel,color,texture,erase,eyedropper,onSample:sample,onFillApplied:()=>{},
+  freePreset,paintBrush,paintBand,paintBandAround:bandAround,brushFinish:surfaceBrush.regionFinish(color,texture),brushStencil:surfaceBrush.stencil,onPaintPick:paintPicking?paintRules.onWall:undefined,land,plot,draft,recipe,camera,tool:effectiveTool,setTool:t=>setToolFromGesture(t),outlineCornerMode,outlineEdgeMode,floor,opening,scope,channel,color,texture,erase,eyedropper,onSample:sample,onFillApplied:()=>{},
   destination:Math.min(destination,highestStorey),exitKind,layout:stairLayout,flip,look,detailModule,interiorEditId,interiorDoorStyle,interiorDoorHinge,furnitureKind,furnitureRotation,furnitureEditId:selectedFurnitureId,onFurnitureSelect:id=>selectFurniture(id),onFurnitureRotate:()=>rotateFurniture(),onRoomSelect:setSelectedRoomId,walking,roofConnected:roofScope==='connected',onRoofSelect:()=>{}});
  /** Tools the interaction hook switches to after a gesture (draw → select, outline, roof handles, furniture Esc). */
  function setToolFromGesture(t:StudioTool){
@@ -224,7 +242,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const brush=(t:StudioBrushTarget)=>{if(rail!=='erase')setRailState('paint');setTargetState(t);interaction.cancel();setEyedropper(false);};
  const hotbar=useStudioHotbar();
  const chooseColor=(c:string)=>{setColor(c);setEyedropper(false);brush('material');hotbar.record({id:`color:${c}`,target:'material',label:c,color:c});};
- const chooseTexture=(id:string,label:string)=>{setTexture(id);setEyedropper(false);brush('material');hotbar.record({id:`texture:${id||'smooth'}`,target:'material',label,texture:id});};
+ const chooseTexture=(id:string,label:string)=>{setTexture(id);surfaceBrush.choosePattern(null);setEyedropper(false);brush('material');hotbar.record({id:`texture:${id||'smooth'}`,target:'material',label,texture:id});};
  const chooseFreePreset=(id:string,label:string)=>{setOpeningKind('free');setFreePresetId(id);brush('openings');hotbar.record({id:`free:${id}`,target:'openings',label,free:id});};
  const chooseKitModule=(id:string,label:string)=>{setOpeningKind('kit');setKitModule(id);brush('openings');hotbar.record({id:`kit:${id}`,target:'openings',label,kit:id});};
  const chooseStamp=(id:string,label:string)=>{setStampId(id);brush('storefronts');hotbar.record({id:`stamp:${id}`,target:'storefronts',label,stamp:id});};
@@ -232,7 +250,9 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const chooseDecor=(kind:StudioAssemblyKind,module='')=>{setDecorKind(kind);setDetailModule(module);brush('decor');hotbar.record({id:`decor:${kind}:${module}`,target:'decor',label:module?STUDIO_MODULE_MAP.get(module)?.label??module:DECOR_LABELS[kind],decor:kind,module});};
  const chooseRoofOpening=(id:string,label:string)=>{interaction.cancel();setRoofPresetId(id);setRoofMode('roof-opening');if(rail!=='roof')brush('roof');hotbar.record({id:`roof-opening:${id}`,target:'roof',label,roofOpening:id});};
  const chooseRoofDetail=(module:string)=>{interaction.cancel();setRoofModule(module);setRoofMode('roof-detail');if(rail!=='roof')brush('roof');hotbar.record({id:`roof-detail:${module}`,target:'roof',label:STUDIO_MODULE_MAP.get(module)?.label??module,roofDetail:module});};
- const useHotbar=(item:HotbarItem)=>{setRailState(rail==='erase'?'erase':'paint');setTargetState(item.target);interaction.cancel();setEyedropper(false);
+ /** Palette › Themes card: hold this theme on the brush (a fresh look per click). */
+ const chooseThemeBrush=(id:string)=>{const t=THEME_MAP.get(id);if(!t)return;setThemeBrush({theme:id});setThemeNote('');brush('themes');hotbar.record({id:`theme:${id}`,target:'themes',label:t.label,theme:id});};
+ const useHotbar=(item:HotbarItem)=>{setRailState(rail==='erase'?'erase':'paint');setTargetState(item.target);interaction.cancel();setEyedropper(false);if(item.theme&&THEME_MAP.has(item.theme)){setThemeBrush({theme:item.theme});setThemeNote('');}
   if(item.color)setColor(item.color);if(item.texture!==undefined)setTexture(item.texture);
   if(item.free){setOpeningKind('free');setFreePresetId(item.free);}if(item.kit){setOpeningKind('kit');setKitModule(item.kit);}
   if(item.stamp)setStampId(item.stamp);if(item.trim)setTrimKind(item.trim as TrimKind);if(item.decor){setDecorKind(item.decor);setDetailModule(item.module??'');}
@@ -266,17 +286,19 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  const duplicate=()=>{if(!recipe||!selected)return;const id=crypto.randomUUID();commit({...recipe,volumes:[...recipe.volumes,{...selected,id,x:selected.x+.5,z:selected.z+.5}],studio:{...recipe.studio,parts:{...recipe.studio.parts,[id]:structuredClone(style??{})}}});land.setSelectedVolume(id);};
  const remove=()=>{if(!recipe||!selected)return;commit({...recipe,volumes:recipe.volumes.filter(v=>v.id!==selected.id)});land.setSelectedVolume(null);};
  /** Apply a theme from the gallery: one labelled undo step. With no parts yet (or from Build's ideas) it starts a themed box. */
- const applyTheme=(themeId:string,scope=themeGallery??{scope:'building' as const})=>{if(!recipe)return false;
+ const applyTheme=(themeId:string,scope:NonNullable<typeof themeGallery>=themeGallery??{scope:'building'},options:Omit<ApplyThemeOptions,'partId'>={})=>{if(!recipe)return false;
   const starting=scope.scope==='starter'||!recipe.volumes.some(v=>v.operation==='add');
   // ?themeSeed=<n> fixes the seed (reproducible thumbnails and browser checks); otherwise every apply rolls a new look.
-  const fixed=typeof window!=='undefined'?Number(new URLSearchParams(window.location.search).get('themeSeed')??NaN):NaN,seed=Number.isInteger(fixed)?fixed:undefined;
-  const out=starting?themeStarterRecipe(recipe,draft.design,themeId,plot.size,seed):applyFacadeTheme(recipe,draft.design,themeId,{...(scope.scope==='part'?{partId:scope.partId}:{}),...(seed!==undefined?{seed}:{})});
+  const fixed=typeof window!=='undefined'?Number(new URLSearchParams(window.location.search).get('themeSeed')??NaN):NaN,seed=options.seed??(Number.isInteger(fixed)?fixed:undefined);
+  const out=starting?themeStarterRecipe(recipe,draft.design,themeId,plot.size,seed):applyFacadeTheme(recipe,draft.design,themeId,{...options,...(scope.scope==='part'?{partId:scope.partId}:{}),...(seed!==undefined?{seed}:{})});
   if('reason' in out){interaction.setIssue(out.reason);return false;}
   if(!commit(out.recipe,out.label))return false;if(starting){land.setSelectedVolume(null);setStarters(false);}setThemeGallery(null);return true;};
+ /** A theme card dropped on the view: a part takes the theme; empty ground in an empty plot starts a themed block. */
+ const dropTheme=(themeId:string,outcome:ThemeDropOutcome)=>{if(outcome.kind==='part')return applyTheme(themeId,{scope:'part',partId:outcome.partId});if(outcome.kind==='starter')return applyTheme(themeId,{scope:'starter'});if(outcome.reason)interaction.setIssue(outcome.reason);return false;};
  const empty=()=>{if(!recipe)return;commit({...recipe,volumes:[],attachments:[],studio:freshStudio()});land.setSelectedVolume(null);setStarters(false);chooseRail('build');setBuildShape('block');};
  const starter=(index:number)=>{if(index<=-2){land.edit(studioExample(draft,-index-2,plot.size));land.setSelectedVolume(null);setStarters(false);setReplace(null);return;}const design=applyComposition(draft.design,index),next=upgradeStudio({...draft,sculpt:undefined,design},plot.size);if(next){land.edit(next);land.setSelectedVolume(null);setStarters(false);setReplace(null);}};
  /** Current brush finish as a stored finish (texture only when set). */
- const finish=texture?{color,texture}:{color};
+ const finish=surfaceBrush.tileFinish(color,texture);
  /** Paint a whole wall or part with the current brush finish (inspector actions). */
  const paintWalls=(walls:WallRef[])=>{if(!recipe)return;let next=recipe;const faces=preparedStudioPlot(plot.id)?.result.freeFaces??[];
   for(const w of walls){const face=faces.find(f=>f.shapeId===w.shapeId&&f.side===w.side);if(face&&(channel==='wall'||channel==='trim')){next=fillPaintFace(next,{shapeId:w.shapeId,side:w.side,channel,height:face.height,finish});continue;}
@@ -338,7 +360,7 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
  useEffect(()=>{const c=landPosition(plot);setStudioIsolate(isolate&&!walking?{on:true,plotId:plot.id,x:c.x,z:c.z,size:plot.size}:ISOLATE_OFF);},[isolate,walking,plot.id,plot.x,plot.z,plot.size]);// eslint-disable-line react-hooks/exhaustive-deps
  useEffect(()=>()=>setStudioIsolate(ISOLATE_OFF),[]);
  const walk=()=>{if(land.previewStatus.pending||land.previewStatus.error)return;const ready=preparedStudioPlot(plot.id);if(!ready){interaction.setIssue('Your building is still preparing.');return;}cam.saveForWalk();const entry=landEntrance(plot);Object.assign(session.foot,createFootState(entry.x,entry.z,entry.heading));session.mode='on-foot';land.setPhase('walkthrough');};
- function onEscape(){if(help){setHelp(false);return true;}if(themeGallery){setThemeGallery(null);return true;}if(parts||starters){setParts(false);setStarters(false);return true;}if(rail==='rooms'||rail==='furnish')return false;if(rail!=='select'){chooseRail('select');return true;}return stepUp();}
+ function onEscape(){if(themeDragState()){setThemeDrag(null);return true;}if(help){setHelp(false);return true;}if(themeGallery){setThemeGallery(null);return true;}if(parts||starters){setParts(false);setStarters(false);return true;}if(rail==='rooms'||rail==='furnish')return false;if(rail!=='select'){chooseRail('select');return true;}return stepUp();}
  const keyState={walking,category,rail,level,selection,selectedFurnitureId,selectedId:selected?.id??null,remove,removeFurniture,deleteSelection,duplicate,chooseRail,toggleErase,chooseFloor,floor,highestStorey,view,dice:tryAnotherLook,toggleIsolate,openRing,ringAllowed:rail==='paint'&&target==='material'&&!!interaction.hover&&!ring,diceReady,busy:interaction.active,stepUp,setLevel:setLevelState,useSlot:(i:number)=>{const item=hotbar.items[i];if(item)useHotbar(item);},help:()=>setHelp(h=>!h)};
  const keyActions=useRef(keyState);keyActions.current=keyState;
  // Clicking the world returns keyboard focus to it (pointer events suppress the usual blur), so Tab, Delete and
@@ -382,13 +404,13 @@ export function useStudioState({land,session,camera,reduced}:{land:CityLandContr
   interiorEditId,setInteriorEditId,floorViewMode,setFloorViewMode,interiorDoorStyle,setInteriorDoorStyle,interiorDoorHinge,setInteriorDoorHinge,
   selectedRoomId,setSelectedRoomId,selectedRoom,roomChoices,editRoom,furnitureKind,furnitureRotation,selectedFurnitureId,selectFurniture,chooseFurniture,rotateFurniture,removeFurniture,moveFurniture:()=>setToolFromGesture('interior-furniture'),
   help,setHelp,starters,setStarters,collection,setCollection,styleFilter,setStyleFilter,parts,setParts,replace,setReplace,paletteOpen,setPaletteOpen,inspectorOpen,setInspectorOpen,rhythmOpen,setRhythmOpen,variationOpen,setVariationOpen,
-  themeGallery,setThemeGallery,applyTheme,
+  themeGallery,setThemeGallery,applyTheme,dropTheme,themeBrush,setThemeBrush,chooseThemeBrush,themeNote,
   paintRules,paintPicking,rhythmPanel,rhythmPicking,rhythmMarks,partName,tryAnotherLook,diceReady,removeInactive,editPart,editStyle,followWall,duplicate,remove,empty,starter,
   paintWalls,paintPart,paintTiles,eraseItems,removeFreeOpeningById,
   chooseFloor,addInteriorStorey,toggleInteriorFloor,highestStorey,prepared,inactive,shown,selected,style,ghost,splitAtStorey,
   bursts,clearBurst,muted,ring,openRing,closeRing,previewRing,pickRing,view,walk,
   storefrontPreview,hoverOwned,paintTargets,protectedStamp,outlineHandles,cornerSelected:(i:number)=>interaction.outlineSelection?.partId===selected?.id&&!!interaction.outlineSelection?.indices.includes(i),selectedFreeId,freeChoice,
-  colors:STUDIO_COLORS};
+  colors:STUDIO_COLORS,surfaceBrush};
 }
 export type StudioState=ReturnType<typeof useStudioState>;
 

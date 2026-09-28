@@ -124,7 +124,8 @@ test("composition preserves brand palette and version two geometry retains reces
     createHash("sha256").update(
       JSON.stringify(resolveDesign(DEFAULT_DESIGN_V2, "#335577")),
     ).digest("hex"),
-    "e8e062d790367c89f6a78e1612ba5ffd712366c0cc900d0a521a50df4315a85e",
+    // Foundation skirt below the plot surface (docs/city-ground-contact.md).
+    "554adf241e470c3c83372ea8399d3330320cdd4f9602d17bc3fc081432b71706",
   );
 });
 
@@ -270,7 +271,8 @@ test("ground foundations use wall material and never add a slab above the door d
  for(const finish of ["procedural","accents","facade"] as const)for(const blueprint of ["office","terraces","courtyard","l-shape"] as const){
   const d=normalizeV3({...newDesign("clear-threshold"),finish,blueprint,slots:{}});
   const r=resolveV3(d,"#778899");
-  const foundations=r.parts.filter(p=>p.kind==="box" && p.position[1]===.45 && p.size[1]===.4);
+  // From below the plot surface (a skirt, docs/city-ground-contact.md) up to the ground-floor datum.
+  const foundations=r.parts.filter(p=>p.kind==="box" && Math.abs(p.position[1]+p.size[1]/2-.65)<1e-9 && p.position[1]-p.size[1]/2<.25);
   assert.ok(foundations.length);
   for(const p of foundations){assert.equal(p.textureRole,"wall");assert.ok(p.position[1]+p.size[1]/2<=.65001);}
   assert.ok(!r.parts.some(p=>p.kind==="box" && Math.abs(p.position[1]-.74)<.0001 && p.size[1]===.18));

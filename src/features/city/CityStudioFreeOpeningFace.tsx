@@ -4,6 +4,9 @@ import {attribute,float,floor,fract,hash,materialColor,max,mix,mx_noise_float,po
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import type {StudioFreeFace} from '../../domain/cityStudioFreeFaces';
+import {decodeSurfaceKey,finishRenderTexture} from '../../domain/cityStudioSurfaces';
+import {surfacePattern} from '../../domain/citySurfacePatterns';
+import {STUDIO_FAMILIES} from '../../domain/cityStudioCatalog';
 
 const lin=(hex:string)=>{const c=new Color(hex);return vec3(c.r,c.g,c.b);};
 /**
@@ -14,7 +17,7 @@ const lin=(hex:string)=>{const c=new Color(hex);return vec3(c.r,c.g,c.b);};
  * `vertexColor`: the colour comes from the geometry's `color` attribute (tinting the plaster and texture, not
  * the stone), so buildings with different finishes share one material (city batches, CitySculptCity).
  */
-export function freeWallMaterial(color:string,texture:CityTextureId,vertexColor=false){
+export function freeWallMaterial(color:string,texture:CityTextureId|string,vertexColor=false){
  const m=citySurfaceMaterial(false,texture);m.color.set(vertexColor?'#ffffff':color);
  const base=(m.colorNode??materialColor) as unknown as ReturnType<typeof vec3>,rough=(m.roughnessNode??float(m.roughness)) as unknown as ReturnType<typeof float>,d=attribute('openingDistance','float'),p=positionWorld;
  const n=mx_noise_float(p.mul(1.6)).mul(.6).add(mx_noise_float(p.mul(5.1)).mul(.25));
@@ -24,8 +27,10 @@ export function freeWallMaterial(color:string,texture:CityTextureId,vertexColor=
  const stone=mix(lin('#c9bda5').mul(tone),lin('#7c7468'),joint);
  // Mottled plaster away from openings, a thin grime line right at the edge.
  const mottled=(vertexColor?base.mul(attribute('color','vec3')):base).mul(float(.95).add(n.mul(.05)));
- m.colorNode=mix(mottled,stone,wear).mul(float(.82).add(smoothstep(0,.06,d).mul(.18)));
- m.roughnessNode=mix(rough,float(.94),wear);
+ // Surface finishes (cityStudioSurfaces) reveal stone only for render-like patterns; masonry keeps its own joints.
+ const surface=decodeSurfaceKey(texture),reveal=!surface||!!surfacePattern(surface.pattern)?.opening;
+ m.colorNode=(reveal?mix(mottled,stone,wear):mottled).mul(float(.82).add(smoothstep(0,.06,d).mul(.18)));
+ m.roughnessNode=reveal?mix(rough,float(.94),wear):rough;
  return m;
 }
-export const freeFaceTexture=(face:StudioFreeFace):CityTextureId=>(face.finishes.wall?.texture as CityTextureId|undefined)??'none';
+export const freeFaceTexture=(face:StudioFreeFace):string=>finishRenderTexture(face.finishes.wall,STUDIO_FAMILIES[face.family].wall)??'none';

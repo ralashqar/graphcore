@@ -16,6 +16,7 @@ import type {FreeRect} from './cityStudioFreeOpenings.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import {sculptFloorBottom,sculptFloorTop,validSculptSide} from './citySculpt.ts';
 import {validPaintFinish} from './cityStudioPaintRegions.ts';
+import {tileFinish} from './cityStudioSurfaces.ts';
 
 export type PaintRuleWall={partId:string;side:string};
 /** No scope = whole building; otherwise exactly one of `parts` or `walls`. */
@@ -35,7 +36,7 @@ const validId=(s:unknown)=>typeof s==='string'&&!!s&&s.length<=100;
 function ruleError(r:StudioPaintRule):string|null{
  const bad='A paint rule is invalid.';
  if(!r||typeof r!=='object'||!validId(r.id)||!['floors','band','quoins','alternate'].includes(r.kind)||!['wall','trim'].includes(r.channel)||!validPaintFinish(r.finish))return bad;
- if(!only(r,['id','kind','scope','channel','finish','floors','band','quoins','alternate'])||!only(r.finish,['color','texture']))return bad;
+ if(!only(r,['id','kind','scope','channel','finish','floors','band','quoins','alternate'])||!only(r.finish,['color','texture','surface'])||!!r.finish.surface?.fade)return bad;
  if(r.scope!==undefined){const s=r.scope;if(!s||typeof s!=='object'||!only(s,['parts','walls'])||(s.parts===undefined)===(s.walls===undefined))return 'A paint rule has an invalid scope.';
   const list=(s.parts??s.walls) as unknown[];if(!Array.isArray(list)||!list.length||list.length>PAINT_RULES.targets)return 'A paint rule has an invalid scope.';
   if(s.parts&&s.parts.some(p=>!validId(p)))return 'A paint rule has an invalid scope.';
@@ -179,5 +180,5 @@ export function aroundBandRule(d:Pick<CityBuildingDesignV3,'groundHeight'|'upper
  const lo=Math.min(y0,y1),hi=Math.max(y0,y1);if(hi-lo<.05)return null;
  let floor=0;while(floor<PAINT_RULES.maxFloor&&sculptFloorTop(floor,d.groundHeight,d.upperHeight)<=lo+1e-6)floor++;
  const offset=Math.round((lo-sculptFloorBottom(floor,d.groundHeight,d.upperHeight))*100)/100,height=Math.round((hi-lo)*100)/100;
- return {kind:'band',channel,finish,band:{at:'floor',floor,offset:Math.max(-50,offset),height:Math.max(.05,Math.min(60,height))},...(scope?{scope}:{})};
+ return {kind:'band',channel,finish:tileFinish(finish),band:{at:'floor',floor,offset:Math.max(-50,offset),height:Math.max(.05,Math.min(60,height))},...(scope?{scope}:{})};
 }

@@ -38,6 +38,7 @@ import { MOUSE, TOUCH, Vector3, OrthographicCamera, PerspectiveCamera } from "th
 import { type CityProperty } from "../../domain/city";
 import { CityMapLayoutContext, estateMapLayout, standardMapLayout, useCityMapLayout } from "./CityMapLayout";
 import { CityKit } from "./CityKit";
+import { CityTestCameraPin } from "./CityTestCameraPin";
 let establishedCentre = false;
 let savedCityCamera: {
   position: Vector3;
@@ -533,6 +534,7 @@ function CitySceneContent({
         }}
       >
         <ContextGuard onFailure={onFailure} />
+        <CityTestCameraPin />
         <CityAdaptiveResolution onChange={setPixelBudget} />
         <CityCameras driving={driving} cameras={cameras}/>
         {!spriteMode && <CityStreetActivity

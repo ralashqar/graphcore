@@ -203,6 +203,61 @@ colour swatch from the first colourway.
   rules, colours and decorations. Scoped rhythm rules (wall, floor, region) still apply on top. The facade rhythm panel
   and paint rules panel stay fully usable.
 
+## Theme brush
+
+Applying a theme also works like skinning parts: hold a theme on the brush, or drag its card onto a part. Every path
+calls the studio's one `applyTheme`, which calls `applyFacadeTheme`, so the result matches Inspector › Part › **Apply
+theme to this part**, and each apply is one labelled undo step ("Theme part: …", "Theme building: …") with the usual
+cue, bursts and undo toast. Parts carrying different themes keep them: painting one part only replaces that part's
+reference.
+
+### Paint › Themes
+
+**Themes** is a target in the Paint brush's "what to paint" chooser (`studioRail.ts`). The palette reuses the gallery's
+cards (`ThemeCards` in `StudioThemes.tsx`) in a compact two-column layout, with the search box and the shared style
+filter. Above the cards, the held theme shows with its thumbnail, whether it carries a picked-up look, and an
+eyedropper button.
+
+- **Hover** a part: its frame and walls glow and a ghost label reads "Apply <theme>" (`StudioThemeMarks.tsx`). Holding
+  Shift, or the Building size, highlights every part and reads "Apply <theme> to the building".
+- **Click** a part: the theme goes on that part only. A plain card rolls a fresh look per click (`?themeSeed=<n>` fixes
+  it, as in the gallery).
+- **Sizes**: Part (default) and Building (the chip, or Shift-click). The Wall chip is shown disabled with a tooltip: a
+  theme reference is scoped to a part or the building, and its storefronts, decorations, roof props and colours belong
+  to that part, so one wall cannot carry its own theme. Use Facade rhythm's wall rules for per-wall variation.
+- **Erase** (E, or the Erase mode) with the Themes target: clicking a part removes that part's own theme ("Remove
+  theme: …"); a part dressed only by the building theme says so. Building size or Shift-click removes every theme
+  ("Remove every theme"). As with the inspector's Remove theme, the rhythm and colours stay as ordinary settings.
+- **Eyedropper**: Alt-click a themed part (or use the eyedropper button) to pick up the theme that dresses it (its own,
+  else the building's) with its seed, colourway, aspect tuning, locks, reroll counters and the rhythm layers at its
+  scope (coverage, uniformity, pools). The next click paints exactly that look onto another part. A status line says
+  where it came from; choosing a card again drops the picked-up look.
+- **Hotbar**: a theme enters the hotbar like a colour or kit item, with its thumbnail; the slot (or its number key)
+  selects the Themes target with that theme.
+
+Pure helpers: `src/domain/cityStudioThemeBrush.ts` (`sampleThemeBrush`, `themeBrushOptions`, `eraseThemeAt`) and
+`src/features/city/studioThemeBrush.ts` (click scope, drop outcome, ghost labels, drag start rules).
+`applyFacadeTheme` accepts `tune`, `locks`, `seeds` and `layers` options for a picked-up look; aspects the theme does
+not use are dropped.
+
+### Drag a theme card
+
+Cards in the gallery and in the palette can be dragged onto the 3D view. The drag uses pointer events, not HTML5
+drag-and-drop, because the studio overlay is a separate React root over the canvas: window listeners follow the
+pointer, `document.elementFromPoint` checks the canvas is under it, and the interaction hook's `probePart` ray-casts
+the part (wall, roof or flat top, the same rules as Select) and the plot ground. A small external store
+(`studio/themeDrag.ts`) feeds the floating card ghost in the overlay and the drop highlight in the scene, so pointer
+moves do not re-render the studio.
+
+- Over a part: the part glows and the ghost reads "Apply <theme>"; releasing applies it to that part.
+- Over empty ground in an empty plot: a green starter block previews and the ghost reads "Start a <theme> block";
+  releasing builds the theme's starter box, themed (the existing `themeStarterRecipe` path).
+- Esc, or releasing over a panel or outside the view, cancels. Releasing on ground next to a building explains "Drop
+  the theme on a part."
+- Mouse drags start after a 6 px move. On touch, a still long-press (380 ms) lifts the card and the next moves drag it;
+  moving first scrolls the list as usual. Card images are not natively draggable, so the browser's image drag cannot
+  steal the pointer.
+
 ## Performance
 
 `node --experimental-strip-types scripts/benchmark-city-themes.mjs` resolves a 6-storey, 20 × 12 m part with the theme's
@@ -247,7 +302,29 @@ plus linear passes over the cells. Themes add 2–193 instanced kit pieces per p
   Screenshots: `output/theme-<id>.png`, `output/theme-contact-sheet.png`, `output/theme-apply-parts.png`,
   `output/theme-apply-building.png`, `output/theme-tuned.png` and `output/theme-panel.png`.
 
+- `node --experimental-strip-types --test src/domain/cityStudioThemeBrush.test.ts src/features/city/studioThemeBrush.test.ts`:
+  two part themes, the eyedropper carrying seed, colours, tuning, locks and rhythm layers into an identical look,
+  building-theme sampling, erase rules, click scope, drop outcomes, labels and drag start rules.
+- `CITY_TEST_ORIGIN=http://localhost:5180 node scripts/city-studio-theme-brush-browser.mjs` (native WebGPU):
+  1. Paint › Themes: Wall is disabled with its tooltip; the hover label; Tokyo zakkyo brushed on one part and Paris
+     Haussmann on the other (different rhythm styles, finishes and themed pieces, nothing inactive).
+  2. Alt-click picks up the first part's look and paints it onto the second (same seed, palette and finishes).
+  3. Erase removes the second part's theme; Shift-click themes the whole building.
+  4. A palette card dragged onto a part applies it; Esc cancels a drag; releasing outside the view does nothing; a
+     synthetic touch long-press and drag applies a theme.
+  5. A gallery card dragged onto an empty plot builds a themed starter.
+  6. Undo/redo after each step with its "Undid: …" toast.
+
+  Screenshots: `output/theme-brush-hover.png`, `output/theme-brush-parts.png`, `output/theme-brush-eyedropper.png`,
+  `output/theme-brush-building.png`, `output/theme-brush-drag.png`, `output/theme-brush-dragging.png` (the drag ghost)
+  and `output/theme-brush-starter.png`.
+
 ## Known gaps
+
+- The theme brush has no Wall size: a theme cannot be scoped to one wall.
+- The eyedropper carries the rhythm layers at the theme's own scope. Scoped rhythm rules on the source part (a wall,
+  floor or region rule) are not copied.
+- Touch drag was exercised with synthetic touch pointer events in the browser suite, not on a physical device.
 
 - There is no raised stoop: the ground storey sits at street level. Brownstones get a lamp-lit door with a canopy
   instead.

@@ -18,6 +18,7 @@
 // @deno-types="npm:@types/three@0.186.0"
 import {Color} from 'three';
 import {STUDIO_FAMILIES} from './cityStudioCatalog.ts';
+import {finishRenderTexture} from './cityStudioSurfaces.ts';
 import {FREE_FACE,type FreeFaceBuffers,type FreeFaceChannel} from './cityStudioFreeOpeningGeometry.ts';
 import type {RoofOpeningChannel,StudioRoofOpeningPart} from './cityStudioRoofOpeningGeometry.ts';
 import type {StudioFreeFace} from './cityStudioFreeFaces.ts';
@@ -75,11 +76,11 @@ export function buildStudioDetailBatches(studio:{freeFaces?:StudioFreeFace[];roo
  for(const face of studio.freeFaces??[]){
   // Curved faces arrive baked into building-local x/z (cityStudioCurvedWalls): only the base height remains.
   const family=STUDIO_FAMILIES[face.family],g=face.geometry,frame={owner:face.id,rotation:face.bend?0:face.rotation,offset:(face.bend?[0,face.base,0]:[face.origin[0],face.base,face.origin[1]]) as [number,number,number]};
-  const wall:DetailMaterial={kind:'wall',color:face.finishes.wall?.color??family.wall,texture:face.finishes.wall?.texture??'none'},glass:DetailMaterial=face.interior?{kind:'glass',color:family.glass,seeThrough:true}:{kind:'glass',color:family.glass};
+  const wall:DetailMaterial={kind:'wall',color:face.finishes.wall?.color??family.wall,texture:finishRenderTexture(face.finishes.wall,family.wall)??'none'},glass:DetailMaterial=face.interior?{kind:'glass',color:family.glass,seeThrough:true}:{kind:'glass',color:family.glass};
   const rear=g.wall.rearStart??g.wall.indices.length;
   add(wall,{...frame,src:g.wall,ranges:[{tier:1,start:0,count:rear},{tier:0,start:rear,count:g.wall.indices.length-rear}]});
   // Painted regions: outer-skin pieces join the wall batch of their finish (same wear attribute, both tiers).
-  for(const p of g.wallPaint??[])add({kind:'wall',color:p.finish.color??family.wall,texture:p.finish.texture??'none'},{...frame,src:p.buffers,ranges:whole(p.buffers,1)});
+  for(const p of g.wallPaint??[])add({kind:'wall',color:p.finish.color??family.wall,texture:finishRenderTexture(p.finish,family.wall)??'none'},{...frame,src:p.buffers,ranges:whole(p.buffers,1)});
   for(const ch of ['trim','frame'] as FreeFaceChannel[])add({kind:'painted'},{...frame,src:g[ch],ranges:whole(g[ch],0)});
   // Openable faces: static leaves draw far only; near the camera animated portal leaves replace them.
   const leafTier:Tier=face.openable?2:1;add({kind:'painted'},{...frame,src:g.door,ranges:whole(g.door,leafTier)});

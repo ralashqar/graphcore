@@ -5,8 +5,8 @@ import type {StudioAssemblyKind} from '../../domain/cityStudioTypes.ts';
 
 export type StudioRailTool='select'|'build'|'paint'|'erase'|'roof'|'garden'|'rooms'|'furnish';
 export type StudioSelectLevel='part'|'wall'|'tile'|'opening'|'object';
-export type StudioBrushTarget='material'|'openings'|'storefronts'|'trims'|'decor'|'roof';
-export type StudioBrushSize='tile'|'wall'|'part'|'free';
+export type StudioBrushTarget='material'|'openings'|'storefronts'|'trims'|'decor'|'roof'|'themes';
+export type StudioBrushSize='tile'|'wall'|'part'|'free'|'building';
 
 export type StudioRailEntry={id:StudioRailTool;label:string;hotkey:string;hint:string;interior?:boolean};
 export const STUDIO_RAIL:readonly StudioRailEntry[]=[
@@ -44,16 +44,20 @@ export const BRUSH_TARGETS:readonly {id:StudioBrushTarget;label:string;hint:stri
  {id:'trims',label:'Trims',hint:'Shutters, flower boxes, keystones, hoods, lintels, canopies and lamps on free openings'},
  {id:'decor',label:'Decorations',hint:'Balconies, cornices, canopies, stairs, pilasters, ornaments, planters and lights'},
  {id:'roof',label:'Roof details',hint:'Skylights, dormers and rooftop details'},
+ {id:'themes',label:'Themes',hint:'Facade themes painted onto parts: click a part, Shift-click for the building, Alt-click to pick one up'},
 ];
 export const BRUSH_SIZES:readonly {id:StudioBrushSize;label:string;hint:string}[]=[
  {id:'tile',label:'Tile',hint:'One tile, or a tile-sized dab on generated walls'},
  {id:'wall',label:'Wall',hint:'The whole wall under the pointer'},
  {id:'part',label:'Part',hint:'Every wall of the part under the pointer'},
  {id:'free',label:'Freeform',hint:'Free brush dabs and bands on generated walls'},
+ {id:'building',label:'Building',hint:'The whole building (or Shift-click)'},
 ];
 /** Brush sizes a target honours: material paints at any size; erase applies every size to every target. */
 export function brushSizesFor(target:StudioBrushTarget,erase:boolean):StudioBrushSize[]{
  if(target==='material')return ['tile','wall','part','free'];
+ // Themes scope to parts or the building; the Wall chip is shown disabled with THEME_WALL_SIZE_REASON.
+ if(target==='themes')return ['part','building'];
  if(!erase)return [];
  return target==='roof'?['tile','part']:['tile','wall','part'];
 }
@@ -61,7 +65,7 @@ export const nextBrushSize=(size:StudioBrushSize,sizes:StudioBrushSize[]):Studio
 
 /** Legacy workspace category for a rail tool (Delete routing, floor views and telemetry keep using it). */
 export function studioCategoryFor(rail:StudioRailTool,target:StudioBrushTarget):StudioCategory{
- if(rail==='paint'||rail==='erase')return target==='material'?'Surfaces':target==='decor'?'Details':target==='roof'?'Roofs':'Openings';
+ if(rail==='paint'||rail==='erase')return target==='material'||target==='themes'?'Surfaces':target==='decor'?'Details':target==='roof'?'Roofs':'Openings';
  return rail==='roof'?'Roofs':rail==='garden'?'Garden':rail==='rooms'?'Rooms':rail==='furnish'?'Furniture':'Shape';
 }
 
@@ -75,13 +79,13 @@ export type StudioShortcut={keys:string;action:string};
 export const STUDIO_SHORTCUTS:readonly {group:string;items:readonly StudioShortcut[]}[]=[
  {group:'Tools',items:STUDIO_RAIL.map(t=>({keys:t.hotkey,action:t.label}))},
  {group:'Selecting',items:[{keys:'Tab / Shift Tab',action:'Cycle Part, Wall, Tile, Opening, Object'},{keys:'Double-click',action:'Drill down (Part → Wall → Tile)'},{keys:'Shift click',action:'Add walls, tiles or openings to the selection'},{keys:'Esc / Backspace',action:'Step up the breadcrumb'},{keys:'Delete',action:'Delete the selection at its level'},{keys:'Ctrl D',action:'Duplicate the selected part'},{keys:'Z',action:'Frame the selection'}]},
- {group:'Brush',items:[{keys:'1 – 9',action:'Quick slots in the hotbar'},{keys:'C',action:'Quick paint ring (Paint → Material)'},{keys:'Alt click',action:'Sample a finish'},{keys:'E',action:'Toggle erase mode'},{keys:'Space',action:'New look (style dice)'}]},
+ {group:'Brush',items:[{keys:'1 – 9',action:'Quick slots in the hotbar'},{keys:'C',action:'Quick paint ring (Paint → Material)'},{keys:'Alt click',action:'Sample a finish, or pick up a theme'},{keys:'Shift click',action:'Themes: apply to the whole building'},{keys:'E',action:'Toggle erase mode'},{keys:'Space',action:'New look (style dice)'}]},
  {group:'Building',items:[{keys:'PgUp / PgDn',action:'Change storey'},{keys:'R',action:'Turn furniture or a roof detail while placing'},{keys:'Ctrl Z / Ctrl Shift Z',action:'Undo / redo'},{keys:'?',action:'This sheet'}]},
  {group:'Camera',items:[{keys:'O',action:'Isolate: focus on this building'},{keys:'Right drag',action:'Orbit'},{keys:'Middle drag',action:'Pan'},{keys:'Wheel',action:'Zoom'},{keys:'Two fingers',action:'Move the camera on touch'}]},
 ];
 
 /** A hotbar quick slot: one brush item (colour, material, opening, stamp, trim, decoration or roof detail). */
-export type HotbarItem={id:string;target:StudioBrushTarget;label:string;color?:string;texture?:string;free?:string;kit?:string;stamp?:string;trim?:string;decor?:StudioAssemblyKind;module?:string;roofOpening?:string;roofDetail?:string};
+export type HotbarItem={id:string;target:StudioBrushTarget;label:string;color?:string;texture?:string;free?:string;kit?:string;stamp?:string;trim?:string;decor?:StudioAssemblyKind;module?:string;roofOpening?:string;roofDetail?:string;theme?:string};
 export const HOTBAR_SLOTS=9;
 /** New items enter slot 1 and push the oldest out; items already in a slot keep it, so number keys stay stable. */
 export function pushHotbar(list:readonly HotbarItem[],item:HotbarItem):HotbarItem[]{return list.some(x=>x.id===item.id)?[...list]:[item,...list].slice(0,HOTBAR_SLOTS);}

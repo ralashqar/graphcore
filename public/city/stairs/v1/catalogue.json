@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "id": "city-stair-parts-1",
+  "glb": "/city/stairs/v1/kit.glb",
+  "glbMedium": "/city/stairs/v1/kit-medium.glb",
+  "frame": {
+    "x": "along the run",
+    "y": "up",
+    "z": "out / front",
+    "origin": "bottom centre (brackets and pediments: on the wall skin)",
+    "unit": "metre"
+  },
+  "materialClasses": {
+    "metal": "metallic",
+    "light": "emissive",
+    "timber/paint/stone": "matte"
+  },
+  "scriptHash": "52e8a9a5abce471c411b2f210d48794b5b2d5e46e391b3d1d53a8124f4d816b5",
+  "parts": {
+    "newel-timber": {
+      "label": "Turned timber newel",
+      "bounds": [
+        [
+          -0.075,
+          0.075
+        ],
+        [
+          0.0,
+          1.18
+        ],
+        [
+          -0.075,
+          0.075
+        ]
+      ],
+      "size": [
+        0.15,
+        1.18,
+        0.15
+      ],
+      "materials": [
+        "timber/dark",
+        "timber/oak"
+      ],
+      "triangles": 396,
+      "trianglesMedium": 234,
+      "budget": 700,
+      "thumbnail": "/city/stairs/v1/thumbnails/newel-timber.png"
+    },
+    "newel-iron": {
+      "label": "Cast-iron newel",
+      "bounds": [
+        [
+          -0.0924,
+          0.0924
+        ],
+        [
+          0.0,
+          1.12
+        ],
+        [
+          -0.0924,
+          0.0924
+        ]
+      ],
+      "size": [
+        0.1848,
+        1.12,
+        0.1848
+      ],
+      "materials": [
+        "metal/brass",
+        "metal/iron"
+      ],
+      "triangles": 584,
+      "trianglesMedium": 332,
+      "budget": 900,
+      "thumbnail": "/city/stairs/v1/thumbnails/newel-iron.png"
+    },
+    "newel-stone": {
+      "label": "Stone pier",
+      "bounds": [
+        [
+          -0.21,
+          0.21
+        ],
+        [
+          0.0,
+          1.02
+        ],
+        [
+          -0.21,
+          0.21
+        ]
+      ],
+      "size": [
+        0.42,
+        1.02,
+        0.42
+      ],
+      "materials": [
+        "stone/limestone",
+        "stone/shade"
+      ],
+      "triangles": 120,
+      "trianglesMedium": 120,
+      "budget": 260,
+      "thumbnail": "/city/stairs/v1/thumbnails/newel-stone.png"
+    },
+    "baluster-timber": {
+      "label": "Turned timber baluster",
+      "bounds": [
+        [
+          -0.024,
+          0.024
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          -0.024,
+          0.024
+        ]
+      ],
+      "size": [
+        0.048,
+        1.0,
+        0.048
+      ],
+      "materials": [
+        "paint/white"
+      ],
+      "triangles": 248,
+      "trianglesMedium": 140,
+      "budget": 420,
+      "thumbnail": "/city/stairs/v1/thumbnails/baluster-timber.png"
+    },
+    "baluster-iron": {
+      "label": "Twisted iron baluster",
+      "bounds": [
+        [
+          -0.024,
+          0.024
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          -0.0208,
+          0.0208
+        ]
+      ],
+      "size": [
+        0.048,
+        1.0,
+        0.0416
+      ],
+      "materials": [
+        "metal/iron"
+      ],
+      "triangles": 324,
+      "trianglesMedium": 160,
+      "budget": 420,
+      "thumbnail": "/city/stairs/v1/thumbnails/baluster-iron.png"
+    },
+    "baluster-stone": {
+      "label": "Stone bottle baluster",
+      "bounds": [
+        [
+          -0.08,
+          0.08
+        ],
+        [
+          0.0,
+          0.62
+        ],
+        [
+          -0.08,
+          0.08
+        ]
+      ],
+      "size": [
+        0.16,
+        0.62,
+        0.16
+      ],
+      "materials": [
+        "stone/limestone"
+      ],
+      "triangles": 296,
+      "trianglesMedium": 164,
+      "budget": 520,
+      "thumbnail": "/city/stairs/v1/thumbnails/baluster-stone.png"
+    },
+    "panel-iron-scroll": {
+      "label": "Wrought-iron scroll panel",
+      "bounds": [
+        [
+          -0.5,
+          0.5
+        ],
+        [
+          0.0,
+          0.72
+        ],
+        [
+          -0.026,
+          0.026
+        ]
+      ],
+      "size": [
+        1.0,
+        0.72,
+        0.052
+      ],
+      "materials": [
+        "metal/brass",
+        "metal/iron"
+      ],
+      "triangles": 1352,
+      "trianglesMedium": 508,
+      "budget": 1600,
+      "thumbnail": "/city/stairs/v1/thumbnails/panel-iron-scroll.png"
+    },
+    "porch-column": {
+      "label": "Tuscan porch column",
+      "bounds": [
+        [
+          -0.17,
+          0.17
+        ],
+        [
+          0.0,
+          2.7
+        ],
+        [
+          -0.17,
+          0.17
+        ]
+      ],
+      "size": [
+        0.34,
+        2.7,
+        0.34
+      ],
+      "materials": [
+        "paint/white"
+      ],
+      "triangles": 632,
+      "trianglesMedium": 404,
+      "budget": 900,
+      "thumbnail": "/city/stairs/v1/thumbnails/porch-column.png"
+    },
+    "bracket-console": {
+      "label": "Scrolled console bracket",
+      "bounds": [
+        [
+          -0.082,
+          0.082
+        ],
+        [
+          0.075,
+          0.5
+        ],
+        [
+          0.0,
+          0.38
+        ]
+      ],
+      "size": [
+        0.164,
+        0.425,
+        0.38
+      ],
+      "materials": [
+        "paint/shade",
+        "paint/white"
+      ],
+      "triangles": 348,
+      "trianglesMedium": 172,
+      "budget": 700,
+      "thumbnail": "/city/stairs/v1/thumbnails/bracket-console.png"
+    },
+    "pediment": {
+      "label": "Door pediment",
+      "bounds": [
+        [
+          -0.9604,
+          0.9604
+        ],
+        [
+          0.0,
+          0.5857
+        ],
+        [
+          0.0,
+          0.22
+        ]
+      ],
+      "size": [
+        1.9208,
+        0.5857,
+        0.22
+      ],
+      "materials": [
+        "stone/limestone",
+        "stone/shade"
+      ],
+      "triangles": 50,
+      "trianglesMedium": 50,
+      "budget": 200,
+      "thumbnail": "/city/stairs/v1/thumbnails/pediment.png"
+    },
+    "urn-finial": {
+      "label": "Stone urn finial",
+      "bounds": [
+        [
+          -0.17,
+          0.17
+        ],
+        [
+          0.0,
+          0.52
+        ],
+        [
+          -0.17,
+          0.17
+        ]
+      ],
+      "size": [
+        0.34,
+        0.52,
+        0.34
+      ],
+      "materials": [
+        "stone/limestone",
+        "stone/shade"
+      ],
+      "triangles": 388,
+      "trianglesMedium": 202,
+      "budget": 700,
+      "thumbnail": "/city/stairs/v1/thumbnails/urn-finial.png"
+    },
+    "newel-lamp": {
+      "label": "Stoop lamp newel",
+      "bounds": [
+        [
+          -0.1201,
+          0.1201
+        ],
+        [
+          0.0,
+          1.9
+        ],
+        [
+          -0.1201,
+          0.1201
+        ]
+      ],
+      "size": [
+        0.2402,
+        1.9,
+        0.2402
+      ],
+      "materials": [
+        "light/glow",
+        "metal/iron"
+      ],
+      "triangles": 472,
+      "trianglesMedium": 376,
+      "budget": 1100,
+      "thumbnail": "/city/stairs/v1/thumbnails/newel-lamp.png"
+    }
+  }
+}

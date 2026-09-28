@@ -5,6 +5,7 @@ import {COLLECTION_PRESETS,collectionPreset} from './cityCollectionPresets.ts';
 import type {CityBuildingDesignV3,ResolvedV3} from './cityBuildingV3.ts';
 import type {BuildingMass} from './cityBuildingDesign.ts';
 import {groundsParts} from './cityBuildingGrounds.ts';
+import {foundationVertices,PLINTH_COLOR} from './cityGroundContact.ts';
 import type {LandDraft} from './cityLand.ts';
 export function modularMasses(d:CityBuildingDesignV3):BuildingMass[]{return d.modular!.recipe.volumes.filter(v=>v.operation==='add').flatMap(v=>Array.from({length:v.spanFloors},(_,i)=>{const floor=v.startFloor+i,y=sculptFloorBottom(floor,d.groundHeight,d.upperHeight);return {x:v.x,z:v.z,width:v.width,depth:v.depth,y,height:sculptFloorTop(floor,d.groundHeight,d.upperHeight)-y};}));}
 export function validateModularDesign(d:CityBuildingDesignV3){try{if(!validateModularBuilding(d.modular))return 'Invalid modular building.';return Math.max(...d.modular.recipe.volumes.filter(v=>v.operation==='add').map(v=>v.startFloor+v.spanFloors))!==d.floors||!Number.isInteger(d.floors)||d.floors<1||d.floors>8||d.groundHeight<3||d.groundHeight>4.5||(d.upperHeight??3)<3||(d.upperHeight??3)>4.5?'Invalid building dimensions.':validateVariationRecipe(d.modular.recipe,d.floors,24);}catch{return 'Invalid modular building.';}}
@@ -35,5 +36,7 @@ export function resolveModularBuilding(d:CityBuildingDesignV3,lod:'near'|'medium
  if(!shape){shape=resolveSculpt(d.modular!.recipe,d,{doors:false});resolvedCache.set(key,shape);while(resolvedCache.size>64)resolvedCache.delete(resolvedCache.keys().next().value!);}
  const studio=shape.studio!,entry=studio.bays.find(b=>b.entrance),entrance={x:entry?.x??0,z:entry?.z??d.depth/2},rotation=entry?.rotation??0;
  const sign={...entrance,x:entrance.x+Math.sin(rotation)*.4,z:entrance.z+Math.cos(rotation)*.4,y:d.groundHeight+.37,width:Math.min(2,entry?.width??2),height:.38,rotation,campaign:false};
- return {parts:[{kind:'box',position:[0,.22,0],size:[22.7,.12,22.7],color:d.palette.trim,sceneLayer:'grounds'},...groundsParts(d,lod)],masses:modularMasses(d),walls:[],attachments:[],entrance,sign,signs:d.slots['brand.entrance']==='brand'?[sign]:[],slots:[],corners:[],kitNotes:studio.inactive.map(i=>i.reason),extensionReason:null,studioAssembly:studio};
+ // The studio assembly starts at the ground-floor datum; a plinth fills down below the pad (docs/city-ground-contact.md).
+ const foundation=shape.floors[0]?.polygons.length?foundationVertices(shape.floors[0].polygons):[];
+ return {parts:[{kind:'box',position:[0,.22,0],size:[22.7,.12,22.7],color:d.palette.trim,sceneLayer:'grounds'},...groundsParts(d,lod),...(foundation.length?[{kind:'mesh' as const,position:[0,0,0] as [number,number,number],size:[1,1,1] as [number,number,number],vertices:foundation,color:PLINTH_COLOR,textureRole:'none' as const}]:[])],masses:modularMasses(d),walls:[],attachments:[],entrance,sign,signs:d.slots['brand.entrance']==='brand'?[sign]:[],slots:[],corners:[],kitNotes:studio.inactive.map(i=>i.reason),extensionReason:null,studioAssembly:studio};
 }

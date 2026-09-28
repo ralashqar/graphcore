@@ -9,6 +9,7 @@ import {Batch,type Instance} from "./CityInstances";
 import {useCityMapLayout} from "./CityMapLayout";
 import {useCityLook} from "./CityLook";
 import {useStudioIsolate} from "./cityStudioIsolate";
+import {PLOT_GROUND} from "../../domain/cityGroundContact";
 
 /** Development telemetry: contact marks per property id (browser suites read window.__cityGrounding). */
 const groundingStats:Record<string,number>={};
@@ -46,7 +47,9 @@ export function CityBuildingGrounding({properties,center,reduced=true}:{properti
      masses.forEach((m,i)=>{
        const item={key:`ground:${p.id}:${i}`,property:p,x:plotAxis(p.x)+(m.x*c+m.z*s)*scale,z:plotAxis(p.z)+(m.z*c-m.x*s)*scale,rotation:angle};
        if(m.y<=base+.001){contacts.push({...item,y:.312*scale,scale:[(m.width+1.1)*scale,1,(m.depth+1.1)*scale]});marks++;}
-       if(casts)(m.round ? roundProxies : proxies).push({...item,key:`shadow:${p.id}:${i}`,y:(m.y+m.height/2)*scale,scale:[Math.max(.1,m.width-.25)*scale,m.height*scale,Math.max(.1,m.depth-.25)*scale]});
+       // Ground masses cast from the plot surface: their foundation plinth fills the raised datum (docs/city-ground-contact.md).
+       const bottom=m.y<=base+.001?Math.min(m.y,PLOT_GROUND.surface):m.y,height=m.y+m.height-bottom;
+       if(casts)(m.round ? roundProxies : proxies).push({...item,key:`shadow:${p.id}:${i}`,y:(bottom+height/2)*scale,scale:[Math.max(.1,m.width-.25)*scale,height*scale,Math.max(.1,m.depth-.25)*scale]});
      });
      marksById.set(p.id,marks);
    }

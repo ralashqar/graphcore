@@ -9,11 +9,12 @@
  *   glass              opaque reflective glass with vertex colour (far glazing and dark aperture fills)
  * Colour is a vertex attribute, so neighbouring buildings with different finishes share one draw per material.
  *
- * Each batch's indices are [envelope, detail]: the envelope (roofs, edges, flashing, path) always draws; the detail
+ * Each batch's indices are [envelope, detail]: the envelope (roofs, edges, flashing, path, foundation plinth) always draws; the detail
  * (the generated walls' far representation, see cityStudioDetailBatches) draws only while the plot is far. Near
  * the camera the plot's own per-building detail batches replace it (CitySculptCity near overlay).
  * Kit pieces are not baked: they stay shared instanced kit meshes (with far proxies) on the main thread.
  */
+import {isSurfaceKey} from './cityStudioSurfaces.ts';
 // @deno-types="npm:@types/three@0.186.0"
 import {BoxGeometry,Color,Matrix3,Matrix4,Quaternion,Vector3} from 'three';
 import {roofFlashingGeometry} from './cityRoofFlashing.ts';
@@ -22,6 +23,7 @@ import type {SculptResolved} from './citySculpt.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
 import type {DetailBatch,StudioDetailBatches} from './cityStudioDetailBatches.ts';
 import {openingTransferables,transformOpeningInstances,type StudioOpeningInstances} from './cityStudioOpeningPieces.ts';
+import {foundationVertices,PLINTH_COLOR} from './cityGroundContact.ts';
 
 export type CityBakeKind='wall'|'surface'|'glass';
 export type CityBakeBatch={key:string;kind:CityBakeKind;texture:string;positions:Float32Array;normals:Float32Array;colors:Float32Array;uvs?:Float32Array;distance?:Float32Array;
@@ -41,6 +43,7 @@ type Rgb=[number,number,number];
 type Part={positions:ArrayLike<number>;normals?:ArrayLike<number>;indices?:ArrayLike<number>;color?:Rgb;colors?:ArrayLike<number>;uvs?:ArrayLike<number>;distance?:ArrayLike<number>;matrix?:Matrix4};
 const EDGE='#56645f',PATH='#cbc7b5',ROOF_WALL='#bdc8ad';
 const rgb=(hex:string):Rgb=>{const c=new Color(hex);return [c.r,c.g,c.b];};
+const WHITE:[number,number,number]=[1,1,1];
 const textureOf=(t:string|undefined)=>t||'none';
 export const cityBakeKey=(kind:CityBakeKind,texture='none')=>kind==='glass'?'glass':`${kind}|${texture}`;
 export const roofPatchColor=(p:{color?:string;finish?:string})=>p.color??(p.finish==='terracotta'?'#a9694e':p.finish==='metal'?'#7c9189':'#64727b');
@@ -71,7 +74,7 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
  if(studio?.roofPatches){
   for(const p of studio.roofPatches){
    if(p.vertices.length)add('surface',roofPatchTexture(p),{positions:p.vertices,color:rgb(roofPatchColor(p))},'envelope');
-   if(p.wallVertices?.length)add('surface',textureOf(p.wallTexture),{positions:p.wallVertices,color:rgb(p.wallColor??ROOF_WALL)},'envelope');
+   if(p.wallVertices?.length)add('surface',textureOf(p.wallTexture),{positions:p.wallVertices,color:isSurfaceKey(p.wallTexture)?WHITE:rgb(p.wallColor??ROOF_WALL)},'envelope');
   }
   const edges=studio.roofEdges??[],edge=rgb(EDGE),unit=box(),up=new Vector3(0,1,0),a=new Vector3(),b=new Vector3(),d=new Vector3(),q=new Quaternion(),s=new Vector3();
   for(const e of edges){
@@ -83,6 +86,9 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
   }
   const flashing=roofFlashingGeometry(edges);if(flashing.length)add('surface','none',{positions:flashing,color:edge},'envelope');
  }
+ // Foundation plinth from below the plot surface to the ground-floor datum (docs/city-ground-contact.md).
+ const foundation=resolved.floors[0]?.polygons.length?foundationVertices(resolved.floors[0].polygons):[];
+ if(foundation.length)add('surface','none',{positions:foundation,color:rgb(PLINTH_COLOR)},'envelope');
  const entrance=resolved.entrance;
  if(entrance){
   const length=Math.hypot(entrance.x,10.4-entrance.z),rotation=Math.atan2(-entrance.x,10.4-entrance.z);
@@ -92,7 +98,8 @@ export function buildSculptCityBake(resolved:SculptResolved,details:StudioDetail
  for(const b of details?.batches??[]){
   const m=b.material;
   const part=detailRange(b,b.farStart,b.far);if(!part)continue;
-  if(m.kind==='wall')add('wall',textureOf(m.texture),{...part,color:rgb(m.color)},'detail');
+  // Surface finishes (cityStudioSurfaces) carry their tint in the key: white vertex colour.
+  if(m.kind==='wall')add('wall',textureOf(m.texture),{...part,color:isSurfaceKey(m.texture)?WHITE:rgb(m.color)},'detail');
   else if(m.kind==='glass')add('glass','none',{...part,color:rgb(m.color)},'detail');
   else if(m.kind==='roof')add('surface',textureOf(m.texture),{...part,color:rgb(m.color)},'detail');
   else add('surface','none',part,'detail');// painted: its own vertex colours

@@ -86,6 +86,8 @@ export function resolveStudioFreeFaces(r:StudioRecipe,d:Pick<CityBuildingDesignV
   const family=familyOf(shapeId),palette=STUDIO_FAMILIES[family],part={...r.studio.defaults.finishes,...r.studio.parts[shapeId]?.finishes},finishes={...(owned.find(b=>b.anchor.floor===0)??owned[0])?.finishes,wall:part.wall,trim:part.trim};
   const colours:FreeFacePalette={...DEFAULT_FREE_PALETTE,painted:{trim:finishes.trim?.color??palette.trim,frame:finishes.frame?.color??'#f4f0e6'},door:finishes.door?.color??palette.door};
   const paint=studioFacePaint(r,shapeId,side,frame,owned,part,paintRuleFace(r,d,shapeId,side,frame,resolution.groups));
+  // Soft-brush regions composite over the colour below; an uncoloured finish shows the family wall colour.
+  if(paint?.wall.some(l=>l.finish.surface?.soft))paint.baseColor=part.wall?.color??palette.wall;
   const floors=[...new Set(owned.map(b=>b.anchor.floor))].sort((a,b)=>a-b),build:FreeFaceBuildOptions=OPENING_INSTANCING.enabled?{instance:{openable:portals,interior:portals&&r.version===6}}:{};
   // Built faces are cached by their inputs (cityStudioFaceCache): opening ids do not change the geometry.
   const key=faceKey(frame.length,frame.height,face.region,resolution.groups,colours,paint,build);

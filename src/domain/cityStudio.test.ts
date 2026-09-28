@@ -152,7 +152,7 @@ test('pitched and mansard roofs differ from flat and preserve a courtyard hole',
 });
 test('pedestrian surfaces support stacked decks without snapping up from underneath',()=>{
  const collision=new StudioWalkingCollision(),result=blank();result.decks=[{id:'balcony',x:0,z:0,y:4,width:4,depth:3,rotation:0}];collision.set({id:'p',x:0,z:0,scale:1,rotation:0,result});
- assert.equal(collision.ground(0,0,1),.18);assert.equal(collision.ground(0,0,4.3),4);assert.equal(collision.ceiling(0,0,.2),3.85);
+ assert.equal(collision.ground(0,0,1),.25,'the plot surface (docs/city-ground-contact.md)');assert.equal(collision.ground(0,0,4.3),4);assert.equal(collision.ceiling(0,0,.2),3.85);
 });
 test('walking can enter a constructed plot, cars retain the plot collider',()=>{
  const world=new DriveWorld(100);world.sync([{id:'p',minX:-10,maxX:10,minZ:-10,maxZ:10}]);const walk=new WalkingWorld(world);walk.studio.set({id:'p',x:0,z:0,scale:1,rotation:0,result:blank()});

@@ -13,7 +13,7 @@ import {type MeshStandardNodeMaterial} from 'three/webgpu';
 import {seeThroughGlass,shownInTree,useOpeningStore,worldOpenings,type OpeningLevel} from './CityStudioOpeningInstances';
 import {useCityReflection} from './cityReflections';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
-import {warmHiddenMaterials} from './cityStudioWarmup';
+import {warmHiddenMaterials,warmSurfacePatterns} from './cityStudioWarmup';
 import {freeWallMaterial} from './CityStudioFreeOpeningFace';
 import type {CityTextureId} from '../../domain/cityTexturePresets';
 import type {DetailBatch,DetailMaterial,StudioDetailBatches} from '../../domain/cityStudioDetailBatches';
@@ -93,6 +93,8 @@ export function CityStudioDetailBatches({details,center,full,pinNear=false,hidde
  const decide=()=>{if(full||subsets)return 'near' as const;if(studioIsolate().on)return 'far' as const;if(pinNear)return 'near' as const;const forced=testForce();if(forced)return forced;const d=viewDistance(camera,size.height,center.x,center.z);return d>(lod.current==='near'?STUDIO_DETAIL_LOD.far:STUDIO_DETAIL_LOD.near)?'far' as const:'near' as const;};
  useLayoutEffect(()=>{placeOpenings();apply(decide());if(openings.flush())invalidate();});
  useEffect(()=>{warmHiddenMaterials(gl,root.current,camera,scene);},[geometries,materials,gl,camera,scene]);
+ // Surface library picks: compile the chosen pattern before the first stroke (cityStudioWarmup).
+ useFrame(()=>warmSurfacePatterns(gl,camera,scene,(key,face)=>face?freeWallMaterial('#ffffff',key):citySurfaceMaterial(false,key)));
  useFrame((state)=>{
   // Every frame (cheap): follow the tree's visibility (a hidden overlay draws no openings) and the building's placement.
   let changed=placeOpenings();if(openings.setLevel(blockId,openingLevel(),lod.current==='near'&&clear.current))changed=true;

@@ -31,7 +31,7 @@ export function StudioSceneMarks({st}:{st:StudioState}){
  if(selection.level==='object'){const o=selection.object;if(o.kind==='assembly')add(assemblyBays(o.id),LEVEL_COLOURS.object,.34);if(o.kind==='roof-detail')boxes.push({id:o.id,color:LEVEL_COLOURS.object});}
  // Hover at the current granularity, or the erase footprint
  const hover=interaction.hover,pick=interaction.hoverPick;
- if(effectiveTool==='pick'&&!interaction.active){
+ if(effectiveTool==='pick'&&!interaction.active&&!(target==='themes'&&rail!=='select')){
   const erase=rail==='erase',color=erase?LEVEL_COLOURS.erase:rail==='select'?LEVEL_COLOURS[level]:LEVEL_COLOURS.opening,opacity=erase?.3:.16;
   const what=rail==='select'?level:erase&&size==='wall'?'wall':erase&&size==='part'?'part':target==='decor'?'object':target==='roof'?'object':target==='storefronts'?'stamp':'opening';
   if(what==='wall'&&hover)add(wallBays(hover.anchor.shapeId,hover.anchor.side),color,opacity,.29);

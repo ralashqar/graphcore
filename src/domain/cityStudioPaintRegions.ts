@@ -12,18 +12,21 @@
 //  paintRegionAt(regions,shapeId,side,x,y,channel?) -> region|null          topmost region under a point
 //  fillPaintFace(recipe,{shapeId,side,channel,height,finish}) -> recipe      replaces the face's regions of that channel with one full band
 //  recolorPaintRegion(recipe,id,finish) -> recipe                            quick paint ring on a region
+//  paintStripes(recipe,{...band,length,width,gap,direction,finish}) -> recipe stencilled stripes (one region)
+// Surface finishes (cityStudioSurfaces): a pending fade resolves to the region's vertical extent when painted.
 // Rendering: cityStudioFreeFaces builds the layers (legacy tile paint below, regions above) and the
 // free-face builder splits the outer skin per finish (cityStudioPaintGeometry).
 import type {StudioFinish,StudioRecipe} from './cityStudioTypes.ts';
 import {TEXTURE_IDS} from './cityTexturePresets.ts';
 import {validSculptSide} from './citySculpt.ts';
+import {resolveFade,validSurfaceSpec} from './cityStudioSurfaces.ts';
 
 export type PaintRect=[x0:number,x1:number,y0:number,y1:number];
 export type StudioPaintRegion={id:string;shapeId:string;side:string;channel:'wall'|'trim';rects:PaintRect[];band?:boolean;finish:StudioFinish};
 export const PAINT_REGIONS={limit:160,rects:96,maxBrush:4,minBrush:.2} as const;
 
 /** Shared with paint rules: hex colour and/or curated texture. */
-export const validPaintFinish=(f:StudioFinish|undefined)=>!!f&&(!f.color||/^#[0-9a-f]{6}$/i.test(f.color))&&(!f.texture||TEXTURE_IDS.some(t=>t===f.texture))&&!!(f.color||f.texture);
+export const validPaintFinish=(f:StudioFinish|undefined)=>!!f&&(!f.color||/^#[0-9a-f]{6}$/i.test(f.color))&&(!f.texture||TEXTURE_IDS.some(t=>t===f.texture))&&(f.surface===undefined||validSurfaceSpec(f.surface))&&!!(f.color||f.texture||f.surface)&&Object.keys(f).every(k=>['color','texture','surface'].includes(k));
 const finite=(n:unknown)=>typeof n==='number'&&Number.isFinite(n);
 
 export function validatePaintRegions(list:unknown):string|null{
@@ -63,13 +66,14 @@ export function addPaintStroke(r:StudioRecipe,stroke:{shapeId:string;side:string
   rects=mergeRects([...cells].map(c=>c.split(',').map(Number)).sort((a,b)=>a[0]-b[0]||a[1]-b[1]).map(([j,i])=>[i*cell,(i+1)*cell,j*cell,(j+1)*cell] as PaintRect));
  }
  if(rects.length>PAINT_REGIONS.rects){const xs=rects.flatMap(q=>[q[0],q[1]]),ys=rects.flatMap(q=>[q[2],q[3]]);rects=[[Math.min(...xs),Math.max(...xs),Math.min(...ys),Math.max(...ys)]];}
- const list=[...(r.studio.paintRegions??[]),{id:stroke.id??globalThis.crypto.randomUUID(),shapeId:stroke.shapeId,side:stroke.side,channel:stroke.channel,rects,finish:stroke.finish}];
+ const finish=resolveFade(stroke.finish,Math.min(...rects.map(q=>q[2])),Math.max(...rects.map(q=>q[3])));
+ const list=[...(r.studio.paintRegions??[]),{id:stroke.id??globalThis.crypto.randomUUID(),shapeId:stroke.shapeId,side:stroke.side,channel:stroke.channel,rects,finish}];
  return withRegions(r,list.slice(-PAINT_REGIONS.limit));
 }
 
 export function paintBand(r:StudioRecipe,band:{shapeId:string;side:string;channel:'wall'|'trim';y0:number;y1:number;finish:StudioFinish;id?:string}):StudioRecipe{
  const y0=Math.max(0,Math.min(band.y0,band.y1)),y1=Math.min(100,Math.max(band.y0,band.y1));if(y1-y0<.05)return r;
- const list=[...(r.studio.paintRegions??[]),{id:band.id??globalThis.crypto.randomUUID(),shapeId:band.shapeId,side:band.side,channel:band.channel,rects:[[-1e4,1e4,y0,y1] as PaintRect],band:true,finish:band.finish}];
+ const list=[...(r.studio.paintRegions??[]),{id:band.id??globalThis.crypto.randomUUID(),shapeId:band.shapeId,side:band.side,channel:band.channel,rects:[[-1e4,1e4,y0,y1] as PaintRect],band:true,finish:resolveFade(band.finish,y0,y1)}];
  return withRegions(r,list.slice(-PAINT_REGIONS.limit));
 }
 
@@ -92,6 +96,20 @@ export function erasePaintAt(r:StudioRecipe,shapeId:string,side:string,x:number,
 export function fillPaintFace(r:StudioRecipe,fill:{shapeId:string;side:string;channel:'wall'|'trim';height:number;finish:StudioFinish;id?:string}):StudioRecipe{
  const kept=(r.studio.paintRegions??[]).filter(g=>!(g.shapeId===fill.shapeId&&g.side===fill.side&&g.channel===fill.channel));
  return paintBand(withRegions(r,kept),{...fill,y0:0,y1:Math.max(.05,Math.min(100,fill.height))});
+}
+
+/**
+ * Stencilled stripes inside a band [y0,y1]: horizontal stripes span the whole face (a band region), vertical ones
+ * run across [0,length]. One region, so one undo step; the stripe count is capped by the rect budget.
+ */
+export function paintStripes(r:StudioRecipe,s:{shapeId:string;side:string;channel:'wall'|'trim';y0:number;y1:number;length:number;width:number;gap:number;direction:'horizontal'|'vertical';finish:StudioFinish;id?:string}):StudioRecipe{
+ const y0=Math.max(0,Math.min(s.y0,s.y1)),y1=Math.min(100,Math.max(s.y0,s.y1)),w=Math.max(.02,Math.min(4,s.width)),g=Math.max(.02,Math.min(4,s.gap)),rects:PaintRect[]=[];
+ if(y1-y0<.05)return r;
+ if(s.direction==='horizontal'){for(let y=y0;y<y1-1e-6&&rects.length<PAINT_REGIONS.rects;y+=w+g)rects.push([-1e4,1e4,y,Math.min(y1,y+w)]);}
+ else for(let x=0;x<s.length-1e-6&&rects.length<PAINT_REGIONS.rects;x+=w+g)rects.push([x,Math.min(s.length,x+w),y0,y1]);
+ if(!rects.length)return r;
+ const list=[...(r.studio.paintRegions??[]),{id:s.id??globalThis.crypto.randomUUID(),shapeId:s.shapeId,side:s.side,channel:s.channel,rects,...(s.direction==='horizontal'?{band:true}:{}),finish:resolveFade(s.finish,y0,y1)}];
+ return withRegions(r,list.slice(-PAINT_REGIONS.limit));
 }
 
 export function recolorPaintRegion(r:StudioRecipe,id:string,finish:StudioFinish):StudioRecipe{

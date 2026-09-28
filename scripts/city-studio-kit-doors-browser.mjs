@@ -57,8 +57,9 @@ try{
   const pick=test=>[...groups.entries()].find(([k])=>test(k));
   const doors={tile:pick(k=>k.startsWith('exterior/kit/main/west')),tokyo:pick(k=>k==='exterior/kit/free/tokyo'),storefront:pick(k=>k==='exterior/kit/free/shop'),rhythm:pick(k=>k.includes('generated/'))};
   const view={};for(const [name,entry] of Object.entries(doors)){if(!entry){view[name]=null;continue;}const [id,leaves]=entry,p=leaves[0],x=leaves.reduce((a,q)=>a+q.x,0)/leaves.length,z=leaves.reduce((a,q)=>a+q.z,0)/leaves.length,nx=Math.sin(p.rotation),nz=Math.cos(p.rotation);
-   view[name]={id,leaves:leaves.map(q=>q.id),motion:p.motion??'swing',local:{x,z,nx,nz},centre:w(x,z),outside:w(x+nx*2.4,z+nz*2.4),front:w(x+nx*.5,z+nz*.5),inside:w(x-nx*2.4,z-nz*2.4),normal:{x:nx*c+nz*s,z:-nx*s+nz*c},y:Math.min(...leaves.map(q=>q.y))*scale};}
-  const corners=[[11.6,7.6],[-11.6,7.6],[-11.6,-7.6],[11.6,-7.6]].map(([x,z])=>w(x,z));
+   view[name]={id,leaves:leaves.map(q=>q.id),motion:p.motion??'swing',local:{x,z,nx,nz},centre:w(x,z),outside:w(x+nx*1.7,z+nz*1.7),front:w(x+nx*.5,z+nz*.5),inside:w(x-nx*2.4,z-nz*2.4),normal:{x:nx*c+nz*s,z:-nx*s+nz*c},y:Math.min(...leaves.map(q=>q.y))*scale};}
+  // Inside the garden walls, which now block walking (docs/city-ground-contact.md).
+  const corners=[[10.2,7.6],[-10.2,7.6],[-10.2,-7.6],[10.2,-7.6]].map(([x,z])=>w(x,z));
   return {plot:plot.id,implicit:!!out.implicitInterior,doors:view,corners,centre,scale,rotation};
  });
  console.log(JSON.stringify({implicit:plan.implicit,doors:Object.fromEntries(Object.entries(plan.doors).map(([k,v])=>[k,v&&{id:v.id,leaves:v.leaves.length,motion:v.motion}]))}));
@@ -91,7 +92,7 @@ try{
  const results={};
  for(const name of ['rhythm','storefront','tokyo','tile']){
   const door=plan.doors[name],outward=f=>(f.x-door.centre.x)*door.normal.x+(f.z-door.centre.z)*door.normal.z;
-  let e=await around(door.outside);assert.ok(Math.hypot(e.foot.x-door.outside.x,e.foot.z-door.outside.z)<1,`${name}: reached the front ${JSON.stringify(e.foot)}`);
+  let e=await around(door.outside);assert.ok(Math.hypot(e.foot.x-door.outside.x,e.foot.z-door.outside.z)<1,`${name}: reached the front ${JSON.stringify(e.foot)} target ${JSON.stringify(door.outside)}`);
   await faceTowards(door.centre);await page.waitForTimeout(500);await page.screenshot({path:`output/kit-doors-${name}-closed${suffix}.png`});
   e=await goTo(door.inside,{ms:2600});const blocked=outward(e.foot);assert.ok(blocked>.15,`${name}: the closed door blocks (${blocked.toFixed(2)} m outside)`);
   e=await goTo(door.front,{tolerance:.3,ms:5000});

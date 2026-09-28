@@ -1,12 +1,12 @@
-
 import {CITY_TEXTURES,type CityTextureId} from "../../domain/cityTexturePresets";
+import {isSurfaceKey} from "../../domain/cityStudioSurfaces";
+import {citySurfacePatternMaterial} from "./citySurfacePatternMaterial";
 import {MeshStandardNodeMaterial,type NodeBuilder} from "three/webgpu";
 import {TextureLoader,RepeatWrapping,SRGBColorSpace} from "three";
 import {Fn,If,attribute,float,vec3,vec4,uniform,varying,positionGeometry,normalGeometry,positionWorld,normalWorldGeometry,positionView,normalViewGeometry,materialColor,texture,mix,clamp,abs,pow,max,floor,mod,cross,dot,sign,dFdx,dFdy,fwidth,smoothstep,normalize} from "three/tsl";
 
-/** Node materials work on both WebGPU and the node renderer's WebGL2 backend. */
-export function citySurfaceMaterial(glass=false,textureId:CityTextureId="none",onReady?:()=>void){
- const material=new MeshStandardNodeMaterial({color:"#ffffff",roughness:glass?.14:.85,envMapIntensity:glass?2:.45,metalness:glass?.45:textureId==="metal"?.65:0});
+/** Baked face/vertex occlusion (city worker samples) as the material's AO, toggled by `userData.cityOcclusion`. */
+export function applyCityOcclusion(material:MeshStandardNodeMaterial){
  const enabled=uniform(1);material.userData.cityOcclusion=enabled;
  const baked=Fn((_:unknown,builder:NodeBuilder)=>{
    const geometry=builder.geometry;
@@ -27,8 +27,19 @@ export function citySurfaceMaterial(glass=false,textureId:CityTextureId="none",o
    return clamp(result,.3,1);
  })();
  material.aoNode=mix(float(1),varying(baked),enabled);
+}
+
+/**
+ * Node materials work on both WebGPU and the node renderer's WebGL2 backend. `textureId` is a curated texture id
+ * or a studio surface render key (`s:…`, cityStudioSurfaces), which builds the shared procedural surface material.
+ */
+export function citySurfaceMaterial(glass=false,textureId:CityTextureId|string="none",onReady?:()=>void){
+ if(!glass&&isSurfaceKey(textureId))return citySurfacePatternMaterial(textureId,onReady);
+ if(!(textureId in CITY_TEXTURES))textureId="none";
+ const material=new MeshStandardNodeMaterial({color:"#ffffff",roughness:glass?.14:.85,envMapIntensity:glass?2:.45,metalness:glass?.45:textureId==="metal"?.65:0});
+ applyCityOcclusion(material);
  if(glass)material.colorNode=materialColor.mul(.036).add(vec3(.0144,.036,.052));
- const preset=CITY_TEXTURES[textureId],ready=uniform(0);let loaded=0,disposed=false;
+ const preset=CITY_TEXTURES[textureId as CityTextureId],ready=uniform(0);let loaded=0,disposed=false;
  const maps=preset.asset?["Color","Surface"].map(role=>{
    const map=new TextureLoader().load(`/city/textures/${preset.asset}-${role}.webp`,()=>{if(!disposed&&++loaded===2){ready.value=1;onReady?.();}},undefined,()=>{});
    map.wrapS=map.wrapT=RepeatWrapping;map.anisotropy=4;if(role==="Color")map.colorSpace=SRGBColorSpace;return map;
@@ -49,7 +60,7 @@ export function citySurfaceMaterial(glass=false,textureId:CityTextureId="none",o
    const surface=sample(maps[1]);
    material.colorNode=mix(materialColor,materialColor.mul(sample(maps[0]).rgb),ready);
    material.roughnessNode=mix(float(material.roughness),clamp(surface.g,.15,1),ready);
-   const strength=({brick:.08,plaster:.015,concrete:.025,terracotta:.07,metal:.025,timber:.04,pavers:.07,checker:.07,"grass-lawn":.025,"grass-meadow":.03,"grass-lush":.035,none:0})[textureId];
+   const strength=({brick:.08,plaster:.015,concrete:.025,terracotta:.07,metal:.025,timber:.04,pavers:.07,checker:.07,"grass-lawn":.025,"grass-meadow":.03,"grass-lush":.035,none:0})[textureId as CityTextureId];
    const n=normalViewGeometry,dx=dFdx(positionView),dy=dFdy(positionView),r1=cross(dy,n),r2=cross(n,dx),det=dot(dx,r1);
    const h=surface.r.mul(strength),fade=float(1).sub(smoothstep(20,65,distance)).mul(float(1).sub(smoothstep(.025,.15,fwidth(p).length()))).mul(ready);
    material.normalNode=normalize(n.sub(r1.mul(dFdx(h)).add(r2.mul(dFdy(h))).mul(sign(det)).div(max(abs(det),.00001)).mul(fade)));

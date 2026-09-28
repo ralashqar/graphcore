@@ -75,6 +75,14 @@ export function freeDoorRamps(face:Face,ground=.18){
  return face.groups.filter(freeDoorEntered).flatMap(g=>{const top=face.base+g.y0+.04,rise=top-ground;if(rise<=.02)return [];const width=Math.min(2.4,g.x1-g.x0+.3),x=(g.x0+g.x1)/2,step=at(x,landing/2-.05,g),ramp=at(x,landing-.05+run/2,g),rotation=rot(x,g);
   return [{id:`entry/free/${g.id}/landing`,x:step.x,z:step.z,y:top,width,depth:landing,rotation,rise:0},{id:`entry/free/${g.id}`,x:ramp.x,z:ramp.z,y:ground,width,depth:run,rotation:rotation+Math.PI,rise}];});
 }
+/**
+ * Doors of one face that need an entrance (cityStudioEntrances): the centre of each entered doorway on the outer skin,
+ * its clear width, threshold and head. Keys match the deck ids (`entry/free/<group>`).
+ */
+export function freeDoorEntranceDoors(face:Face&{shapeId?:string}):import('./cityStudioEntrances.ts').EntranceDoor[]{
+ const {at,rot}=frameOf(face);
+ return face.groups.filter(freeDoorEntered).map(g=>{const x=(g.x0+g.x1)/2,p=at(x,FREE_FACE.thickness/2,g);return {key:`free/${g.id}`,members:g.members,partId:face.shapeId??face.id.split('/')[0],origin:[p.x,p.z] as [number,number],rotation:rot(x,g),width:g.x1-g.x0,top:face.base+g.y0+.04,head:face.base+(g.module?g.y1:g.spring)};});
+}
 /** The floor area in front of a door (inside) that interior partitions and stairs must leave clear. */
 export function freeDoorClearZones(face:Face,depth=1.6){
  const {at,rot}=frameOf(face);

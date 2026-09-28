@@ -36,6 +36,8 @@ import {prepareSculpt,prepareSculptCity,type PreparedSculpt} from './citySculptS
 import {preparedStudioPlot,publishStudioPlot,removeStudioPlot} from './cityStudioRegistry';
 import {CityStudioDetailBatches,STUDIO_DETAIL_LOD,viewDistance} from './CityStudioDetailBatches';
 import {CityStudioFreeDoorLeaves,CityStudioInteriorMeshes,CityStudioEntryRamps,IMPLICIT_FINISH,ImplicitInteriorGate} from './CityStudioInteriorMeshes';
+import {CityStudioStairwork} from './CityStudioStairwork';
+const CITY_WHOLE_VIEW={mode:'whole' as const,floor:0};
 import {CityStudioTrimParts} from './CityStudioTrimParts';
 import {CitySculptSharedKit,kitBounds,type KitLevel,type KitLevels,type KitPlot} from './CitySculptSharedKit';
 import {citySurfaceMaterial} from './CitySurfaceMaterial';
@@ -47,6 +49,7 @@ import {sculptSignMaterial} from './CitySculptBuilding';
 import {cityGwStats} from './cityGwStats';
 import {useOpeningStore} from './CityStudioOpeningInstances';
 import {studioIsolate,subscribeStudioIsolate} from './cityStudioIsolate';
+import {plotGroundProfile} from '../../domain/cityPlotGroundProfile';
 
 type Entry={plot:LandPlot;draft:LandDraft};
 type Ready={id:string;key:string;plot:LandPlot;draft:LandDraft;transform:CityPlotTransform;studio:StudioResolved;bake:SculptCityBake;kit:KitPlot;/** kit pieces' world bounds (frustum test) */kitBox:Box3};
@@ -117,7 +120,7 @@ export function CitySculptCity({entries}:{entries:Entry[]}){
  // Only withdraw what this component published: an opened plot's CitySculptBuilding may already have replaced it.
  const withdraw=(id:string,r:Ready)=>{if(preparedStudioPlot(id)?.result===r.studio)removeStudioPlot(id);};
  useEffect(()=>{
-  for(const r of ready.values()){if(published.current.get(r.id)?.key===r.key)continue;published.current.set(r.id,r);publishStudioPlot({id:r.id,...r.transform,result:r.studio});}
+  for(const r of ready.values()){if(published.current.get(r.id)?.key===r.key)continue;published.current.set(r.id,r);publishStudioPlot({id:r.id,...r.transform,result:r.studio,ground:plotGroundProfile(landProperty(r.plot,r.draft).profile.buildingDesign)});}
   for(const [id,r] of [...published.current])if(!ready.has(id)){published.current.delete(id);withdraw(id,r);}
  },[ready]);
  useEffect(()=>()=>{for(const [id,r] of published.current)withdraw(id,r);published.current.clear();},[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -269,6 +272,7 @@ function NearOverlay({ready,visible,onShown}:{ready:Ready;visible:boolean;onShow
    {prepared?.details&&<CityStudioDetailBatches details={prepared.details} center={{x,z}} full={false} pinNear seeThrough={!!interior}>{studio?.freeFaces&&studio.portals&&<CityStudioFreeDoorLeaves plotId={ready.id} portals={studio.portals} faces={studio.freeFaces}/>}{studio?.freeFaces&&<CityStudioTrimParts faces={studio.freeFaces} trims={studio.freeTrims??(recipe.version===5||recipe.version===6?recipe.studio.freeTrims:undefined)} groundHeight={design.groundHeight}/>}</CityStudioDetailBatches>}
    {prepared&&studio?.interiorLevels&&interior&&<CityStudioInteriorMeshes plotId={ready.id} levels={studio.interiorLevels} portals={studio.portals??[]} decks={studio.decks} view={{mode:'whole',floor:0}} finish={interior.floorFinish} wallColor={interior.wallColor}/>}
    {prepared&&studio?.implicitInterior&&<CityStudioEntryRamps decks={studio.decks}/>}
+   {prepared&&studio?.stairwork&&<CityStudioStairwork work={studio.stairwork} view={CITY_WHOLE_VIEW} interior={!!interior}/>}
    {prepared&&studio?.implicitInterior&&studio.interiorLevels&&<ImplicitInteriorGate plotId={ready.id}><CityStudioInteriorMeshes plotId={ready.id} levels={studio.interiorLevels} portals={studio.portals??[]} decks={studio.decks} view={{mode:'whole',floor:0}} finish={IMPLICIT_FINISH.floor} wallColor={IMPLICIT_FINISH.wall} entries={false}/></ImplicitInteriorGate>}
   </group>
   {prepared&&visible&&ready.bake.sign&&<WorldSign sign={ready.bake.sign} name={ready.draft.name} color={ready.draft.color}/>}

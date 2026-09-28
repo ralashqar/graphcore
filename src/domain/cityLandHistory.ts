@@ -28,7 +28,7 @@ export function describeLandChange(before:LandDraft,after:LandDraft):string{
  if(a&&b&&(a.version===5||a.version===6)&&(b.version===5||b.version===6)){
   if(JSON.stringify(a.volumes)!==JSON.stringify(b.volumes))return change('shape',count(a.volumes),count(b.volumes));
   const s=a.studio,t=b.studio;
-  if(JSON.stringify(s.surfaces)!==JSON.stringify(t.surfaces))return 'Paint';
+  if(JSON.stringify(s.surfaces)!==JSON.stringify(t.surfaces)||JSON.stringify(s.paintRegions)!==JSON.stringify(t.paintRegions)||JSON.stringify(s.paintRules)!==JSON.stringify(t.paintRules))return 'Paint';
   if(JSON.stringify(s.openings)!==JSON.stringify(t.openings))return change('opening',count(s.openings),count(t.openings));
   if(JSON.stringify(s.assemblies)!==JSON.stringify(t.assemblies))return change('detail',count(s.assemblies),count(t.assemblies));
   if(JSON.stringify(s.roofDetails)!==JSON.stringify(t.roofDetails))return change('roof detail',count(s.roofDetails),count(t.roofDetails));
@@ -37,6 +37,7 @@ export function describeLandChange(before:LandDraft,after:LandDraft):string{
   if(JSON.stringify(s.parts)!==JSON.stringify(t.parts)||JSON.stringify(s.defaults)!==JSON.stringify(t.defaults))return 'Restyle part';
   if(a.version===6&&b.version===6){
    const i=a.interior,j=b.interior;
+   if(JSON.stringify(i.floorSurfaces)!==JSON.stringify(j.floorSurfaces)||JSON.stringify((i.roomFinishes??[]).map(x=>[x.id,x.floorFinish,x.floorSurface]))!==JSON.stringify((j.roomFinishes??[]).map(x=>[x.id,x.floorFinish,x.floorSurface]))||i.floorFinish!==j.floorFinish)return 'Floor finish';
    if(JSON.stringify(i.furniture)!==JSON.stringify(j.furniture))return change('furniture',count(i.furniture),count(j.furniture));
    if(JSON.stringify(i.partitions)!==JSON.stringify(j.partitions))return change('wall',count(i.partitions),count(j.partitions));
    if(JSON.stringify(i.doors)!==JSON.stringify(j.doors))return change('door',count(i.doors),count(j.doors));

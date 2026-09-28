@@ -172,7 +172,7 @@ function buildFace(face:{length:number;height:number;region?:FreeRect[];thicknes
  // Wear (stone through plaster) frames shaped openings only: kit pieces bring their own finished surround.
  const wearGroups=groups.filter(g=>!g.module);
  // Region paint: the outer skin is split per finish run; caps and reveals follow the topmost region at their midpoint.
- const partition=paint?.wall.length?paintPartition(L,H,paint.wall,paint.base):null,paintBufs=partition?partition.slots.map(()=>buf(true)):[],skinAt=(x:number,y:number)=>{const s=paintSlotAt(partition,x,y);return s<0?wall:paintBufs[s];};
+ const partition=paint?.wall.length?paintPartition(L,H,paint.wall,paint.base,paint.baseColor):null,paintBufs=partition?partition.slots.map(()=>buf(true)):[],skinAt=(x:number,y:number)=>{const s=paintSlotAt(partition,x,y);return s<0?wall:paintBufs[s];};
  const wall=buf(true),trim=buf(false,true),frame=buf(false,true),glass=buf(),door=buf(false,true),doorGlass=buf(),aperture=buf(),rear:number[]=[];
  const region:MultiPolygon=face.region?.length?freeRegion(face.region):[toPolygon([[0,0],[L,0],[L,H],[0,H]])];
  // Far field (plain wall) and near band (around openings) minus the holes.

@@ -184,7 +184,7 @@ export function buildingParts(
   }
   // A broad foundation stays clear of the road and wraps the footprint.
   for (const m of buildingMasses({ ...d, floors: 1 })) {
-    box(m.x, .45, m.z, m.width + .6, .4, m.depth + .6, "#d3cbb6");
+    box(m.x, .4, m.z, m.width + .6, .5, m.depth + .6, "#d3cbb6"); // skirt below the plot surface (docs/city-ground-contact.md)
   }
   for (const m of buildingMasses(d)) {
     // Legacy ribbon windows still need real depth, not panels over a solid mass.

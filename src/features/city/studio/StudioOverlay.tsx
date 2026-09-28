@@ -16,7 +16,7 @@ import {CityStudioFloorRail} from '../CityStudioFloorRail';
 import {CityPresetCollection} from '../CityPresetCollection';
 import {StudioToolRail} from './StudioToolRail';
 import {StudioPalette} from './StudioPalette';
-import {ThemeGallery} from './StudioThemes';
+import {ThemeDragGhost,ThemeGallery} from './StudioThemes';
 import {StudioInspector} from './StudioInspector';
 import {StudioHotbar} from './StudioHotbar';
 import {StudioShortcutSheet} from './StudioShortcutSheet';
@@ -47,6 +47,7 @@ export function StudioOverlay({st}:{st:StudioState}){
   </div>
   {recipe&&st.starters&&<StudioStarters st={st}/>}
   {recipe&&st.themeGallery&&<ThemeGallery st={st}/>}
+  <ThemeDragGhost/>
   {st.help&&<StudioShortcutSheet close={()=>st.setHelp(false)}/>}
   {st.replace!==null&&<div className="studio-confirm" role="dialog" aria-label="Replace building"><h2>Start a new shape?</h2><p>You can undo this and return to your current building.</p><button onClick={()=>st.setReplace(null)}>Keep building</button><button className="studio-primary" onClick={()=>{if(st.replace===-1){st.empty();st.setReplace(null);}else st.starter(st.replace!);}}>Replace building</button></div>}
   {interaction.touchPending&&<div className="studio-touch-confirm"><button onClick={interaction.cancel}>Cancel</button><button className="studio-primary" onClick={interaction.confirm}><Check/> Place</button></div>}

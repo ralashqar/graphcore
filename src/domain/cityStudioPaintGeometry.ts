@@ -11,37 +11,63 @@
 import type {FreeRect} from './cityStudioFreeOpenings.ts';
 import type {StudioFinish} from './cityStudioTypes.ts';
 
-/** `legacy` marks layers converted from per-tile surfaces (trim: tints the painted style only, as before). */
-export type FacePaintLayer={finish:StudioFinish;rects:FreeRect[];legacy?:boolean};
-export type FacePaint={base:StudioFinish|undefined;wall:FacePaintLayer[];trim:FacePaintLayer[]};
+/** `legacy` marks layers converted from per-tile surfaces (trim: tints the painted style only, as before).
+ * `opacity` (< 1): a soft-brush feather ring, composited over what lies below (colour mixed, material switching at half). */
+export type FacePaintLayer={finish:StudioFinish;rects:FreeRect[];legacy?:boolean;opacity?:number};
+/** `baseColor`: colour of the face under an uncoloured finish (the family colour), for compositing soft edges. */
+export type FacePaint={base:StudioFinish|undefined;wall:FacePaintLayer[];trim:FacePaintLayer[];baseColor?:string};
 export type PaintRun={x0:number;x1:number;slot:number};
 export type PaintStrip={y0:number;y1:number;runs:PaintRun[]};
 /** Slot -1 is the face's base finish. */
-export type PaintPartition={slots:{finish:StudioFinish;key:string}[];layers:{slot:number;rects:FreeRect[]}[];strips:PaintStrip[]};
+export type PaintPartition={slots:{finish:StudioFinish;key:string}[];layers:{slot:number;rects:FreeRect[];opacity?:number}[];strips:PaintStrip[]};
 
-export const finishKey=(f:StudioFinish|undefined)=>`${f?.color?.toLowerCase()??''}|${f?.texture??''}`;
+/** Identity of a finish for splitting: colour, texture and the rendered part of a surface (not the soft edge). */
+export const finishKey=(f:StudioFinish|undefined)=>{const s=f?.surface;return `${f?.color?.toLowerCase()??''}|${f?.texture??''}${s?'|'+JSON.stringify([s.pattern,s.accent,s.scale,s.rotation,s.wear,s.painted,s.fade]):''}`;};
 const clipRect=(q:FreeRect,L:number,H:number):FreeRect|null=>{const r:FreeRect=[Math.max(0,q[0]),Math.min(L,q[1]),Math.max(0,q[2]),Math.min(H,q[3])];return r[1]-r[0]>1e-3&&r[3]-r[2]>1e-3?r:null;};
 const q=(v:number)=>Math.round(v*1e4)/1e4;
 const uniq=(v:number[])=>[...new Set(v.map(q))].sort((a,b)=>a-b);
 const PAD=1;
+const hexMix=(a:string,b:string,t:number)=>{const p=(h:string)=>{const n=parseInt(h.slice(1),16);return [n>>16&255,n>>8&255,n&255];},x=p(a),y=p(b);return '#'+x.map((v,i)=>Math.round(v+(y[i]-v)*t).toString(16).padStart(2,'0')).join('');};
+/** Soft-brush rings: `SOFT_STEPS` layers grow outward by the feather, reaching full coverage at the stroke itself. */
+export const SOFT_STEPS=3;
+export function softLayers(layer:FacePaintLayer):FacePaintLayer[]{
+ const f=layer.finish.surface?.soft??0;if(!(f>0))return [layer];const out:FacePaintLayer[]=[];
+ for(let i=1;i<=SOFT_STEPS;i++){const e=f*(SOFT_STEPS-i)/SOFT_STEPS,opacity=1/(SOFT_STEPS-i+1);out.push({...layer,rects:layer.rects.map(r=>[r[0]-e,r[1]+e,Math.max(0,r[2]-e),r[3]+e] as FreeRect),...(opacity<1?{opacity}:{})});}
+ return out;
+}
+/** A finish composited over another: colour mixed by opacity, material (texture/surface) switching at half coverage. */
+function composite(below:StudioFinish|undefined,above:StudioFinish,opacity:number,baseColor:string):StudioFinish{
+ const top=opacity>=.5?above:below,color=hexMix(below?.color??baseColor,above.color??baseColor,opacity);
+ const out:StudioFinish={color};if(top?.texture)out.texture=top.texture;if(top?.surface){const {soft:_s,...surface}=top.surface;void _s;out.surface=surface;}return out;
+}
 
 /** Strips of runs over [0,L]x[0,H] (padded by 1 m so clipped triangles never fall outside). Null when nothing differs from the base. */
-export function paintPartition(L:number,H:number,layers:FacePaintLayer[],base:StudioFinish|undefined):PaintPartition|null{
+export function paintPartition(L:number,H:number,layers:FacePaintLayer[],base:StudioFinish|undefined,baseColor='#ffffff'):PaintPartition|null{
  const baseKey=finishKey(base),slots:PaintPartition['slots']=[],index=new Map<string,number>();
- const list=layers.map(l=>{const key=finishKey(l.finish);let slot=-1;if(key!==baseKey){slot=index.get(key)??-1;if(slot<0){slot=slots.length;slots.push({finish:l.finish,key});index.set(key,slot);}}return {slot,rects:l.rects.map(r=>clipRect(r,L,H)).filter((r):r is FreeRect=>!!r)};}).filter(l=>l.rects.length);
- if(!list.some(l=>l.slot>=0))return null;
+ const slotOf=(f:StudioFinish)=>{const key=finishKey(f);if(key===baseKey)return -1;let slot=index.get(key)??-1;if(slot<0){slot=slots.length;slots.push({finish:f,key});index.set(key,slot);}return slot;};
+ const list=layers.flatMap(softLayers).map(l=>({finish:l.finish,opacity:l.opacity??1,slot:(l.opacity??1)>=1?slotOf(l.finish):-2,rects:l.rects.map(r=>clipRect(r,L,H)).filter((r):r is FreeRect=>!!r)})).filter(l=>l.rects.length);
+ if(!list.some(l=>l.slot!==-1))return null;
+ const soft=list.some(l=>l.opacity<1),blend=new Map<string,number>();
+ /** Slot of the covering layers (bottom to top) at a point. */
+ const resolve=(covering:number[])=>{
+  if(!soft){for(let j=covering.length-1;j>=0;j--)return list[covering[j]].slot;return -1;}
+  let from=0;for(let j=covering.length-1;j>=0;j--)if(list[covering[j]].opacity>=1){from=j;break;}
+  if(!covering.length)return -1;let f:StudioFinish|undefined=list[covering[from]].opacity>=1?list[covering[from]].finish:base;
+  for(let j=list[covering[from]].opacity>=1?from+1:from;j<covering.length;j++){const l=list[covering[j]];f=l.opacity>=1?l.finish:composite(f,l.finish,l.opacity,baseColor);}
+  const key=covering.slice(from).join(',');let slot=blend.get(key);if(slot===undefined){slot=f?slotOf(f):-1;blend.set(key,slot);}return slot;
+ };
  const ys=uniq([-PAD,H+PAD,...list.flatMap(l=>l.rects.flatMap(r=>[r[2],r[3]]))]),strips:PaintStrip[]=[];let used=false;
  for(let i=0;i+1<ys.length;i++){
   const y0=ys[i],y1=ys[i+1],mid=(y0+y1)/2;if(y1-y0<1e-6)continue;
-  const spans:{x0:number;x1:number;slot:number}[]=[];for(const l of list)for(const r of l.rects)if(r[2]<=mid&&r[3]>=mid)spans.push({x0:r[0],x1:r[1],slot:l.slot});
+  const spans:{x0:number;x1:number;layer:number}[]=[];list.forEach((l,k)=>{for(const r of l.rects)if(r[2]<=mid&&r[3]>=mid)spans.push({x0:r[0],x1:r[1],layer:k});});
   let runs:PaintRun[]=[{x0:-PAD,x1:L+PAD,slot:-1}];
   if(spans.length){const xs=uniq([-PAD,L+PAD,...spans.flatMap(s=>[s.x0,s.x1])]);runs=[];
-   for(let k=0;k+1<xs.length;k++){const a=xs[k],b=xs[k+1],m=(a+b)/2;let slot=-1;for(let j=spans.length-1;j>=0;j--)if(spans[j].x0<=m&&spans[j].x1>=m){slot=spans[j].slot;break;}
+   for(let k=0;k+1<xs.length;k++){const a=xs[k],b=xs[k+1],m=(a+b)/2,covering=[...new Set(spans.filter(s=>s.x0<=m&&s.x1>=m).map(s=>s.layer))].sort((u,v)=>u-v),slot=resolve(covering);
     const last=runs.at(-1);if(last&&last.slot===slot)last.x1=b;else runs.push({x0:a,x1:b,slot});}}
   if(runs.some(r=>r.slot>=0))used=true;
   const prev=strips.at(-1);if(prev&&prev.runs.length===runs.length&&prev.runs.every((r,k)=>r.slot===runs[k].slot&&r.x0===runs[k].x0&&r.x1===runs[k].x1))prev.y1=y1;else strips.push({y0,y1,runs});
  }
- return used?{slots,layers:list,strips}:null;
+ return used?{slots,layers:list.map(l=>({slot:l.slot,rects:l.rects,...(l.opacity<1?{opacity:l.opacity}:{})})),strips}:null;
 }
 
 type Vtx=[number,number,number];// x, y, distance
@@ -114,9 +140,9 @@ export function splitTrianglesAtX(points:[number,number][],triangles:number[],di
  return out;
 }
 
-/** Slot of the topmost layer covering (x,y), or -1 for the base finish (caps and reveals). */
+/** Slot at (x,y) from the strips (composited soft rings included), or -1 for the base finish (caps and reveals). */
 export function paintSlotAt(p:PaintPartition|null,x:number,y:number):number{
- if(!p)return -1;for(let i=p.layers.length-1;i>=0;i--){const l=p.layers[i];if(l.rects.some(r=>x>=r[0]-1e-4&&x<=r[1]+1e-4&&y>=r[2]-1e-4&&y<=r[3]+1e-4))return l.slot;}return -1;
+ if(!p)return -1;const st=p.strips.find(s=>y>=s.y0-1e-4&&y<=s.y1+1e-4);if(!st)return -1;return st.runs.find(r=>x>=r.x0-1e-4&&x<=r.x1+1e-4)?.slot??-1;
 }
 
 /** Parameters (0..1, exclusive) where segment a→b crosses a paint layer's rectangle edge. */

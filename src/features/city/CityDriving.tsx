@@ -1,3 +1,5 @@
+import {footTestTeleport} from './cityFootTestHook';
+import {resetFootSmoothing,smoothFootY} from './cityFootStepSmoothing';
 import {subscribeStudioPlots} from './cityStudioRegistry';
 import {stepStudioDoors,studioDoorAngle,studioDoorTarget,toggleStudioDoor} from '../../domain/cityStudioDoorState';
 import {CityLandEditor} from './CityLandEditor';
@@ -122,7 +124,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
   const started=performance.now(),d=Math.min(dt,.1),onFoot=session.mode==='on-foot';simulation.current+=d;
   viewCamera.getWorldDirection(movementDirection.current);const movementHeading=cameraReady.current?Math.atan2(movementDirection.current.x,movementDirection.current.z):session.footCamera.heading;
   while(simulation.current>=DRIVE_PROFILE.step){
-   if(onFoot){Object.assign(previousFoot.current,foot.current);advanceFoot(foot.current,input.current,movementHeading,DRIVE_PROFILE.step,walkingWorld);}
+   if(onFoot){footTestTeleport(foot.current,walkingWorld);Object.assign(previousFoot.current,foot.current);advanceFoot(foot.current,input.current,movementHeading,DRIVE_PROFILE.step,walkingWorld);}
    else {Object.assign(previous.current,state.current);advanceDrive(state.current,input.current,DRIVE_PROFILE.step,world);}
    simulation.current-=DRIVE_PROFILE.step;
   }
@@ -131,6 +133,7 @@ export function CityDriving({land,active,session,capacity,properties,hasPavilion
   else {const roadDistance=Math.min(Math.abs(s.x-Math.round(s.x/66)*66),Math.abs(s.z-Math.round(s.z/66)*66));if(roadDistance<3&&world.clear(s.x,s.z,DRIVE_PROFILE.radius+.2)){session.safeCar.x=s.x;session.safeCar.z=s.z;session.safeCar.heading=s.heading;}}
   const v=interpolateDrive(display.current,previous.current,s,simulation.current/DRIVE_PROFILE.step),p=interpolateFoot(displayFoot.current,previousFoot.current,f,simulation.current/DRIVE_PROFILE.step);
   if(car.current){car.current.position.set(v.x,0,v.z);car.current.rotation.y=v.heading;}
+  if(onFoot)p.y=smoothFootY(p.y,f.grounded,d);else resetFootSmoothing();
   if(pedestrian.current){pedestrian.current.position.set(p.x,p.y,p.z);pedestrian.current.rotation.y=p.heading;}
   if(!look.current.dragging&& !onFoot){look.current.delay-=d;if(look.current.delay<=0){look.current.yaw=Math.atan2(Math.sin(look.current.yaw),Math.cos(look.current.yaw))*Math.exp(-3*d);look.current.pitch*=Math.exp(-3*d);}}
   const actor=onFoot?p:v,heading=onFoot?session.footCamera.heading:v.heading+look.current.yaw,speed=Math.min(1,Math.hypot(v.vx,v.vz)/24),distance=onFoot?session.footCamera.distance:9+(reduced?0:speed*2);

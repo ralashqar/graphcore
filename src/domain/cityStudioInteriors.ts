@@ -4,11 +4,15 @@ import type {MultiPolygon} from 'polygon-clipping';
 import {ShapeUtils,Vector2} from 'three';
 import {sculptFloorBottom,type SculptPolygon,type SculptResolved} from './citySculpt.ts';
 import {STUDIO_FURNITURE,FURNITURE_LIMIT,furniturePlacementIssue} from './cityStudioFurniture.ts';
-import {freeDoorClearZones,freeDoorRamps,studioFreeDoorPortals} from './cityStudioFreeDoors.ts';
+import {freeDoorClearZones,freeDoorEntranceDoors,studioFreeDoorPortals} from './cityStudioFreeDoors.ts';
+import {ENTRANCE_PLOT_HALF,resolveStudioEntrances,type EntranceDoor} from './cityStudioEntrances.ts';
+import {fitStairIntent,stairwellGuards,type StairFit,type StairFitContext,type StairSegment} from './cityStudioStairs.ts';
+import {RAIL_STYLES,type StudioStairwork} from './cityStudioRailings.ts';
 import {cutBlockerForPassage,kitDoorMotion,kitDoorPassage,kitDoorPortals} from './cityStudioDoorMotion.ts';
 import {studioKitVersion} from './cityStudioCatalog.ts';
+import {roomFloorSurface,storeyFloorSurface,validateInteriorSurfaces} from './cityStudioSurfaces.ts';
 import type {CityBuildingDesignV3} from './cityBuildingV3.ts';
-import type {StudioBay,StudioDeck,StudioInteriorBlock,StudioInteriorLevel,StudioRecipe,StudioResolved,StudioInteriorStair,StudioRoom} from './cityStudioTypes.ts';
+import type {StudioBay,StudioInteriorBlock,StudioInteriorLevel,StudioRecipe,StudioResolved,StudioRoom} from './cityStudioTypes.ts';
 
 export const emptyInterior=()=>({partitions:[],doors:[],stairs:[],openFloors:[] as number[],roomFinishes:[],furniture:[],floorFinish:'timber' as const,wallColor:'#e5ddcd'});
 export function upgradeStudioInterior(r:StudioRecipe):StudioRecipe{return r.version===6?r:{...r,version:6,interior:emptyInterior()};}
@@ -27,6 +31,7 @@ const segmentDistance=(x:number,z:number,a:[number,number],b:[number,number])=>{
 const crossing=(a:[number,number],b:[number,number],c:[number,number],d:[number,number])=>{const det=(p:[number,number],q:[number,number],r:[number,number])=>(q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]);return det(a,b,c)*det(a,b,d)<-EPS&&det(c,d,a)*det(c,d,b)<-EPS;};
 const insideSegment=(p:SculptPolygon[],a:[number,number],b:[number,number])=>{const length=Math.hypot(a[0]-b[0],a[1]-b[1]);if(length<1.25)return false;for(let i=1;i<10;i++){const t=i/10;if(!interiorContains(p,a[0]*(1-t)+b[0]*t,a[1]*(1-t)+b[1]*t))return false;}return true;};
 const segmentEnters=(polygons:SculptPolygon[],a:[number,number],b:[number,number])=>{const steps=Math.max(8,Math.ceil(Math.hypot(a[0]-b[0],a[1]-b[1])/.2));for(let i=0;i<=steps;i++){const t=i/steps;if(interiorContains(polygons,a[0]*(1-t)+b[0]*t,a[1]*(1-t)+b[1]*t))return true;}return false;};
+const rectZone=(pts:[number,number][]):MultiPolygon=>pts.length>=3?[[[...pts,pts[0]]]]:[];
 const multiArea=(multi:MultiPolygon)=>polygonsOf(multi).reduce((sum,p)=>sum+Math.abs(area(p[0]))-p.slice(1).reduce((holes,h)=>holes+Math.abs(area(h)),0),0);
 function roomCentres(polygons:SculptPolygon[],walls:{a:[number,number];b:[number,number]}[]){
  if(!polygons.length)return [];
@@ -44,24 +49,6 @@ function roomRegions(polygons:SculptPolygon[],walls:{id:string;a:[number,number]
  return polygonsOf(geometry).map((polygon,index)=>{const matching=centres.find(p=>interiorContains([polygon],p.x,p.z)),point=matching??(()=>{const ring=polygon[0];for(let k=1;k<ring.length-1;k++){const x=(ring[0][0]+ring[k][0]+ring[k+1][0])/3,z=(ring[0][1]+ring[k][1]+ring[k+1][1])/3;if(interiorContains([polygon],x,z))return {x,z};}return {x:ring[0][0],z:ring[0][1]};})(),boundaryIds=walls.filter(wall=>polygon.some(ring=>ring.some(vertex=>segmentDistance(vertex[0],vertex[1],wall.a,wall.b)<.15))).map(wall=>wall.id).sort(),intent=r.interior.roomFinishes?.find(item=>item.floor===floor&&interiorContains([polygon],item.x,item.z)&&(!item.boundaryIds||item.boundaryIds.length===boundaryIds.length&&item.boundaryIds.every((id,k)=>id===boundaryIds[k])));return {id:intent?.id??`room/${floor}/${index}`,x:point.x,z:point.z,area:Math.abs(area(polygon[0]))-polygon.slice(1).reduce((sum,h)=>sum+Math.abs(area(h)),0),polygon,boundaryIds,floorFinish:intent?.floorFinish??r.interior.floorFinish,wallColor:intent?.wallColor??r.interior.wallColor,openToBelow:!!intent?.openToBelow};}).filter(room=>room.area>.25).sort((a,b)=>a.z-b.z||a.x-b.x);
 }
 
-type StairFit={void:MultiPolygon;decks:StudioDeck[];blocks:StudioInteriorBlock[];reason?:string};
-function fitStair(stair:StudioInteriorStair,base:SculptResolved,d:CityBuildingDesignV3,layout:'straight'|'switchback'):StairFit{
- const lower=base.floors[stair.floor]?.polygons??[],upper=base.floors[stair.floor+1]?.polygons??[],low=sculptFloorBottom(stair.floor,d.groundHeight,d.upperHeight)+.04,top=sculptFloorBottom(stair.floor+1,d.groundHeight,d.upperHeight)+.04,rise=top-low,run=layout==='straight'?rise*1.5:Math.max(2.3,rise*.8),sign=stair.flip?-1:1,r=stair.rotation;
- const blocks:StudioInteriorBlock[]=[],decks:StudioDeck[]=[],footprints:MultiPolygon[]=[];
- const lanes=layout==='straight'?[0]:[0,1.45*sign],flights=lanes.length;
- for(let f=0;f<flights;f++){
-  const lane=lanes[f],dir=f&&layout==='switchback'?-1:1,start=shift(stair.x,stair.z,r,lane,f?run:0),centre=shift(start.x,start.z,r,0,dir*run/2),angle=r+(dir<0?Math.PI:0),startY=low+(rise/flights)*f,flightRise=rise/flights;
-  footprints.push(rectangle(centre.x,centre.z,1.45,run+.5,angle));decks.push({id:`${stair.id}/ramp${f}`,x:centre.x,z:centre.z,y:startY,width:1.2,depth:run,rotation:angle,rise:flightRise});
-  const count=Math.max(4,Math.ceil(flightRise/.18)),depth=run/count;for(let k=0;k<count;k++){const p=shift(start.x,start.z,r,0,dir*(k+.5)*depth);blocks.push(block(`${stair.id}/tread${f}/${k}`,stair.floor,'stair',p.x,p.z,startY+(k+1)*flightRise/count-.09,1.2,.18,depth,angle));}
-  for(const side of [-1,1])for(let k=0;k<Math.ceil(run/1.2);k++){const length=run/Math.ceil(run/1.2),p=shift(start.x,start.z,r,side*.67,dir*(k+.5)*length),y=startY+(k+.5)*flightRise/Math.ceil(run/1.2)+.5;blocks.push(block(`${stair.id}/guard${f}/${side}/${k}`,stair.floor,'guard',p.x,p.z,y,.09,1.0,length,angle));}
- }
- const end=layout==='straight'?shift(stair.x,stair.z,r,0,run):shift(stair.x,stair.z,r,1.45*sign,0),extension=layout==='straight'?shift(end.x,end.z,r,0,.65):shift(end.x,end.z,r,0,-.65),upperLanding={id:`${stair.id}/upper`,x:extension.x,z:extension.z,y:top,width:1.25,depth:1.4,rotation:r};decks.push(upperLanding);blocks.push(block(`${stair.id}/landing`,stair.floor+1,'stair',extension.x,extension.z,top-.09,1.25,.18,1.4,r));
- const first=shift(stair.x,stair.z,r,0,-.6),last=layout==='straight'?shift(end.x,end.z,r,0,1.05):shift(end.x,end.z,r,0,-1.05);
- if(!interiorContains(lower,stair.x,stair.z)||!interiorContains(lower,end.x,end.z)||!interiorContains(upper,last.x,last.z)||!interiorContains(lower,first.x,first.z))return {void:[],decks:[],blocks:[],reason:'Needs clear floor space at both stair landings.'};
- if(decks.some(deck=>[[-.4,-.4],[.4,-.4],[-.4,.4],[.4,.4]].some(([u,v])=>{const p=shift(deck.x,deck.z,deck.rotation,u*deck.width,v*deck.depth);return !interiorContains(lower,p.x,p.z);})))return {void:[],decks:[],blocks:[],reason:'The stair does not fit within this floor.'};
- const cut=footprints.length===1?footprints[0]:polygonClipping.union(footprints[0],footprints[1]);return {void:cut,decks,blocks};
-}
-
 /**
  * Interior levels, portals and their collision. `implicit` (recipe v5): the building has no authored interior, so the
  * levels are empty floors resolved only so that every door leads somewhere (no rooms, nothing saved).
@@ -77,7 +64,8 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
  for(const intent of r.interior.roomFinishes??[])if(intent.floor>=levelCount||!levels[intent.floor]?.rooms.some(room=>room.id===intent.id))inactive.push({id:intent.id,reason:'The original room no longer exists at this location.'});
  // Free faces own their wall: kit door bays there are gone, and each generated free door leaf becomes an exterior portal.
  const freeFaces=studio.freeFaces??[],freeOwned=new Set(freeFaces.map(f=>f.id)),doorZones:MultiPolygon[]=[];
- for(const face of freeFaces){portals.push(...studioFreeDoorPortals(face));decks.push(...freeDoorRamps(face));for(const z of freeDoorClearZones(face))doorZones.push(rectangle(z.x,z.z,z.width,z.depth,z.rotation));}
+ const entranceDoors:EntranceDoor[]=[],stairwork:StudioStairwork[]=[];
+ for(const face of freeFaces){portals.push(...studioFreeDoorPortals(face));entranceDoors.push(...freeDoorEntranceDoors(face));for(const z of freeDoorClearZones(face))doorZones.push(rectangle(z.x,z.z,z.width,z.depth,z.rotation));}
  const blocksDoor=(shape:MultiPolygon)=>doorZones.some(zone=>multiArea(polygonClipping.intersection(zone,shape))>.02);
  // Kit doors (tiles, and kit pieces in generated walls): their leaves are portals moving as the module's design says
  // (cityStudioDoorMotion). A tile's wall blocker opens around the passage; generated walls already leave doorways
@@ -89,30 +77,40 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   const bay=tileBays.get(piece.id);if(!bay&&!piece.id.startsWith('free/'))continue;
   if(spec.kind==='open'&&implicit)continue;
   if(bay){const i=blockers.findIndex(b=>b.id===bay.id),pass=kitDoorPassage(piece,spec);if(i>=0)blockers.splice(i,1,...cutBlockerForPassage(blockers[i],piece.x,piece.z,pass.x0,pass.x1,pass.top));
-   // Ground-floor doors get a level doorstep and a ramp from the pavement, like generated doors (freeDoorRamps).
-   const top=bay.y+.04,rise=top-.18;if(bay.anchor.floor===0&&rise>.02){const width=Math.min(2.4,pass.x1-pass.x0+.3),m=(pass.x0+pass.x1)/2,step=shift(piece.x,piece.z,bay.rotation,m,.75/2-.05),ramp=shift(piece.x,piece.z,bay.rotation,m,.75-.05+1.55/2);
-    decks.push({id:`entry/${bay.id}/landing`,x:step.x,z:step.z,y:top,width,depth:.75,rotation:bay.rotation,rise:0},{id:`entry/${bay.id}`,x:ramp.x,z:ramp.z,y:.18,width,depth:1.55,rotation:bay.rotation+Math.PI,rise});}}
+   // Ground-floor doors get an entrance (steps, stoop, porch…: cityStudioEntrances), like generated doors.
+   const top=bay.y+.04,rise=top-.18;if(bay.anchor.floor===0&&rise>.02){const m=(pass.x0+pass.x1)/2,o=shift(piece.x,piece.z,bay.rotation,m,.15);
+    entranceDoors.push({key:bay.id,members:[bay.source,piece.id].filter((v):v is string=>!!v),partId:bay.anchor.shapeId,origin:[o.x,o.z],rotation:bay.rotation,width:pass.x1-pass.x0,top,head:pass.top});}}
   if(!spec.leaves.length)continue;
   portals.push(...kitDoorPortals(piece,bay?.anchor.floor??0,spec));piece.portal=true;
  }
- const voids=new Map<number,MultiPolygon[]>();
+ {const entrances=resolveStudioEntrances(r,entranceDoors,base.floors[0]?.polygons??[],ENTRANCE_PLOT_HALF);decks.push(...entrances.decks);blockers.push(...entrances.blockers);stairwork.push(...entrances.work);inactive.push(...entrances.inactive);}
+ const voids=new Map<number,MultiPolygon[]>(),fittedStairs:{id:string;fit:StairFit;ctx:StairFitContext}[]=[];
+ const segs=(floor:number):StairSegment[]=>r.interior.partitions.filter(p=>p.floor===floor).map(p=>[p.a,p.b]);
  for(const intent of r.interior.stairs){
   const floor=intent.floor;if(floor<0||floor+1>=levelCount||!base.floors[floor]?.polygons.length||!base.floors[floor+1]?.polygons.length){inactive.push({id:intent.id,reason:'This stair needs occupied floors above and below.'});continue;}
   if(openFloors.has(floor)||openFloors.has(floor+1)){inactive.push({id:intent.id,reason:'This stair needs a covered start and destination floor.'});continue;}
-  const candidates=intent.layout==='auto'?['straight','switchback'] as const:[intent.layout] as const;let fitted:StairFit={void:[],decks:[],blocks:[],reason:'This stair could not fit.'};
-  for(const layout of candidates){fitted=fitStair(intent,base,d,layout);if(!fitted.reason)break;}
+  const low=sculptFloorBottom(floor,d.groundHeight,d.upperHeight)+.04,top=sculptFloorBottom(floor+1,d.groundHeight,d.upperHeight)+.04,upperFloor=base.floors[floor+1];
+  const ctx:StairFitContext={lower:base.floors[floor].polygons,upper:upperFloor.polygons,low,top,floor,upperHeight:upperFloor.top-upperFloor.bottom,lowerPartitions:segs(floor),upperPartitions:segs(floor+1)};
+  let fitted=fitStairIntent(intent,ctx);
   if(!fitted.reason){
-   const startRoom=levels[floor].rooms.find(room=>interiorContains([room.polygon],intent.x,intent.z)),end=fitted.decks.find(deck=>deck.id===`${intent.id}/upper`),endRoom=end&&levels[floor+1].rooms.find(room=>interiorContains([room.polygon],end.x,end.z));
+   const startRoom=levels[floor].rooms.find(room=>interiorContains([room.polygon],fitted.entry.x,fitted.entry.z)),endRoom=levels[floor+1].rooms.find(room=>interiorContains([room.polygon],fitted.exit.x+fitted.exit.dx,fitted.exit.z+fitted.exit.dz));
    if(startRoom?.openToBelow||endRoom?.openToBelow)fitted={...fitted,reason:'The stair needs a covered room at both landings.'};
-   const occupied=voids.get(floor+1)??[];
-   if(occupied.some(voidShape=>multiArea(polygonClipping.intersection(voidShape,fitted.void))>.04))fitted={...fitted,reason:'Another stair already occupies this opening.'};
-   const shaft=polygonsOf(fitted.void),walls=r.interior.partitions.filter(p=>p.floor===floor||p.floor===floor+1);
-   if(!fitted.reason&&walls.some(w=>segmentEnters(shaft,w.a,w.b)||fitted.decks.some(deck=>segmentDistance(deck.x,deck.z,w.a,w.b)<deck.width/2+.2)))fitted={...fitted,reason:'A partition crosses the stair or landing.'};
-   if(!fitted.reason&&floor===0&&blocksDoor(fitted.void))fitted={...fitted,reason:'Leave the doorway clear.'};
+   const occupied=voids.get(floor+1)??[],shaft=polygonsOf(fitted.void),stand=polygonsOf(fitted.footprint),below=polygonsOf(rectZone(fitted.zones.entry)),above=polygonsOf(rectZone(fitted.zones.exit));
+   if(!fitted.reason&&occupied.some(voidShape=>multiArea(polygonClipping.intersection(voidShape,fitted.void))>.04))fitted={...fitted,reason:'Another stair already occupies this opening.'};
+   // Stairs must not stand in, start in or arrive in each other (checked against the stairs fitted before this one).
+   const others=fittedStairs.filter(o=>o.ctx.floor===floor),hits=(a:MultiPolygon,b:MultiPolygon)=>{try{return multiArea(polygonClipping.intersection(a,b))>.04;}catch{return false;}};
+   if(!fitted.reason&&others.some(o=>hits(o.fit.footprint,fitted.footprint)))fitted={...fitted,reason:'Another stair is in the way.'};
+   if(!fitted.reason&&others.some(o=>hits(o.fit.void,rectZone(fitted.zones.exit))||hits(fitted.void,rectZone(o.fit.zones.exit))))fitted={...fitted,reason:'The stair would arrive in another stairwell.'};
+   if(!fitted.reason&&others.some(o=>hits(o.fit.footprint,rectZone(fitted.zones.entry))||hits(fitted.footprint,rectZone(o.fit.zones.entry))))fitted={...fitted,reason:'Keep the foot of each stair clear.'};
+   if(!fitted.reason&&(r.interior.partitions.some(w=>w.floor===floor&&(segmentEnters(stand,w.a,w.b)||segmentEnters(below,w.a,w.b)))||r.interior.partitions.some(w=>w.floor===floor+1&&(segmentEnters(shaft,w.a,w.b)||segmentEnters(above,w.a,w.b)))))fitted={...fitted,reason:'A partition crosses the stair or landing.'};
+   if(!fitted.reason&&floor===0&&(blocksDoor(fitted.footprint)||blocksDoor(rectZone(fitted.zones.entry))))fitted={...fitted,reason:'Leave the doorway clear.'};
   }
   if(fitted.reason){inactive.push({id:intent.id,reason:fitted.reason});continue;}
-  voids.set(floor+1,[...(voids.get(floor+1)??[]),fitted.void]);decks.push(...fitted.decks);levels[floor].blocks.push(...fitted.blocks.filter(b=>b.floor===floor));levels[floor+1].blocks.push(...fitted.blocks.filter(b=>b.floor===floor+1));blockers.push(...fitted.blocks.filter(b=>b.kind==='guard'));
+  voids.set(floor+1,[...(voids.get(floor+1)??[]),fitted.void]);decks.push(...fitted.decks);blockers.push(...fitted.blockers);stairwork.push(fitted.work);
+  levels[floor].blocks.push(...fitted.walls);blockers.push(...fitted.walls);fittedStairs.push({id:intent.id,fit:fitted,ctx});
  }
+ // Guards (or core walls) around each stairwell on the floor above, open where the stair arrives.
+ for(const {id,fit,ctx} of fittedStairs){const guards=stairwellGuards(id,fit,{...ctx,otherVoids:(voids.get(ctx.floor+1)??[]).filter(v=>v!==fit.void)});stairwork.push(guards.work);blockers.push(...guards.blockers,...guards.walls);levels[ctx.floor+1].blocks.push(...guards.walls);}
  for(const partition of r.interior.partitions){
   const floor=base.floors[partition.floor],length=Math.hypot(partition.b[0]-partition.a[0],partition.b[1]-partition.a[1]);
   if(openFloors.has(partition.floor)){inactive.push({id:partition.id,reason:'This floor is open to the room below.'});continue;}
@@ -131,6 +129,7 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
  for(const level of levels){const ids=new Set(r.interior.partitions.filter(p=>p.floor===level.floor).map(p=>p.id)),faces:StudioInteriorBlock[]=[];for(const wall of level.blocks.filter(b=>b.kind==='wall'&&ids.has(b.id.split('/')[0]))){for(const side of [-1,1]){const x=wall.x+Math.sin(wall.rotation)*side*.2,z=wall.z+Math.cos(wall.rotation)*side*.2,room=level.rooms.find(room=>interiorContains([room.polygon],x,z));if(!room||room.wallColor===r.interior.wallColor)continue;const face=shift(wall.x,wall.z,wall.rotation,0,side*(wall.depth/2+.007));faces.push({...block(`${wall.id}/paint/${side}`,level.floor,'wall',face.x,face.z,wall.y,wall.width,wall.height,.012,wall.rotation),color:room.wallColor});}}level.blocks.push(...faces);}
  for(let floor=0;floor<levelCount;floor++){
   if(openFloors.has(floor))continue;
+  {const storey=storeyFloorSurface(r.interior,floor);if(storey)levels[floor].floorSurface=storey;}
   const original=base.floors[floor]?.polygons??[];let geometry:MultiPolygon=original.reduce<MultiPolygon>((acc,p)=>acc.length?polygonClipping.union(acc,closed(p)):closed(p),[]);
   for(const room of levels[floor].rooms.filter(room=>room.openToBelow&&floor>0))if(geometry.length)geometry=polygonClipping.difference(geometry,closed(room.polygon));
   for(const cut of voids.get(floor)??[])if(geometry.length)geometry=polygonClipping.difference(geometry,cut);
@@ -143,7 +142,7 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   for(const room of levels[floor].rooms.filter(room=>!room.openToBelow)){
    let surface:MultiPolygon=closed(room.polygon);for(const cut of voids.get(floor)??[])if(surface.length)surface=polygonClipping.difference(surface,cut);
    const vertices:number[]=[];for(const polygon of polygonsOf(surface))triangulate(vertices,polygon,y+.004,true);
-   levels[floor].roomSurfaces.push({id:room.id,finish:room.floorFinish,vertices});
+   const pattern=roomFloorSurface(r.interior,floor,room.id);levels[floor].roomSurfaces.push({id:room.id,finish:room.floorFinish,vertices,...(pattern?{surface:pattern}:{})});
   }
  }
  for(const item of r.interior.furniture??[]){
@@ -151,7 +150,7 @@ export function resolveStudioInteriors(r:Extract<StudioRecipe,{version:6}>,d:Cit
   const reason=furniturePlacementIssue(item,level,decks,portals);if(reason){inactive.push({id:item.id,reason});continue;}
   level.furniture.push(item);const y=sculptFloorBottom(item.floor,d.groundHeight,d.upperHeight)+.04;if(spec.blocking)blockers.push(block(item.id,item.floor,'stair',item.x,item.z,y+spec.height/2,spec.width,spec.height,spec.depth,item.rotation));
  }
- return {...studio,portals,interiorLevels:levels,blockers,decks,inactive,...(implicit?{implicitInterior:true}:{})};
+ return {...studio,portals,interiorLevels:levels,blockers,decks,inactive,...(stairwork.length?{stairwork}:{}),...(implicit?{implicitInterior:true}:{})};
 }
 
 
@@ -164,9 +163,10 @@ export function validateStudioInterior(r:Extract<StudioRecipe,{version:6}>):stri
  const validFloor=(n:number)=>Number.isInteger(n)&&n>=0&&n<8,validPoint=(p:[number,number])=>Array.isArray(p)&&p.length===2&&p.every(v=>Number.isFinite(v)&&Math.abs(v)<=24);
  if(i.partitions.some(p=>!validFloor(p.floor)||!validPoint(p.a)||!validPoint(p.b)||Math.hypot(p.a[0]-p.b[0],p.a[1]-p.b[1])<1.25))return 'An interior wall is invalid.';
  if(i.doors.some(p=>!p.partitionId||!Number.isFinite(p.u)||p.u<=0||p.u>=1||!['left','right'].includes(p.hinge)||!['panelled','glazed'].includes(p.style)))return 'An interior door is invalid.';
- if(i.stairs.some(s=>!validFloor(s.floor)||s.floor===7||![s.x,s.z,s.rotation].every(Number.isFinite)||!['auto','straight','switchback'].includes(s.layout)||typeof s.flip!=='boolean'))return 'An interior stair is invalid.';
+ if(i.stairs.some(s=>!validFloor(s.floor)||s.floor===7||![s.x,s.z,s.rotation].every(Number.isFinite)||!['auto','straight','switchback','l','u','spiral','core'].includes(s.layout)||typeof s.flip!=='boolean'||s.rail!==undefined&&!RAIL_STYLES.includes(s.rail)||s.entry!==undefined&&!['front','left','right'].includes(s.entry)||s.exit!==undefined&&!['ahead','left','right'].includes(s.exit)||s.width!==undefined&&!(Number.isFinite(s.width)&&s.width>=.8&&s.width<=1.6)||Object.keys(s).some(k=>!['id','floor','x','z','rotation','layout','flip','rail','entry','exit','width'].includes(k))))return 'An interior stair is invalid.';
  if((i.roomFinishes??[]).some(room=>!validFloor(room.floor)||![room.x,room.z].every(v=>Number.isFinite(v)&&Math.abs(v)<=24)||room.boundaryIds!==undefined&&(!Array.isArray(room.boundaryIds)||room.boundaryIds.length>64||room.boundaryIds.some(id=>typeof id!=='string')||new Set(room.boundaryIds).size!==room.boundaryIds.length)||room.floorFinish!==undefined&&!['timber','tile','stone'].includes(room.floorFinish)||room.wallColor!==undefined&&!/^#[0-9a-f]{6}$/i.test(room.wallColor)||room.openToBelow!==undefined&&typeof room.openToBelow!=='boolean'))return 'A room finish is invalid.';
  if((i.furniture??[]).some(item=>!validFloor(item.floor)||!Object.hasOwn(STUDIO_FURNITURE,item.kind)||![item.x,item.z,item.rotation].every(v=>Number.isFinite(v)&&Math.abs(v)<=24)))return 'A furnishing is invalid.';
  if(!['timber','tile','stone'].includes(i.floorFinish)||!/^#[0-9a-f]{6}$/i.test(i.wallColor))return 'An interior finish is invalid.';
+ {const surfaces=validateInteriorSurfaces(i);if(surfaces)return surfaces;}
  return null;
 }

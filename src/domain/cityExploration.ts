@@ -1,4 +1,5 @@
 import {StudioWalkingCollision} from './cityStudioCollision.ts';
+import {PLOT_STEP_UP} from './cityPlotGround.ts';
 import {DriveWorld,pavementHeight} from './cityDriveWorld.ts';
 import {createDriveState,DRIVE_PROFILE,type DriveState} from './cityDriving.ts';
 export const FOOT_PROFILE={radius:.34,height:1.8,walk:2.2,run:5.5,gravity:18,jumpHeight:.8,buffer:.12,coyote:.10} as const;
@@ -56,7 +57,8 @@ export function advanceFoot(s:FootState,input:FootInput,cameraHeading:number,dt:
  s.coyote=s.grounded?FOOT_PROFILE.coyote:Math.max(0,s.coyote-d);
  if(s.jumpBuffer>0&&s.coyote>0){s.vy=Math.sqrt(2*FOOT_PROFILE.gravity*FOOT_PROFILE.jumpHeight);s.grounded=false;s.coyote=0;s.jumpBuffer=0;s.airTime=0;}
  s.jumpBuffer=Math.max(0,s.jumpBuffer-d);s.land=Math.max(0,s.land-d);
- const ground=world.studio.ground(s.x,s.z,s.y+(s.grounded?.3:0));
+ // Grounded walkers step up anything within PLOT_STEP_UP (kerbs, paths, plot edges); taller ledges block (cityPlotGround).
+ const ground=world.studio.ground(s.x,s.z,s.y+(s.grounded?PLOT_STEP_UP:0));
  const ceiling=world.studio.ceiling(s.x,s.z,s.y+.05);
  if(!s.grounded){s.airTime+=d;s.y+=s.vy*d-FOOT_PROFILE.gravity*d*d/2;s.vy-=FOOT_PROFILE.gravity*d;if(s.vy>0&&s.y+FOOT_PROFILE.height>ceiling){s.y=Math.max(ground,ceiling-FOOT_PROFILE.height);s.vy=0;}if(s.y<=ground&&s.vy<=0){s.y=ground;s.vy=0;s.grounded=true;s.land=.15;}}
  else if(s.y-ground>.2){s.grounded=false;}else s.y=ground;

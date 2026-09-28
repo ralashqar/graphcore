@@ -2,9 +2,15 @@ import {DriveWorld, pavementHeight} from './cityDriveWorld.ts';
 import type {StudioResolved, StudioBox, StudioDeck} from './cityStudioTypes.ts';
 import {studioDoorAngle} from './cityStudioDoorState.ts';
 import {doorClearance,portalLeafBox} from './cityStudioDoorMotion.ts';
+import {DEFAULT_PLOT_GROUND,PLOT_STEP_UP,plotGroundHeight,type PlotGroundProfile} from './cityPlotGround.ts';
 
-export type StudioCollisionPlot={id:string;x:number;z:number;rotation:number;scale:number;result:StudioResolved};
-type Prepared=StudioCollisionPlot&{boxes:{box:StudioBox;world:DriveWorld}[];doors:{id:string;world:DriveWorld}[]};
+/** `ground`: the plot's walkable ground (cityPlotGround, from the drawn grounds layer); omitted, the default plot surface. */
+export type StudioCollisionPlot={id:string;x:number;z:number;rotation:number;scale:number;result:StudioResolved;ground?:PlotGroundProfile};
+type Solid={box:StudioBox;world:DriveWorld};
+type Prepared=StudioCollisionPlot&{boxes:Solid[];doors:{id:string;world:DriveWorld}[];ledges:Solid[];profile:PlotGroundProfile};
+const solid=(box:StudioBox):Solid=>{const world=new DriveWorld(1e8);world.sync([{id:box.id,minX:-box.width/2,maxX:box.width/2,minZ:-box.depth/2,maxZ:box.depth/2}]);return {box,world};};
+/** Plot ground pads block only where they rise more than a step above the walker (kerbs and paths are stepped onto). */
+const ledgeBlocks=(b:StudioBox,y:number,scale:number)=>(b.y+b.height/2)*scale>y+PLOT_STEP_UP;
 function local(p:StudioCollisionPlot,x:number,z:number){const dx=(x-p.x)/p.scale,dz=(z-p.z)/p.scale,c=Math.cos(p.rotation),s=Math.sin(p.rotation);return {x:dx*c-dz*s,z:dx*s+dz*c};}
 function insideRing(x:number,z:number,ring:[number,number][]){let yes=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){const a=ring[i],b=ring[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])yes=!yes;}return yes;}
 export function studioDeckHeight(d:StudioDeck,x:number,z:number){
@@ -16,19 +22,20 @@ const deckHeight=studioDeckHeight;
 export class StudioWalkingCollision {
  readonly plots=new Map<string,Prepared>();
  readonly ignored=new Set<string>();
- set(plot:StudioCollisionPlot){this.ignored.add(plot.id);this.plots.set(plot.id,{...plot,boxes:plot.result.blockers.map(box=>{const world=new DriveWorld(1e8);world.sync([{id:box.id,minX:-box.width/2,maxX:box.width/2,minZ:-box.depth/2,maxZ:box.depth/2}]);return {box,world};}),doors:(plot.result.portals??[]).map(portal=>{const world=new DriveWorld(1e8);world.sync([{id:portal.id,minX:-portal.width/2,maxX:portal.width/2,minZ:-.05,maxZ:.05}]);return {id:portal.id,world};})});}
+ set(plot:StudioCollisionPlot){this.ignored.add(plot.id);const profile=plot.ground??DEFAULT_PLOT_GROUND;this.plots.set(plot.id,{...plot,profile,ledges:profile.pads.map(solid),boxes:[...plot.result.blockers,...profile.walls].map(solid),doors:(plot.result.portals??[]).map(portal=>{const world=new DriveWorld(1e8);world.sync([{id:portal.id,minX:-portal.width/2,maxX:portal.width/2,minZ:-.05,maxZ:.05}]);return {id:portal.id,world};})});}
  remove(id:string){this.ignored.delete(id);this.plots.delete(id);}
  // Leaves swing, slide or roll with their door state (portalLeafBox): closed they block, open they clear the passage.
  private boxes(p:Prepared){const dynamic=p.doors.map(item=>{const door=p.result.portals!.find(d=>d.id===item.id)!;return {world:item.world,box:portalLeafBox(door,studioDoorAngle(p.id,door.id))};});return [...p.boxes,...dynamic];}
  nearestDoor(x:number,y:number,z:number,maxDistance=1.8){let found:{plotId:string;doorId:string;distance:number}|null=null;for(const p of this.plots.values()){const point=local(p,x,z);for(const door of p.result.portals??[]){const distance=Math.hypot(point.x-door.x,point.z-door.z)*p.scale;if(distance>maxDistance||y<door.y*p.scale-.2||y>(door.y+door.height)*p.scale+.2||found&&distance>=found.distance)continue;found={plotId:p.id,doorId:door.id,distance};}}return found;}
  doorClear(plotId:string,doorId:string,x:number,z:number){const p=this.plots.get(plotId),door=p?.result.portals?.find(d=>d.id===doorId);if(!p||!door)return false;const point=local(p,x,z);return Math.hypot(point.x-door.x,point.z-door.z)*p.scale>doorClearance(door);}
  clear(x:number,y:number,z:number,r:number,height=1.8){
-  for(const p of this.plots.values()){const v=local(p,x,z);for(const {box:b,world} of this.boxes(p)){if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}}return true;
+  for(const p of this.plots.values()){const v=local(p,x,z);for(const {box:b,world} of this.boxes(p)){if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}
+   for(const {box:b,world} of p.ledges){if(!ledgeBlocks(b,y,p.scale))continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}}return true;
  }
  ground(x:number,z:number,maxY:number){
   let height=pavementHeight(x,z);
   for(const p of this.plots.values()){const v=local(p,x,z);if(Math.abs(v.x)>12||Math.abs(v.z)>12)continue;
-   if(.18*p.scale<=maxY)height=Math.max(height,.18*p.scale);
+   const pad=plotGroundHeight(p.profile,v.x,v.z,maxY/p.scale+.001);if(pad!==null)height=Math.max(height,pad*p.scale);
    for(const d of p.result.decks){const y=deckHeight(d,v.x,v.z);if(y!==null&&y*p.scale<=maxY+.001)height=Math.max(height,y*p.scale);}
   }return height;
  }
@@ -39,10 +46,10 @@ export class StudioWalkingCollision {
   const hit={t:1,nx:0,nz:0};
   for(const p of this.plots.values()){
    const v=local(p,x,z),end=local(p,x+dx,z+dz);if(Math.min(v.x,end.x)>13||Math.max(v.x,end.x)<-13||Math.min(v.z,end.z)>13||Math.max(v.z,end.z)<-13)continue;
-   for(const {box:b,world} of this.boxes(p)){if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;
-    const c=Math.cos(b.rotation),s=Math.sin(b.rotation),ox=v.x-b.x,oz=v.z-b.z,h=world.sweep(ox*c-oz*s,ox*s+oz*c,(end.x-v.x)*c-(end.z-v.z)*s,(end.x-v.x)*s+(end.z-v.z)*c,r/p.scale);
-    if(h.t<hit.t){const a=p.rotation+b.rotation;hit.t=h.t;hit.nx=h.nx*Math.cos(a)+h.nz*Math.sin(a);hit.nz=-h.nx*Math.sin(a)+h.nz*Math.cos(a);}
-   }
+   const test=({box:b,world}:Solid)=>{const c=Math.cos(b.rotation),s=Math.sin(b.rotation),ox=v.x-b.x,oz=v.z-b.z,h=world.sweep(ox*c-oz*s,ox*s+oz*c,(end.x-v.x)*c-(end.z-v.z)*s,(end.x-v.x)*s+(end.z-v.z)*c,r/p.scale);
+    if(h.t<hit.t){const a=p.rotation+b.rotation;hit.t=h.t;hit.nx=h.nx*Math.cos(a)+h.nz*Math.sin(a);hit.nz=-h.nx*Math.sin(a)+h.nz*Math.cos(a);}};
+   for(const item of this.boxes(p)){const b=item.box;if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;test(item);}
+   for(const item of p.ledges)if(ledgeBlocks(item.box,y,p.scale))test(item);
   }return hit;
  }
  camera(x:number,y:number,z:number,dx:number,dy:number,dz:number,r:number){

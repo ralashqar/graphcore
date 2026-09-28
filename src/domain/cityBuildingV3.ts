@@ -19,6 +19,7 @@ import { advertisingLayout, type Advertising, type AdPlacement } from "./cityAdv
 import { archetypeParts, roofVariants, type ArchetypeChoices } from "./cityBuildingArchetypes.ts";
 import { frontStructure, ENTRANCE_STYLES } from "./cityBuildingEntrances.ts";
 import { groundsParts, type GroundsChoices } from "./cityBuildingGrounds.ts";
+import { FOUNDATION_BOTTOM, PLOT_GROUND, foundationBox } from "./cityGroundContact.ts";
 import type {
   BuildingMass,
   CityBuildingDesignV1,
@@ -701,7 +702,8 @@ export function resolveV3(
   // Floor plates tessellate the union without overlapping faces at joined wings.
   for (const m of masses) {
     if (m.y === .65) {
-      box(m.x, .45, m.z, m.width, .4, m.depth, p.wall);
+      // Reaches below the plot surface so patterned or offset grounds never show a hairline (docs/city-ground-contact.md).
+      box(m.x, (FOUNDATION_BOTTOM + PLOT_GROUND.datum) / 2, m.z, m.width, PLOT_GROUND.datum - FOUNDATION_BOTTOM, m.depth, p.wall);
       parts.at(-1)!.textureRole="wall";
       if(facadeEnabled)parts.at(-1)!.squareEdges=true;
     }
@@ -1235,6 +1237,8 @@ function resolveSynarcKitV3(d:CityBuildingDesignV3,lod:'near'|'medium'|'far'):Re
       fallback:'facade' as const,squareEdges:true})),
     ...assembly.infill.map(b=>({kind:'box' as const,position:[b.x,b.y,b.z] as [number,number,number],
       size:[b.width,b.height,b.depth] as [number,number,number],rotation:b.rotation,color:d.palette.wall,squareEdges:true})),
+    // Foundation from below the kit pad (.28) to the ground-floor datum (docs/city-ground-contact.md).
+    ...masses.filter(m=>m.y<=levels[0]+.001).map(m=>({kind:'box' as const,...foundationBox(m),color:d.palette.wall,textureRole:'wall' as const,squareEdges:true})),
   ];
   const profile=d.roofVariant&&d.roofVariant!=='standard'?d.roofVariant:d.roof==='pitched'?'gable':'flat';
   const roof=connectedRoof(masses,profile,d.connectedArchitecture??{},d.palette,lod);

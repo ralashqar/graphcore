@@ -26,6 +26,11 @@ export function studioStatus(st:StudioState){
   if(st.scope==='part')return <span>Click a part to paint every wall · C for quick colours</span>;
   return <span>{interaction.paintFace&&st.band?(st.bandAround?'Drag up or down to band the whole building':'Drag up or down to paint a band · Shift runs it around the building'):'Click or drag to paint · C for quick colours · Alt-click samples'}</span>;
  }
+ if(tool==='pick'&&st.target==='themes'&&st.rail!=='select'){
+  if(st.eyedropper)return <span>Click a themed part to pick up its theme</span>;
+  if(erase)return <span>{st.size==='building'?'Click the building to remove every theme':'Click a part to remove its theme · Shift-click removes every theme'}</span>;
+  return <span>{st.size==='building'?'Click the building to theme all of it':'Click a part to theme it · Shift-click for the building · Alt-click picks up a theme'}</span>;
+ }
  if(tool==='pick'){
   if(st.rail==='erase')return <span>Click to erase {st.size==='wall'?'everything of this kind on a wall':st.size==='part'?'everything of this kind on a part':'one item'} · the red outline shows what goes</span>;
   if(st.rail==='paint')return <span>Click a free window or door to add or remove this trim</span>;

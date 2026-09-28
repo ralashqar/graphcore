@@ -1,5 +1,6 @@
 // Right-hand inspector (docs/city-studio-ui-v2.md): a breadcrumb for the Select selection and progressive sections
 // for the building, a part, walls, tiles, openings and objects. Actions apply to the selection.
+import {RoomFloorOptions} from './StudioFloorSurfaces';
 import {useState,type ReactNode} from 'react';
 import {ArrowClockwise,ArrowsOut,CaretDown,CaretRight,Copy,DiceFive,PaintBrush,Polygon,Trash,X} from '@phosphor-icons/react';
 import {STUDIO_FAMILIES,STUDIO_MODULE_MAP,studioModules} from '../../../domain/cityStudioCatalog';
@@ -26,6 +27,7 @@ import {StyleFilter,moduleStyle,styleMatches} from './studioStyles';
 import {LEVEL_COLOURS} from './StudioSceneMarks';
 import {DECOR_LABELS,TRIM_LABELS,type StudioState} from './useStudioState';
 import {ThemeSection} from './StudioThemes';
+import {EntranceOpeningSection,EntranceScopeSection} from './StudioEntrances';
 
 const ROOFS:StudioRoof[]=['flat','terrace','pitched','mansard'];
 const SHAPE_LABELS:Record<string,string>={rect:'Rectangle',arch:'Arch',round:'Round',pointed:'Pointed'};
@@ -70,6 +72,7 @@ function BuildingSection({st}:{st:StudioState}){
   {st.kitVersion!==5&&!st.diceReady&&<small className="studio-palette-hint">Add the Blender catalog (Brush → Openings) to use style dice.</small>}
   <Section title="Theme" label="Building theme"><ThemeSection st={st}/></Section>
   <Section title="Default style"><StyleControls st={st} part={false}/></Section>
+  <EntranceScopeSection st={st} target="building"/>
   <section className="studio-inspector-section"><button className="studio-section-toggle" aria-expanded={st.variationOpen} aria-label="Variation rules" onClick={()=>st.setVariationOpen(!st.variationOpen)}>{st.variationOpen?<CaretDown size={12}/>:<CaretRight size={12}/>}<span>Variation and structure</span></button>
    {st.variationOpen&&<div className="studio-section-body studio-advanced-body"><p className="studio-palette-hint">Fine-tune structure and tile variation. Manual edits remain protected.</p><CityVariationDimensions recipe={recipe} design={st.draft.design} onChange={(r,d)=>st.land.edit(studioDraft({...st.draft,design:d},r))}/><CityVariationPanel recipe={recipe} design={st.draft.design} onChange={(r,heights)=>heights?st.land.edit(studioDraft({...st.draft,design:{...st.draft.design,...heights}},r)):st.commit(r)} selectedPart={st.selected?.id}/></div>}
   </section>
@@ -101,6 +104,7 @@ function PartSection({st,partId}:{st:StudioState;partId:string}){
   {v.operation==='add'&&<Section title="Style"><StyleControls st={st} part/><button onClick={()=>st.chooseRail('roof')}>Shape roof</button></Section>}
   {!!walls.length&&<Section title="Walls" count={walls.length}><div className="studio-chip-row">{walls.map(w=><button key={w.side} onClick={()=>st.select({level:'wall',partId:v.id,walls:[w]})}>{wallLabel(w)}</button>)}</div></Section>}
   <Section title="Paint"><div className="studio-inspector-actions"><button aria-label="Paint whole part" onClick={()=>st.paintPart(v.id)}><i className="studio-finish-dot" style={{background:st.color}}/>Paint whole part</button><button className="studio-text" onClick={()=>{const r=st.recipe!;st.commit({...r,studio:{...r.studio,surfaces:r.studio.surfaces.filter(x=>x.anchor.shapeId!==v.id),openings:r.studio.openings.filter(x=>x.anchor.shapeId!==v.id)}});}}>Reset local paint and openings</button></div></Section>
+  {v.operation==='add'&&v.startFloor===0&&<EntranceScopeSection st={st} target={`part:${v.id}`}/>}
   <EraseRow st={st} where={{parts:[v.id]}} place="part"/>
  </>;
 }
@@ -174,6 +178,7 @@ function OpeningSection({st,sel}:{st:StudioState;sel:Extract<StudioSelection,{le
    {!module&&<Section title="Shape"><div className="studio-segment" role="group" aria-label="Opening shape">{FREE_OPENING_SHAPES.map(shape=><button key={shape} aria-pressed={o.shape===shape} onClick={()=>nudge({shape})}>{SHAPE_LABELS[shape]}</button>)}</div>
     <div className="studio-precision"><label>Width<input aria-label="Opening width" type="number" step={.1} min={.4} value={+o.width.toFixed(2)} onChange={e=>nudge({width:Number(e.target.value)})}/></label><label>Height<input aria-label="Opening height" type="number" step={.1} min={.4} value={+o.height.toFixed(2)} onChange={e=>nudge({height:Number(e.target.value)})}/></label></div>
     <span className="studio-caption">Surround</span><div className="studio-segment" role="group" aria-label="Opening surround">{FREE_OPENING_STYLES.map(style=><button key={style} aria-pressed={(o.style??'painted')===style} onClick={()=>nudge({style})}>{style}</button>)}</div></Section>}
+   {(module?module.category==='door':o.bottom<.05)&&<EntranceOpeningSection st={st} target={`free:${o.id}`} members={[o.id]} partId={sel.partId}/>}
    <div className="studio-free-dress" role="group" aria-label="Dress this opening"><span>{module?'Kit piece · drag to move':`${choice?.role==='door'?'Door':'Window'} · dress it`}</span>{choice?.kinds.map(kind=><button key={kind} aria-pressed={freeTrimKinds(recipe,o.id).includes(kind)} onClick={()=>st.commit(toggleFreeTrim(recipe,o.id,kind))}>{TRIM_LABELS[kind]}</button>)}{!choice?.kinds.length&&<small>No trims suit this shape</small>}<button aria-label="Remove this opening" onClick={st.deleteSelection}><Trash size={15}/></button><button aria-label="Done dressing" onClick={()=>st.goTo({level:'wall',partId:sel.partId,walls:[sel.wall]})}><X size={15}/></button></div>
   </>;
  }
@@ -181,10 +186,12 @@ function OpeningSection({st,sel}:{st:StudioState;sel:Extract<StudioSelection,{le
   const o=recipe.studio.openings.find(x=>x.id===ref.id);if(!o)return null;const spec=STUDIO_MODULE_MAP.get(o.module),same=studioModules(st.kitVersion).filter(p=>p.category===spec?.category).slice(0,18);
   return <><div className="studio-inspector-title"><strong>{spec?.label??o.module}</strong><small>{wallLabel(sel.wall)} · storey {o.anchor.floor+1} · kit tile</small></div>
    <Section title="Swap piece"><div className="studio-tray is-grid is-compact">{same.map(p=><button className="studio-tile" key={p.id} aria-label={`Swap to ${p.label}`} aria-pressed={p.id===o.module} onClick={()=>st.commit({...recipe,studio:{...recipe.studio,openings:recipe.studio.openings.map(x=>x.id===o.id?{...x,module:p.id}:x)}})}><img src={`/city/synarc-kit/v${st.kitVersion}/thumbnails/${p.id}.png`} alt="" loading="lazy"/><span>{p.label}</span></button>)}</div></Section>
+   {spec?.category==='door'&&o.anchor.floor===0&&<EntranceOpeningSection st={st} target={`kit:${o.id}`} members={[o.id]} partId={sel.partId}/>}
    <div className="studio-inspector-actions"><button aria-label="Remove this opening" onClick={st.deleteSelection}><Trash size={15}/> Remove</button></div></>;
  }
  const stamp=recipe.studio.stamps?.find(x=>x.id===ref.id);if(!stamp)return null;
  return <><div className="studio-inspector-title"><strong>{STAMP_MAP.get(stamp.stamp)?.label??'Storefront'}</strong><small>{wallLabel(sel.wall)} · protected storefront</small></div>
+  <EntranceOpeningSection st={st} target={`stamp:${stamp.id}`} members={[`stamp/${stamp.id}/opening/0`]} partId={sel.partId}/>
   <div className="studio-inspector-actions"><button onClick={()=>st.commit(unpackStorefront(recipe,stamp.id,expandBuildingVariation(recipe,st.draft.design).recipe))}>Unpack this storefront</button><button aria-label="Remove this storefront" onClick={st.deleteSelection}><Trash size={15}/> Remove</button></div></>;
 }
 
@@ -217,7 +224,7 @@ function RoomSection({st}:{st:StudioState}){
  return <section className="studio-room-panel" aria-label="Rooms and furnishing">
   <strong>Rooms on this floor</strong>
   <div className="studio-room-buttons">{st.roomChoices.map((r,index)=><button key={r.id} aria-pressed={st.selectedRoomId===r.id} onClick={()=>{st.setSelectedRoomId(r.id);if(st.roomsTool!=='interior-room')st.setRoomsTool('interior-room');}}>Room {index+1} <small>{Math.round(r.area)} m²{r.openToBelow?' · open to below':''}</small></button>)}{!st.roomChoices.length&&<small>No closed rooms yet: draw walls between the outside walls.</small>}</div>
-  {room&&<div className="studio-room-options"><span className="studio-caption">Selected room floor</span><div className="studio-segment">{(['timber','tile','stone'] as const).map(finish=><button key={finish} aria-pressed={room.floorFinish===finish} onClick={()=>st.editRoom(room,{floorFinish:finish})}>{finish}</button>)}</div><label>Wall colour <input type="color" aria-label="Selected room wall colour" value={room.wallColor} onChange={e=>st.editRoom(room,{wallColor:e.target.value})}/></label>{st.floor>0&&<button aria-pressed={room.openToBelow} onClick={()=>st.editRoom(room,{openToBelow:!room.openToBelow})}>{room.openToBelow?'Restore this room floor':'Open this room to below'}</button>}</div>}
+  {room&&<div className="studio-room-options"><span className="studio-caption">Selected room floor</span><RoomFloorOptions st={st} room={room}/><label>Wall colour <input type="color" aria-label="Selected room wall colour" value={room.wallColor} onChange={e=>st.editRoom(room,{wallColor:e.target.value})}/></label>{st.floor>0&&<button aria-pressed={room.openToBelow} onClick={()=>st.editRoom(room,{openToBelow:!room.openToBelow})}>{room.openToBelow?'Restore this room floor':'Open this room to below'}</button>}</div>}
   <button onClick={()=>st.chooseRail('furnish')}>Browse furniture</button>
  </section>;
 }
