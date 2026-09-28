@@ -32,6 +32,14 @@ export class StudioWalkingCollision {
   for(const p of this.plots.values()){const v=local(p,x,z);for(const {box:b,world} of this.boxes(p)){if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}
    for(const {box:b,world} of p.ledges){if(!ledgeBlocks(b,y,p.scale))continue;const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;if(!world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale))return false;}}return true;
  }
+ /** Diagnostics (tests, dev hooks): ids of the solids and ledges overlapping a walker at (x,y,z) with radius r. */
+ blockersAt(x:number,y:number,z:number,r:number,height=1.8){
+  const out:{plot:string;id:string;kind:'solid'|'ledge';box:StudioBox}[]=[];
+  for(const p of this.plots.values()){const v=local(p,x,z),hits=({box:b,world}:Solid)=>{const c=Math.cos(b.rotation),s=Math.sin(b.rotation),dx=v.x-b.x,dz=v.z-b.z;return !world.clear(dx*c-dz*s,dx*s+dz*c,r/p.scale);};
+   for(const item of this.boxes(p)){const b=item.box;if(y+height<=((b.y-b.height/2)*p.scale)+.02||y>=((b.y+b.height/2)*p.scale)-.02)continue;if(hits(item))out.push({plot:p.id,id:b.id,kind:'solid',box:b});}
+   for(const item of p.ledges)if(ledgeBlocks(item.box,y,p.scale)&&hits(item))out.push({plot:p.id,id:item.box.id,kind:'ledge',box:item.box});}
+  return out;
+ }
  ground(x:number,z:number,maxY:number){
   let height=pavementHeight(x,z);
   for(const p of this.plots.values()){const v=local(p,x,z);if(Math.abs(v.x)>12||Math.abs(v.z)>12)continue;

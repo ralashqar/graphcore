@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createLandWorld,initialLandDraft,landProperty} from './cityLand.ts';
-import {upgradeStudio} from './cityStudio.ts';
+import {studioBays,studioDraft,upgradeStudio} from './cityStudio.ts';
+import {moduleOpeningSpec} from './cityStudioModuleSpec.ts';
 import {studioExample,STUDIO_EXAMPLES} from './cityStudioExamples.ts';
 import {resolveSculpt} from './citySculpt.ts';
 import {upgradeStudioInterior} from './cityStudioInteriors.ts';
@@ -154,4 +155,52 @@ test('driving is unchanged: cars stay off plots while walkers enter studio plots
  assert.equal(drive.clear(X,Z+15,2),false,'the car collider still covers the plot');
  walk.elevation=PLOT_GROUND.surface*2;assert.equal(walk.clear(w(3.5,9).x,w(3.5,9).z),true,'the walker may stand on the plot surface');
  const car=drive.sweep(X,Z+30,0,-10,1.1);assert.ok(car.t<1,'a car driving in stops at the plot');
+});
+
+// ---- Entrance colliders are drawn risers (scripts/city-studio-kit-doors-browser.mjs) ----
+/** The kit-doors browser building: a main part with a Tokyo sliding and a storefront double door (kit pieces in its
+ * generated north wall) and a classic kit door tile on its west wall; no interior (recipe v5, implicit interior). */
+function kitDoorsPlot(){
+ const d=example(0),r=structuredClone(d.sculpt!) as StudioRecipe;
+ r.volumes=[{id:'main',kind:'rectangle',operation:'add',x:-4,z:0,width:10,depth:10,startFloor:0,spanFloors:2},{id:'annex',kind:'rectangle',operation:'add',x:6,z:-1,width:6,depth:8,startFloor:0,spanFloors:2}] as StudioRecipe['volumes'];
+ r.version=5;delete (r as {interior?:unknown}).interior;
+ Object.assign(r.studio,{catalogue:'synarc-kit-5',facade:undefined,openings:[],assemblies:[],stamps:undefined,variation:undefined,paintRegions:undefined,paintRules:undefined,freeTrims:undefined,roofOpenings:undefined,facadeRhythm:undefined});
+ r.studio.defaults={...r.studio.defaults,family:'pastel-stucco',roof:'flat',window:'window-sash'};
+ const kit=(id:string,module:string,u:number)=>{const s=moduleOpeningSpec(module)!;return {id,shapeId:'main',side:'north' as const,u,bottom:0,width:s.width,height:s.height,shape:'rect' as const,module};};
+ r.studio.freeOpenings=[kit('tokyo','door-tokyo-sliding',.25),kit('shop','door-shop-aluminium',.72)] as NonNullable<StudioRecipe['studio']['freeOpenings']>;
+ const design={...d.design,floors:2,middleFloors:1};
+ const west=studioBays(r,design).filter(b=>b.anchor.side==='west'&&b.anchor.floor===0).sort((a,b)=>a.anchor.u-b.anchor.u);
+ r.studio.openings=[{id:'tile-door',anchor:west[Math.floor(west.length/2)].anchor,module:'door-panelled'}] as StudioRecipe['studio']['openings'];
+ const draft=studioDraft({...d,design},r),out=resolveSculpt(draft.sculpt!,draft.design).studio!,ground=plotGroundProfile(landProperty(plot,draft).profile.buildingDesign);
+ const walk=new WalkingWorld(new DriveWorld(1e4));walk.studio.set({id:'plot',x:X,z:Z,rotation:0,scale:2,result:out,ground});
+ return {out,ground,walk};
+}
+test('entrance colliders are the drawn stone steps: the storefront approach stays reachable beside its first riser',()=>{
+ const {out,ground,walk}=kitDoorsPlot();
+ // Every entrance blocker lies on the face of a drawn box of its own entrance (a step, landing or cheek), no higher than it.
+ const works=(out.stairwork??[]).filter(w=>w.kind==='entrance');assert.ok(works.length>=3,'tile, Tokyo and storefront entrances');
+ const entryBlockers=out.blockers.filter(b=>b.id.startsWith('entry/'));assert.ok(entryBlockers.length>0);
+ for(const b of entryBlockers){
+  const own=works.find(w=>b.id.startsWith(`${w.id}/`)||b.id.startsWith(w.id));assert.ok(own,`${b.id}: belongs to an entrance`);
+  const drawn=own!.boxes.some(k=>{if(k.rx)return false;const c=Math.cos(k.ry??0),s=Math.sin(k.ry??0),dx=b.x-k.p[0],dz=b.z-k.p[2],u=Math.abs(dx*c-dz*s),v=Math.abs(dx*s+dz*c);
+   return u<=k.s[0]/2+.05&&v<=k.s[2]/2+.05&&b.y+b.height/2<=k.p[1]+k.s[1]/2+.05&&b.y-b.height/2>=k.p[1]-k.s[1]/2-.05;});
+  assert.ok(drawn,`${b.id}: stands on a drawn entrance box`);
+ }
+ // The browser walker stopped here (plot-local), pressing due west into the storefront's first step: a drawn riser
+ // taller than the automatic step-up above the entrance path, so blocking is correct.
+ const shop=out.portals!.filter(p=>p.id.startsWith('exterior/kit/free/shop')),cx=shop.reduce((a,p)=>a+p.x,0)/shop.length,cz=shop.reduce((a,p)=>a+p.z,0)/shop.length;
+ const approach=w(cx+Math.sin(shop[0].rotation)*1.7,cz+Math.cos(shop[0].rotation)*1.7),stuck=w(-.51,6.175);
+ const pathTop=plotGroundHeight(ground,-.51,6.175)!,y=pathTop*2;
+ const riser=out.blockers.find(b=>b.id==='entry/free/shop/side11')!;assert.ok(riser,'first-step side riser');
+ assert.ok((riser.y+riser.height/2+.02-pathTop)*2>PLOT_STEP_UP,'the riser is taller than the step-up above the path');
+ assert.deepEqual(walk.studio.blockersAt(stuck.x-.02,y,stuck.z,.34).map(b=>b.id),['entry/free/shop/side11'],'only the drawn riser is in the way');
+ const pinned=createFootState(stuck.x,stuck.z,-Math.PI/2);pinned.y=y;
+ for(let i=0;i<60;i++)advanceFoot(pinned,{...idle,forward:true,walk:true},-Math.PI/2,step,walk);
+ assert.ok(Math.hypot(pinned.x-stuck.x,pinned.z-stuck.z)<.05,'straight into the riser: no slide');
+ // Steering at the approach point slides along the riser and arrives; so does walking in from the side along the wall.
+ const steered=createFootState(stuck.x,stuck.z,0);steered.y=y;walkTo(walk,steered,approach,6);
+ assert.ok(Math.hypot(steered.x-approach.x,steered.z-approach.z)<.2,`reached the approach from the riser (${steered.x.toFixed(2)},${steered.z.toFixed(2)})`);
+ for(const from of [w(2,6.9),w(-6,6.9)]){const s=createFootState(from.x,from.z,0);s.y=walk.studio.ground(from.x,from.z,1.2);walkTo(walk,s,approach,8);
+  assert.ok(Math.hypot(s.x-approach.x,s.z-approach.z)<.2,`reached the approach from the side (${s.x.toFixed(2)},${s.z.toFixed(2)})`);}
+ walk.elevation=y;assert.ok(walk.clear(approach.x,approach.z),'the approach point itself is clear');
 });

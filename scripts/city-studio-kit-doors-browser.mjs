@@ -67,10 +67,16 @@ try{
  for(const name of ['tile','tokyo','storefront','rhythm'])assert.ok(plan.doors[name],`${name} door is a portal`);
  assert.equal(plan.doors.tokyo.motion,'slide');assert.equal(plan.doors.storefront.leaves.length,2);
  const held=new Set();const hold=async want=>{for(const k of [...held])if(!want.has(k)){await page.keyboard.up(k);held.delete(k);}for(const k of want)if(!held.has(k)){await page.keyboard.down(k);held.add(k);}};
+ // Keys steer in eight directions (the one nearest the target). Pressing along a direction square to a face (the side
+ // riser of an entrance's first stone step) leaves no tangential velocity to slide on, so after .7 s without progress
+ // the walker holds the neighbouring direction on the target's side for .45 s, as a player would.
+ const keysFor=a=>{const f=Math.cos(a),l=Math.sin(a),want=new Set();if(f>.38)want.add('w');if(f<-.38)want.add('s');if(l>.38)want.add('a');if(l<-.38)want.add('d');return want;};
  const goTo=async(target,{tolerance=.4,ms=16000}={})=>{
-  await page.keyboard.down('Shift');const started=Date.now();let e=await explore();
+  await page.keyboard.down('Shift');const started=Date.now();let e=await explore(),best=Infinity,progressAt=Date.now(),detourUntil=0,detour=0;
   try{while(Date.now()-started<ms){e=await explore();const dx=target.x-e.foot.x,dz=target.z-e.foot.z,dist=Math.hypot(dx,dz);if(dist<tolerance)break;
-   const rel=Math.atan2(dx,dz)-e.camera.heading,f=Math.cos(rel),l=Math.sin(rel),want=new Set();if(f>.38)want.add('w');if(f<-.38)want.add('s');if(l>.38)want.add('a');if(l<-.38)want.add('d');await hold(want);await page.waitForTimeout(dist<1.2?70:140);}}
+   const rel=Math.atan2(dx,dz)-e.camera.heading,step=Math.PI/4,q=Math.round(rel/step),now=Date.now();
+   if(dist<best-.08){best=dist;progressAt=now;}else if(now-progressAt>700&&now>detourUntil){const off=rel-q*step;detour=(q+(off>=0?1:-1))*step;detourUntil=now+450;progressAt=now+450;}
+   await hold(keysFor(now<detourUntil?detour:q*step));await page.waitForTimeout(dist<1.2?70:140);}}
   finally{await hold(new Set());await page.keyboard.up('Shift');}
   await page.waitForTimeout(350);return explore();
  };
